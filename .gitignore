@@ -3,3 +3,5 @@ memory/*.jsonl
 chats/
 audit-output/
 .DS_Store
+sonata.mid
+*.mid

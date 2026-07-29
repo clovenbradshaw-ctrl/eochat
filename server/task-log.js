@@ -140,8 +140,23 @@ export function projectTasks(log) {
       first_seq: e.seq,
     };
 
+    // Domain payload. The log is medium-agnostic — it knows about structure,
+    // not about what the structure is made of — but a task has to be able to
+    // carry its material or the fold hands downstream an empty shape. Dropping
+    // unrecognized keys silently produced exactly that: a sonata whose sections
+    // all survived projection with their motifs stripped, and zero notes.
+    const RESERVED = new Set([
+      "kind", "task_id", "seq", "supersedes", "operator", "operator_basis",
+      "description", "depends_on", "evidence", "result",
+    ]);
+    const payload = {};
+    for (const [key, value] of Object.entries(e)) {
+      if (!RESERVED.has(key)) payload[key] = value;
+    }
+
     byId.set(e.task_id, {
       ...prior,
+      ...payload,
       // Evidence accumulates; it is admitted, not replaced.
       evidence: e.kind === ENTRY_KINDS.EVIDENCE
         ? [...prior.evidence, ...e.evidence]
