@@ -1,0 +1,20 @@
+{
+  "name": "eochat",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A chat that answers from your actual documents, with [1] citations to real passages — not hallucinated.",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server/proxy.js",
+    "ui": "python3 -m http.server 8899 --directory ui",
+    "probe:retrieval": "node scripts/probe-retrieval.mjs",
+    "probe:order": "node scripts/probe-prompt-order.mjs",
+    "test:affordances": "node scripts/test-affordances.mjs",
+    "postinstall": "git submodule update --init --recursive || true"
+  },
+  "dependencies": {
+    "@eoreader/engine": "file:vendor/eoreader5/packages/engine",
+    "@eoreader/host": "file:vendor/eoreader5/packages/host",
+    "@eoreader/spec": "file:vendor/eoreader5/packages/spec"
+  }
+}

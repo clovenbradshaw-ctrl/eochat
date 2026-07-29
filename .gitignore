@@ -1,0 +1,5 @@
+node_modules/
+memory/*.jsonl
+chats/
+audit-output/
+.DS_Store

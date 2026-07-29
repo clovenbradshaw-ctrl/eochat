@@ -1,0 +1,3068 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- EOCHAT — the current product. Had no <title> at all, so a browser tab, a
+     window list, and a served directory all showed it as an unlabelled blank
+     while the LEGACY reader app next to it (index.html / eoreader_app.html,
+     both "EOReader — read the meaning and structure of a source") announced
+     itself by name. Directory root `/` still serves that legacy app; eochat
+     is also embedded by it as an iframe tab, so this page shows up in both
+     places and needs to say which one it is. -->
+<title>EOChat</title>
+<!-- support.js (dc-runtime) resolves window.React/window.ReactDOM at call time and
+     throws "window.React is not available yet" if they are absent, so these must
+     load first. Standalone eochat has no component host to supply them. -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/regular/style.css" />
+<!-- Parses .xlsx/.xls client-side (SheetJS). Optional: uploadFiles() checks
+     `typeof XLSX` and degrades to an unindexed binary source if this fails to
+     load (offline, CDN blocked), same as any other unparseable format. -->
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  body { margin: 0; background: #F4F2ED; -webkit-font-smoothing: antialiased; }
+  a { color: #1F5A4C; text-decoration: none; }
+  a:hover { color: #143B31; text-decoration: underline; }
+  ::placeholder { color: #A39D91; }
+  @keyframes eoPulse { 0%,100% { opacity: .25 } 50% { opacity: .9 } }
+  @keyframes eoSpin { 0% { transform: rotate(0deg) } 100% { transform: rotate(360deg) } }
+  .eo-spin { animation: eoSpin .8s linear infinite; display: inline-block; }
+  .eo-pulse { animation: eoPulse 1.4s ease-in-out infinite; }
+  .eo-scrollbar { scrollbar-width: thin; scrollbar-color: #E0DACE transparent; }
+  .eo-scrollbar::-webkit-scrollbar { width: 4px; }
+  .eo-scrollbar::-webkit-scrollbar-thumb { background: #E0DACE; border-radius: 4px; }
+  .eo-fade-in { animation: eoFadeIn .2s ease-out; }
+  @keyframes eoFadeIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
+</style>
+</helmet>
+
+<div style="height:100svh; box-sizing:border-box; padding:40px 32px; font-family:'Instrument Sans', system-ui, sans-serif; color:#1B1A17; display:flex; flex-direction:column; overflow:hidden;">
+<div style="width:100%; max-width:1180px; flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overflow:hidden; position:relative;">
+
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:0 2px;">
+    <div style="display:flex; align-items:center; gap:10px; position:relative;">
+      <span onClick="{{ goToApp }}" style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C; cursor:pointer;">eochat</span>
+      <button type="button" onClick="{{ toggleSpaces }}" style="display:flex; align-items:center; gap:6px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; padding:5px 10px 5px 12px; cursor:pointer; font-family:inherit;">
+        <span style="font-size:13px; color:#26241F;">{{ activeSpaceName }}</span>
+        <span style="font-size:9px; color:#A39D91;">▾</span>
+      </button>
+      <sc-if value="{{ spacesOpen }}">
+      <div style="position:absolute; top:36px; left:76px; width:240px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:6px; z-index:20; display:flex; flex-direction:column; gap:1px;">
+        <sc-for list="{{ spaces }}" as="sp">
+          <button type="button" onClick="{{ sp.select }}" style="display:flex; align-items:center; gap:8px; text-align:left; border:0; background: {{ sp.bg }}; border-radius:7px; padding:8px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#26241F;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:10px;">{{ sp.marker }}</span>
+            <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ sp.name }}</span>
+          </button>
+        </sc-for>
+        <div style="height:1px; background:#EBE6DC; margin:5px 3px;"></div>
+        <button type="button" onClick="{{ addSpace }}" style="display:flex; align-items:center; gap:8px; border:0; background:none; border-radius:7px; padding:8px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#1F5A4C;">
+          <span style="font-size:13px;">+</span><span>New space</span>
+        </button>
+      </div>
+      </sc-if>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <sc-if value="{{ proxyLive }}">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91; letter-spacing:.04em;">{{ proxyStatusText }}</span>
+      </sc-if>
+      <sc-if value="{{ proxyDead }}">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#c0341a; letter-spacing:.04em;">proxy off</span>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="position:relative; flex:1; min-height:0; display:grid; grid-template-columns: {{ leftColWidth }} minmax(0, 1fr) {{ readerColWidth }} 248px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:14px; box-shadow:0 1px 2px rgba(28,26,23,.04), 0 12px 28px -22px rgba(28,26,23,.35); overflow:hidden;">
+
+    <div style="background:#FAF8F4; border-right:1px solid #EBE6DC; padding: {{ leftPadding }}; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; align-items: {{ leftAlign }};">
+      <sc-if value="{{ leftCollapsed }}">
+        <button type="button" aria-label="Expand sources" onClick="{{ toggleLeftCollapsed }}" style="width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-sidebar-simple" style="font-size:13px;"></i></button>
+        <span style="writing-mode:vertical-rl; font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; letter-spacing:.08em; margin-top:6px;">{{ sourceCount }} sources</span>
+      </sc-if>
+      <sc-if value="{{ leftExpanded }}">
+      <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Sources</span>
+        <div style="display:flex; gap:6px;">
+          <button type="button" aria-label="Search the web" onClick="{{ searchWeb }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-magnifying-glass" style="font-size:13px;"></i></button>
+          <button type="button" aria-label="Add source" onClick="{{ addSource }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-plus" style="font-size:13px;"></i></button>
+          <button type="button" aria-label="Collapse sources" onClick="{{ toggleLeftCollapsed }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-sidebar-simple" style="font-size:13px;"></i></button>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:14px; flex:1; min-height:0; overflow-y:auto; width:100%;" class="eo-scrollbar">
+        <div style="display:flex; flex-direction:column; gap:1px;">
+          <sc-for list="{{ activeSources }}" as="src">
+            <div style="border-radius:8px; overflow:hidden; opacity: {{ src.rowOpacity }};">
+              <div style="display:flex; align-items:center; gap:4px;">
+                <button type="button" onClick="{{ src.toggle }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color: {{ src.color }}; width:12px; flex:none;">{{ src.glyph }}</span>
+                  <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">{{ src.name }}</span>
+                  <i class="{{ src.chevronClass }}" style="font-size:11px; color:#A39D91;"></i>
+                </button>
+                <button type="button" aria-label="Read" onClick="{{ src.open }}" style="border:0; background:none; color:#8C877C; cursor:pointer; padding:0 2px; display:flex; flex:none;"><i class="ph ph-book-open" style="font-size:14px;"></i></button>
+                <button type="button" aria-label="Delete source" onClick="{{ src.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:0 2px; display:flex; flex:none; opacity:0.4;"><i class="ph ph-trash" style="font-size:13px;"></i></button>
+                <button type="button" aria-label="Toggle source" onClick="{{ src.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ src.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+                  <span style="position:absolute; top:2px; left: {{ src.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                </button>
+              </div>
+              <sc-if value="{{ src.expanded }}">
+                <div style="padding:2px 10px 12px 30px;">
+                  <span style="font-family:Georgia, 'Times New Roman', serif; font-size:12.5px; line-height:1.65; color:#3A372F; text-wrap:pretty;">{{ src.preview }}</span>
+                  <button type="button" onClick="{{ src.open }}" style="display:flex; align-items:center; gap:5px; margin-top:8px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C; cursor:pointer; padding:0;"><i class="ph ph-book-open"></i>Open in reader</button>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noSources }}">
+            <span style="font-size:12px; color:#A39D91; padding:6px 9px;">No sources yet</span>
+          </sc-if>
+        </div>
+
+        <sc-if value="{{ hasWebHistory }}">
+        <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button type="button" onClick="{{ toggleWebHistoryOpen }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:12px; flex:none;">⌗</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">Web history</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ webHistoryCount }}</span>
+              <i class="{{ webHistoryChevron }}" style="font-size:11px; color:#A39D91;"></i>
+            </button>
+            <button type="button" aria-label="Toggle all web sources" onClick="{{ toggleAllWeb }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ webAllSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+              <span style="position:absolute; top:2px; left: {{ webAllKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+            </button>
+          </div>
+          <sc-if value="{{ webHistoryOpen }}">
+            <sc-for list="{{ webHistoryRows }}" as="w">
+              <div style="display:flex; align-items:center; gap:4px; padding-left:18px; opacity: {{ w.rowOpacity }};">
+                <button type="button" onClick="{{ w.open }}" style="flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:2px; text-align:left; border:0; background:none; padding:6px 9px; cursor:pointer; font-family:inherit;">
+                  <span style="max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:#26241F;">{{ w.host }}</span>
+                  <span style="max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ w.meta }}</span>
+                </button>
+                <button type="button" aria-label="{{ w.toggleLabel }}" onClick="{{ w.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ w.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+                  <span style="position:absolute; top:2px; left: {{ w.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                </button>
+              </div>
+            </sc-for>
+          </sc-if>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ hasRecycleBin }}">
+        <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button type="button" onClick="{{ toggleRecycleBin }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#C0392B; width:12px; flex:none;">🗑</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">Recycle bin</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ recycleBinCount }}</span>
+              <i class="{{ recycleBinChevron }}" style="font-size:11px; color:#A39D91;"></i>
+            </button>
+            <button type="button" aria-label="Empty recycle bin" onClick="{{ emptyRecycleBin }}" style="border:0; background:none; color:#8C877C; cursor:pointer; padding:0 2px; display:flex; flex:none; font-family:'IBM Plex Mono', monospace; font-size:9px;">empty</button>
+          </div>
+          <sc-if value="{{ recycleBinOpen }}">
+            <sc-for list="{{ recycleBinRows }}" as="d">
+              <div style="display:flex; align-items:center; gap:4px; padding-left:18px;">
+                <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:#6E6A60; padding:6px 9px;">{{ d.name }}</span>
+                <button type="button" aria-label="Restore" onClick="{{ d.restore }}" style="border:0; background:none; color:#1F5A4C; cursor:pointer; padding:0 3px; display:flex; flex:none;"><i class="ph ph-arrow-u-up-left" style="font-size:13px;"></i></button>
+                <button type="button" aria-label="Delete permanently" onClick="{{ d.purge }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:0 3px; display:flex; flex:none; opacity:0.5;"><i class="ph ph-x" style="font-size:13px;"></i></button>
+              </div>
+            </sc-for>
+          </sc-if>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ hasRetrievals }}">
+        <div style="display:flex; flex-direction:column; gap:8px; padding-top:10px; border-top:1px solid #EBE6DC;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Retrieved</span>
+          <sc-for list="{{ retrievals }}" as="r">
+            <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:9px; padding:10px 11px; display:flex; flex-direction:column; gap:6px;">
+              <span style="font-size:12px; color:#3A372F; line-height:1.6; font-style:italic; text-wrap:pretty;">{{ r.quote }}</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">from {{ r.source }}</span>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+      </div>
+
+      <div style="padding-top:12px; border-top:1px solid #EBE6DC; display:flex; flex-direction:column; gap:3px; width:100%;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#6E6A60;">{{ sourceCount }} sources</span>
+        <span style="font-size:11px; color:#A39D91;">{{ sourceFooterNote }}</span>
+      </div>
+      </sc-if>
+    </div>
+
+    <div style="display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden;">
+      <sc-if value="{{ showTabs }}">
+      <div style="display:flex; flex-wrap:wrap; gap:2px; padding:12px 20px 0; border-bottom:1px solid #EBE6DC;">
+        <button type="button" onClick="{{ tabChat }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabChatColor }}; box-shadow: {{ tabChatUnderline }}; cursor:pointer;">Chat</button>
+        <button type="button" onClick="{{ tabOutline }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOutlineColor }}; box-shadow: {{ tabOutlineUnderline }}; cursor:pointer;">Outline</button>
+        <button type="button" onClick="{{ tabOrbit }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOrbitColor }}; box-shadow: {{ tabOrbitUnderline }}; cursor:pointer;">Orbit</button>
+        <button type="button" onClick="{{ tabPriors }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabPriorsColor }}; box-shadow: {{ tabPriorsUnderline }}; cursor:pointer;">Priors</button>
+        <button type="button" onClick="{{ tabCompose }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabComposeColor }}; box-shadow: {{ tabComposeUnderline }}; cursor:pointer;">Compose</button>
+        <button type="button" onClick="{{ tabGlassBox }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabGlassBoxColor }}; box-shadow: {{ tabGlassBoxUnderline }}; cursor:pointer;">Glass box</button>
+        <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+          <sc-if value="{{ proxyDead }}">
+            <button type="button" onClick="{{ retryProxy }}" style="border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
+          </sc-if>
+        </div>
+      </div>
+
+      <sc-if value="{{ isChat }}">
+      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:20px; overflow:hidden;">
+        <div ref="{{ chatScrollRef }}" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:20px;" class="eo-scrollbar">
+          <sc-if value="{{ showEmptyChat }}">
+            <span style="font-size:13px; color:#A39D91;">No messages yet — attach sources and ask a question.</span>
+          </sc-if>
+
+          <sc-if value="{{ streamingLoading }}">
+            <button type="button" onClick="{{ openThinkingModal }}" style="display:flex; flex-direction:column; gap:4px; border:0; background:none; cursor:pointer; text-align:left; padding:0; font-family:inherit; width:100%;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">⊨</span>
+                <span style="font-size:13px; color:#8C877C;">{{ thinkingPhase }}</span>
+              </div>
+              <sc-if value="{{ thinkingMeta }}">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; padding-left:20px;">{{ thinkingMeta }}</span>
+              </sc-if>
+            </button>
+          </sc-if>
+
+          <sc-for list="{{ turns }}" as="turn">
+            <div style="display:flex; flex-direction:column; gap:8px;">
+              <div style="align-self:flex-end; max-width:74%; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+                <sc-if value="{{ turn.hasAttachments }}">
+                  <div style="display:flex; flex-wrap:wrap; gap:5px; justify-content:flex-end;">
+                    <sc-for list="{{ turn.attachments }}" as="att">
+                      <span style="font-size:10px; color:#8C877C;">{{ att.displayName }}</span>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:12px 12px 4px 12px; padding:9px 13px;">
+                  <span style="font-size:13.5px; line-height:1.5; color:#26241F;">{{ turn.q }}</span>
+                </div>
+              </div>
+              <sc-if value="{{ turn.retrieval }}">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">↦</span>
+                  <span style="font-size:13px; color:#8C877C;">Retrieved a passage from {{ turn.retrieval.source }} — see Sources</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ turn.streaming }}">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">⊨</span>
+                  <span style="font-size:13px; color:#8C877C;">{{ turn.streamingText }}</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ turn.a }}">
+                <div style="max-width:88%; display:flex; flex-direction:column; gap:8px;">
+                  <span style="font-size:14px; color:#1B1A17; line-height:1.72; text-wrap:pretty;">{{ turn.a }}</span>
+                  <sc-if value="{{ turn.citations }}">
+                    <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                      <sc-for list="{{ turn.citations }}" as="cit">
+                        <button type="button" title="{{ cit.title }}" onClick="{{ cit.open }}" style="display:flex; align-items:center; gap:7px; font-family:inherit; font-size:11.5px; color:{{ cit.color }}; border:1px solid {{ cit.border }}; background:{{ cit.bg }}; border-radius:6px; padding:4px 8px; cursor:{{ cit.cursor }};"><span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C;">{{ cit.num }}</span>{{ cit.source }}<i class="{{ cit.icon }}" style="font-size:11px; color:#8C877C;"></i></button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                  <div style="display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-top:2px;">
+                    <button type="button" aria-label="Copy" onClick="{{ turn.copy }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-copy"></i>copy</button>
+                    <sc-if value="{{ turn.hasPassages }}">
+                      <button type="button" onClick="{{ turn.togglePassages }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.passagesColor }}; cursor:pointer; padding:0;"><i class="{{ turn.passagesChevron }}"></i>{{ turn.passagesLabel }}</button>
+                    </sc-if>
+                    <sc-if value="{{ turn.hasTrace }}">
+                      <button type="button" onClick="{{ turn.toggleTrace }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.traceColor }}; cursor:pointer; padding:0;"><i class="{{ turn.traceChevron }}"></i>{{ turn.traceLabel }}</button>
+                    </sc-if>
+                    <sc-if value="{{ turn.hasRaw }}">
+                      <button type="button" onClick="{{ turn.toggleRaw }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.rawColor }}; cursor:pointer; padding:0;"><i class="{{ turn.rawChevron }}"></i>raw</button>
+                    </sc-if>
+                    <button type="button" aria-label="Fork" onClick="{{ turn.fork }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-git-fork"></i>fork</button>
+                  </div>
+
+                  <sc-if value="{{ turn.ungroundedNotice }}">
+                    <div style="display:flex; align-items:flex-start; gap:7px; background:#FBF6EF; border:1px solid #EADFCE; border-radius:8px; padding:8px 10px;">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A3592B; line-height:1.5;">⊘</span>
+                      <span style="font-size:11.5px; color:#7A5A38; line-height:1.55;">{{ turn.ungroundedNotice }}</span>
+                    </div>
+                  </sc-if>
+
+                  <sc-if value="{{ turn.passagesOpen }}">
+                  <div class="eo-fade-in" style="background:#FAF8F4; border:1px solid #EBE6DC; border-radius:9px; padding:11px 12px; display:flex; flex-direction:column; gap:11px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ turn.passagesHeading }}</span>
+                    <sc-for list="{{ turn.passages }}" as="psg">
+                      <div onClick="{{ psg.open }}" style="display:flex; flex-direction:column; gap:4px; padding-left:9px; border-left:2px solid {{ psg.rail }}; opacity:{{ psg.opacity }}; cursor:{{ psg.openCursor }};">
+                        <div style="display:flex; align-items:center; flex-wrap:wrap; gap:7px;">
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ psg.numColor }}; background:{{ psg.numBg }}; border-radius:4px; padding:1px 5px;">{{ psg.num }}</span>
+                          <span style="font-size:11.5px; color:#4A463E;">{{ psg.source }}</span>
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">{{ psg.meta }}</span>
+                        </div>
+                        <span style="font-size:12px; color:#3A372F; line-height:1.62; font-style:italic;">{{ psg.quote }}</span>
+                      </div>
+                    </sc-for>
+                    <sc-for list="{{ turn.gaps }}" as="gap">
+                      <div style="display:flex; align-items:flex-start; gap:7px;">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A3592B;">⊘</span>
+                        <span style="font-size:11.5px; color:#7A5A38; line-height:1.55;">{{ gap.text }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                  </sc-if>
+
+                  <sc-if value="{{ turn.traceOpen }}">
+                  <div class="eo-fade-in" style="background:#FAF8F4; border:1px solid #EBE6DC; border-radius:9px; padding:11px 12px; display:flex; flex-direction:column; gap:9px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ turn.traceHeading }}</span>
+                    <sc-for list="{{ turn.traceRows }}" as="tr">
+                      <div style="display:flex; gap:8px; align-items:flex-start;">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:{{ tr.color }}; flex:none;">{{ tr.glyph }}</span>
+                        <div style="display:flex; flex-direction:column; gap:2px; min-width:0;">
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#3A372F;">{{ tr.name }}</span>
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; line-height:1.55; white-space:pre-wrap; word-break:break-word;">{{ tr.detail }}</span>
+                        </div>
+                      </div>
+                    </sc-for>
+                  </div>
+                  </sc-if>
+
+                  <sc-if value="{{ turn.rawOpen }}">
+                  <div class="eo-fade-in" style="background:#FAF8F4; border:1px solid #EBE6DC; border-radius:9px; padding:11px 12px; display:flex; flex-direction:column; gap:9px;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ turn.rawHeading }}</span>
+                      <button type="button" onClick="{{ turn.copyJson }}" style="display:flex; align-items:center; gap:5px; border:1px solid #E4DFD5; background:#FFFDFA; border-radius:6px; font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C; cursor:pointer; padding:3px 7px;"><i class="ph ph-brackets-curly"></i>copy json</button>
+                    </div>
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#4A463E; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:340px; overflow-y:auto;" class="eo-scrollbar">{{ turn.rawPrompt }}</span>
+                  </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <sc-if value="{{ streamingAnswer }}">
+            <div style="max-width:88%; display:flex; flex-direction:column; gap:8px;">
+              <span style="font-size:14px; color:#1B1A17; line-height:1.72; text-wrap:pretty;">{{ streamingAnswer }}</span>
+              <sc-if value="{{ streamingCitations }}">
+                <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                  <sc-for list="{{ streamingCitations }}" as="cit">
+                    <span style="display:flex; align-items:center; gap:7px; font-size:11.5px; color:#4A463E; border:1px solid #E4DFD5; background:#FAF8F4; border-radius:6px; padding:4px 8px;"><span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C;">{{ cit.num }}</span>{{ cit.source }}</span>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+
+      <div style="padding:14px 20px 18px; border-top:1px solid #EBE6DC; background:#FFFDFA; display:flex; flex-direction:column; gap:8px;">
+        <sc-if value="{{ hasDraftAttachments }}">
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <sc-for list="{{ draftAttachments }}" as="att">
+              <sc-if value="{{ att.editing }}">
+                <input type="text" value="{{ att.editValue }}" onChange="{{ att.onEditChange }}" onBlur="{{ att.commitEdit }}" onKeyDown="{{ att.commitEditKey }}" ref="{{ att.setInputRef }}" style="width:120px; font-size:10.5px; color:#4A463E; border:1px solid #1F5A4C; background:#FFFDFA; border-radius:6px; padding:2px 6px; outline:none;" />
+              </sc-if>
+              <sc-if value="{{ att.notEditing }}">
+                <span style="display:flex; align-items:center; gap:3px; font-size:10.5px; color:#8C877C;">{{ att.title }}<button type="button" onClick="{{ att.startEdit }}" aria-label="Rename" style="border:0; background:none; color:#A39D91; font-size:9px; cursor:pointer; padding:0; line-height:1;"><i class="ph ph-pencil-simple"></i></button><button type="button" onClick="{{ att.remove }}" aria-label="Remove" style="border:0; background:none; color:#A39D91; font-size:14px; cursor:pointer; padding:0; line-height:1;">×</button></span>
+              </sc-if>
+            </sc-for>
+          </div>
+        </sc-if>
+        <div style="display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 8px; background:#FFFDFA;">
+          <button type="button" aria-label="Attach file" onClick="{{ openFileDialog }}" style="width:28px; height:28px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:#8C877C; cursor:pointer;"><i class="ph ph-paperclip" style="font-size:15px;"></i></button>
+          <input type="file" multiple="{{ true }}" ref="{{ setFileInput }}" onChange="{{ onFilesSelected }}" style="display:none;" />
+          <input type="text" placeholder="Ask across your sources" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
+          <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
+          <button type="button" aria-label="Send" onClick="{{ send }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:{{ sendBg }}; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-arrow-right" style="font-size:14px;"></i></button>
+        </div>
+        <sc-if value="{{ composerHint }}">
+          <span style="font-size:11px; color: {{ composerHintColor }};">{{ composerHint }}</span>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isOutline }}">
+      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:2px;" class="eo-scrollbar">
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60; margin-bottom:12px;">Outline</span>
+        <sc-if value="{{ outlineEmpty }}">
+          <span style="font-size:12px; color:#A39D91;">Outline available once sources are ingested.</span>
+        </sc-if>
+        <sc-for list="{{ outlineItems }}" as="item">
+          <button type="button" onClick="{{ item.seek }}" style="display:flex; gap:12px; align-items:baseline; padding:9px 0; border:0; border-bottom:1px solid #F0ECE4; background:none; cursor:pointer; font-family:inherit; text-align:left; width:100%;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91; width:22px; flex:none;">{{ item.num }}</span>
+            <span style="font-size:13.5px; color:#26241F; flex:1;">{{ item.label }}</span>
+            <span style="font-size:10.5px; color:#A39D91; flex:none;">{{ item.source }}</span>
+          </button>
+        </sc-for>
+        <sc-for list="{{ outlineNotes }}" as="note">
+          <div style="display:flex; gap:8px; padding:9px 0; font-size:11.5px; color:#A39D91;">
+            <span>⊘</span><span>{{ note.text }}</span>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isOrbit }}">
+      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0;">
+        <div style="display:flex; align-items:baseline; justify-content:space-between;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Orbit</span>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ orbitHint }}</span>
+        </div>
+        <div style="flex:1; border:1px solid #EBE6DC; border-radius:12px; background:#FAF8F4; min-height:280px; position:relative; overflow:hidden;">
+          <canvas ref="{{ setCanvas }}" onClick="{{ onOrbitClick }}" style="width:100%; height:100%; display:block; cursor:pointer;"></canvas>
+        </div>
+        <div style="font-size:12px; color:#6E6A60; line-height:1.5;">
+          <span style="font-weight:500; color:#26241F;">Focused on {{ orbitFocusLabel }}</span>
+          <span style="color:#A39D91;">{{ orbitStatus }}</span>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isGlassBox }}">
+      <div style="flex:1; padding:22px 24px; min-height:0; overflow:hidden; display:flex; flex-direction:column;">
+        <!-- One grid track set (logGridCols) drives the header and every row, so the
+             mono columns line up down the page instead of drifting with content. -->
+        <div style="flex:1; display:flex; flex-direction:column; gap:11px; min-height:0; background:#0B1210; border:1px solid #1B2622; border-radius:11px; padding:15px 17px; overflow:hidden;">
+          <div style="display:flex; align-items:baseline; justify-content:space-between; gap:10px;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#8FE3C0;">glass box</span>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#556E66;">{{ logCount }}</span>
+          </div>
+          <span style="font-size:12px; color:#6E8880; line-height:1.5;">What the engine did on your behalf, in order.</span>
+          <div style="display:flex; gap:5px; flex-wrap:wrap;">
+            <sc-for list="{{ categoryChips }}" as="chip">
+              <button type="button" onClick="{{ chip.select }}" style="border:1px solid {{ chip.border }}; background: {{ chip.bg }}; color: {{ chip.color }}; font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; border-radius:5px; padding:3px 8px; cursor:pointer;">{{ chip.label }}</button>
+            </sc-for>
+          </div>
+          <div style="display:grid; grid-template-columns:{{ logGridCols }}; column-gap:14px; align-items:baseline; padding:0 0 5px; border-bottom:1px solid #1B2622;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#4E655D;">time</span>
+            <sc-if value="{{ showGlyphs }}"><span></span></sc-if>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#4E655D;">event</span>
+          </div>
+          <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column;" class="eo-scrollbar">
+            <sc-for list="{{ filteredLog }}" as="entry">
+              <div style="display:grid; grid-template-columns:{{ logGridCols }}; column-gap:14px; align-items:baseline; padding:6px 0; border-bottom:1px solid #141D19;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#556E66;">{{ entry.time }}</span>
+                <sc-if value="{{ showGlyphs }}"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#5F7A70;">{{ entry.glyph }}</span></sc-if>
+                <span style="font-size:12.5px; color:#D3E0DA; line-height:1.55;">{{ entry.text }}</span>
+              </div>
+            </sc-for>
+            <sc-if value="{{ logEmpty }}">
+              <span style="font-size:12px; color:#4E655D; padding-top:6px;">Nothing yet — the trace fills as the engine works.</span>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isPriors }}">
+      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Priors</span>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">Witness-tier knowledge about corpora, grouped by what each prior is about — as it declares itself, not by filename. Descend into one to see its scope, and open it in Explorer.</span>
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; max-width:560px;" class="eo-scrollbar">
+          <sc-for list="{{ priorGenres }}" as="genre">
+            <div style="border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4; overflow:hidden;">
+              <button type="button" onClick="{{ genre.toggle }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:10px 12px; cursor:pointer; font-family:inherit; text-align:left;">
+                <span style="display:flex; align-items:center; gap:9px;">
+                  <i class="{{ genre.chevronClass }}" style="font-size:11px; color:#A39D91;"></i>
+                  <span style="font-size:13px; font-weight:500; color:#26241F;">{{ genre.name }}</span>
+                </span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ genre.count }}</span>
+              </button>
+              <sc-if value="{{ genre.expanded }}">
+                <div style="display:flex; flex-direction:column; gap:6px; padding:0 12px 12px;">
+                  <sc-for list="{{ genre.items }}" as="item">
+                    <div style="border:1px solid #E7E2D8; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; gap:6px; background:#FFFDFA;">
+                      <span style="font-size:12.5px; color:#26241F; line-height:1.5;">{{ item.prior }}</span>
+                      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                        <sc-if value="{{ item.surprising }}">
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color:#8A5A22; background:#F3E7D3; border-radius:5px; padding:2px 7px;">gap · {{ item.gapLabel }}</span>
+                        </sc-if>
+                        <sc-if value="{{ item.notSurprising }}">
+                          <span></span>
+                        </sc-if>
+                        <button type="button" onClick="{{ item.openInExplorer }}" style="border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C; cursor:pointer; padding:0;">{{ item.name }} → Explorer</button>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noPriors }}">
+            <span style="font-size:12px; color:#A39D91; line-height:1.5;">{{ priorsMessage }}</span>
+          </sc-if>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isCompose }}">
+      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Compose</span>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A deliberate long-form generation, not a chat reply — each section is drafted, mechanically checked against the source, and revised before moving on.</span>
+
+        <div style="display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 12px; background:#FFFDFA;">
+          <input type="text" placeholder="e.g. write a 3-page essay about the Creature's intellectual development" value="{{ composeTask }}" onChange="{{ onComposeTask }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
+          <button type="button" onClick="{{ runCompose }}" style="border:0; border-radius:8px; padding:8px 14px; font-family:inherit; font-size:12.5px; font-weight:500; background: {{ composeButtonBg }}; color:#FFFDFA; cursor:pointer; flex:none;">{{ composeButtonLabel }}</button>
+        </div>
+
+        <sc-if value="{{ hasComposeError }}">
+          <div style="display:flex; align-items:flex-start; gap:7px; background:#FBF0EC; border:1px solid #E8C9BC; border-radius:8px; padding:8px 10px;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#c0341a;">⊘</span>
+            <span style="font-size:11.5px; color:#8a3a26; line-height:1.55;">{{ composeError }}</span>
+          </div>
+        </sc-if>
+
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:12px;" class="eo-scrollbar">
+          <sc-if value="{{ hasComposePlan }}">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">plan: {{ composePlanCount }} section(s)</span>
+          </sc-if>
+
+          <sc-if value="{{ composeReplanNotice }}">
+            <div style="display:flex; align-items:flex-start; gap:7px; background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C;">⊚</span>
+              <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ composeReplanNotice }}</span>
+            </div>
+          </sc-if>
+
+          <sc-for list="{{ composeSectionRows }}" as="sec">
+            <div style="border:1px solid #E7E2D8; border-radius:9px; background:#FAF8F4; padding:10px 12px; display:flex; flex-direction:column; gap:4px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <span style="font-size:13px; font-weight:500; color:#26241F;">{{ sec.label }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color: {{ sec.statusColor }};">{{ sec.statusLabel }}</span>
+              </div>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">grounding: {{ sec.groundingTrail }}</span>
+            </div>
+          </sc-for>
+
+          <sc-if value="{{ composeDone }}">
+            <div style="display:flex; flex-direction:column; gap:14px; padding-top:10px; border-top:1px solid #EBE6DC;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ composeSummary }}</span>
+              <sc-for list="{{ composeResultSections }}" as="rs">
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                  <span style="font-size:13.5px; font-weight:500; color:#26241F;">{{ rs.label }}</span>
+                  <span style="font-size:13.5px; color:#1B1A17; line-height:1.65; text-wrap:pretty; white-space:pre-wrap;">{{ rs.content }}</span>
+                  <sc-for list="{{ rs.citations }}" as="cit">
+                    <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
+                      <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">mechanical · {{ cit.jaccard }}</span>
+                        <span style="font-size:11.5px; color:#4A463E;">{{ cit.source }}</span>
+                      </div>
+                      <span style="font-size:12px; color:#3A372F; line-height:1.6; font-style:italic;">{{ cit.quote }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+      </sc-if>
+      </sc-if>
+    </div>
+
+    <div style="min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+    <sc-if value="{{ readerOpen }}">
+    <div style="min-width:0; min-height:0; display:flex; flex-direction:column; border-left:1px solid #EBE6DC;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; row-gap:8px; padding:14px 20px; border-bottom:1px solid #EBE6DC;">
+        <div style="display:flex; align-items:center; gap:10px; min-width:0; flex:1 1 140px;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C; flex:none;">{{ readerGlyph }}</span>
+          <span style="font-size:14.5px; font-weight:500; color:#26241F; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ readerName }}</span>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; text-transform:uppercase; letter-spacing:.08em; border:1px solid #E4DFD5; border-radius:5px; padding:2px 6px; flex:none;">{{ readerTypeLabel }}</span>
+          <sc-if value="{{ showReaderPipeline }}">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:5px; padding:2px 7px; flex:none; white-space:nowrap;">{{ readerPipelineLabel }}</span>
+          </sc-if>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px; flex:none;">
+          <sc-if value="{{ readerShowModeToggle }}">
+          <div style="display:flex; gap:2px; background:#F2EFE8; border-radius:7px; padding:2px;">
+            <button type="button" onClick="{{ setReaderScroll }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background: {{ readerScrollBg }}; color: {{ readerScrollColor }}; font-size:11px; padding:5px 9px; cursor:pointer;"><i class="ph ph-text-align-left"></i>Scroll</button>
+            <button type="button" onClick="{{ setReaderPaginated }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background: {{ readerPaginateBg }}; color: {{ readerPaginateColor }}; font-size:11px; padding:5px 9px; cursor:pointer;"><i class="ph ph-file-text"></i>Paginate</button>
+          </div>
+          </sc-if>
+          <button type="button" onClick="{{ closeReader }}" aria-label="Close reader" style="width:30px; height:30px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; color:#4A463E; cursor:pointer;"><i class="ph ph-x" style="font-size:14px;"></i></button>
+        </div>
+      </div>
+      <sc-if value="{{ hasReaderHighlight }}">
+        <div style="display:flex; align-items:center; gap:8px; padding:8px 20px; background:#F4F8F6; border-bottom:1px solid #E3EBE7;">
+          <i class="ph ph-arrow-elbow-down-right" style="font-size:12px; color:#1F5A4C;"></i>
+          <span style="font-size:11.5px; color:#3A372F;">{{ readerHighlightLabel }}</span>
+          <button type="button" onClick="{{ clearReaderHighlight }}" style="margin-left:auto; display:flex; align-items:center; gap:4px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C; cursor:pointer; padding:0;">clear<i class="ph ph-x" style="font-size:10px;"></i></button>
+        </div>
+      </sc-if>
+      <sc-if value="{{ hasReaderHighlightNote }}">
+        <div style="display:flex; align-items:flex-start; gap:7px; padding:9px 20px; background:#FBF6EF; border-bottom:1px solid #EADFCE;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A3592B;">⊘</span>
+          <span style="font-size:11.5px; color:#7A5A38; line-height:1.55;">{{ readerHighlightNote }}</span>
+        </div>
+      </sc-if>
+      <sc-if value="{{ showSectionChips }}">
+      <div style="display:flex; gap:6px; flex-wrap:wrap; padding:10px 20px; border-bottom:1px solid #EBE6DC;">
+        <sc-for list="{{ docOutline }}" as="sec">
+          <button type="button" onClick="{{ sec.jump }}" style="border:1px solid #E4DFD5; border-radius:6px; background: {{ sec.bg }}; padding:4px 9px; cursor:pointer; font-family:inherit; font-size:11px; color: {{ sec.color }};">{{ sec.label }}</button>
+        </sc-for>
+      </div>
+      </sc-if>
+      <div style="flex:1; overflow-y:auto; padding:32px 0; display:flex; justify-content:center;" class="eo-scrollbar">
+        <div style="width:100%; max-width:72ch; padding:0 24px; margin:0 auto;">
+
+          <sc-if value="{{ readerIsVideo }}">
+            <video src="{{ readerVideoSrc }}" controls="{{ true }}" style="width:100%; border-radius:10px; background:#000; display:block; margin-bottom:16px;"></video>
+          </sc-if>
+
+          <sc-if value="{{ readerIsAudioType }}">
+            <!-- This drew 40 bars from Math.sin(i*1.7) — a waveform of nothing,
+                 rendered next to a label claiming on-device transcription. No
+                 audio perceiver runs here, so the panel says so instead. -->
+            <div style="display:flex; align-items:center; gap:8px; height:56px; margin-bottom:18px; padding:0 12px; border:1px dashed #E0DACE; border-radius:10px; color:#A39D91; font-size:11.5px;">
+              <span style="font-size:13px;">⊘</span>
+              <span>No audio perceiver — bytes are stored and playable, not analysed or transcribed.</span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ readerIsSpreadsheet }}">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+              <button type="button" onClick="{{ togglePivotMode }}" style="display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; border-radius:7px; background: {{ readerPivotMode ? '#1F5A4C' : '#FFFDFA' }}; color: {{ readerPivotMode ? '#FFFDFA' : '#4A463E' }}; font-size:11.5px; padding:5px 10px; cursor:pointer; font-family:inherit;"><i class="ph {{ pivotToggleIcon }}" style="font-size:12px;"></i>{{ pivotToggleLabel }}</button>
+              <sc-if value="{{ readerPivotMode }}">
+                <span style="font-size:11px; color:#A39D91;">Group by</span>
+                <select value="{{ readerPivotGroupCol }}" onChange="{{ onPivotGroupChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; padding:5px 8px; font-family:inherit; font-size:11.5px; color:#26241F;">
+                  <sc-for list="{{ readerPivotOptions }}" as="opt">
+                    <option value="{{ opt.value }}">{{ opt.label }}</option>
+                  </sc-for>
+                </select>
+                <select value="{{ readerPivotAgg }}" onChange="{{ onPivotAggChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; padding:5px 8px; font-family:inherit; font-size:11.5px; color:#26241F;">
+                  <sc-for list="{{ readerPivotAggOptions }}" as="opt">
+                    <option value="{{ opt.value }}">{{ opt.label }}</option>
+                  </sc-for>
+                </select>
+                <span style="font-size:11px; color:#A39D91;">of</span>
+                <select value="{{ readerPivotValueCol }}" onChange="{{ onPivotValueChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; padding:5px 8px; font-family:inherit; font-size:11.5px; color:#26241F;">
+                  <option value="">(rows)</option>
+                  <sc-for list="{{ readerPivotOptions }}" as="opt">
+                    <option value="{{ opt.value }}">{{ opt.label }}</option>
+                  </sc-for>
+                </select>
+              </sc-if>
+            </div>
+            <div style="overflow:auto; border:1px solid #E4DFD5; border-radius:8px; margin-bottom:10px;" class="eo-scrollbar">
+              <div style="display:grid; grid-template-columns: {{ readerSheetGridCols }};">
+                <sc-for list="{{ readerSheetHeader }}" as="col">
+                  <button type="button" onClick="{{ col.sort }}" style="display:flex; align-items:center; border:0; border-right:{{ col.isLast ? '0' : '1px solid #E4DFD5' }}; border-bottom:1px solid #E4DFD5; background:#F2EFE8; cursor:pointer; padding:7px 11px; font-family:'IBM Plex Mono', monospace; font-size:11px; font-weight:500; color:#4A463E; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left;">{{ col.label }}{{ col.arrow }}</button>
+                </sc-for>
+                <sc-for list="{{ readerSheetRows }}" as="row">
+                  <sc-for list="{{ row.cells }}" as="cell">
+                    <span style="padding:6px 11px; font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#26241F; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-right:{{ cell.isLast ? '0' : '1px solid #F2EFE8' }}; border-bottom:1px solid #F2EFE8;">{{ cell.value }}</span>
+                  </sc-for>
+                </sc-for>
+              </div>
+            </div>
+            <sc-if value="{{ readerSheetTruncated }}">
+              <span style="display:block; font-size:11px; color:#A39D91; margin-bottom:16px;">{{ readerSheetTruncatedNote }}</span>
+            </sc-if>
+          </sc-if>
+
+          <sc-if value="{{ readerModeScroll }}">
+            <sc-for list="{{ readerSections }}" as="sec">
+              <div id="{{ sec.anchorId }}" style="margin:{{ sec.secMargin }}; background:{{ sec.secBg }}; border-left:{{ sec.secRail }}; padding:{{ sec.secPad }};">
+                <sc-if value="{{ sec.showHeading }}">
+                  <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; margin-bottom:9px;">{{ sec.heading }}</span>
+                </sc-if>
+                <span style="font-family:Georgia, 'Times New Roman', serif; font-size:15.5px; line-height:1.85; color:#26241F; text-wrap:pretty;">{{ sec.bodyNodes }}</span>
+              </div>
+            </sc-for>
+          </sc-if>
+
+          <sc-if value="{{ readerModePaginated }}">
+            <div style="margin-bottom:22px;">
+              <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; margin-bottom:9px;">{{ readerCurrentHeading }}</span>
+              <span style="font-family:Georgia, 'Times New Roman', serif; font-size:15.5px; line-height:1.85; color:#26241F; text-wrap:pretty;">{{ readerCurrentBodyNodes }}</span>
+            </div>
+            <div style="display:flex; align-items:center; justify-content:space-between; padding-top:20px; border-top:1px solid #EBE6DC;">
+              <button type="button" onClick="{{ readerSectionPrev }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:6px 12px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">← Prev</button>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#A39D91;">{{ readerSectionPos }}</span>
+              <button type="button" onClick="{{ readerSectionNext }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:6px 12px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Next →</button>
+            </div>
+          </sc-if>
+
+          <span style="display:block; margin-top:8px; font-size:11px; color:#A39D91;">click a highlighted name to open its profile →</span>
+
+        </div>
+      </div>
+    </div>
+    </sc-if>
+    </div>
+
+    <div style="background:#FAF8F4; border-left:1px solid #EBE6DC; padding:18px 16px; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0;">
+
+      <sc-if value="{{ hasSelectedEntity }}">
+        <button type="button" onClick="{{ clearSelectedEntity }}" style="display:flex; align-items:center; gap:6px; border:0; background:none; padding:0; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;"><i class="ph ph-arrow-left"></i>entities</button>
+        <span style="font-size:15px; font-weight:500; color:#26241F;">{{ selectedEntityName }}</span>
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; text-transform:uppercase; letter-spacing:.06em; margin-top:-8px;">mentioned {{ selectedEntityMentions }}×</span>
+        <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Relations</span>
+          <sc-for list="{{ selectedEntityRelations }}" as="rel">
+            <div style="display:flex; gap:8px; align-items:flex-start;">
+              <sc-if value="{{ showGlyphs }}"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; line-height:1.5;">{{ rel.glyph }}</span></sc-if>
+              <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ rel.text }}</span>
+            </div>
+          </sc-for>
+          <sc-if value="{{ selectedEntityNoRelations }}">
+            <span style="font-size:11.5px; color:#A39D91;">No recorded relations yet.</span>
+          </sc-if>
+        </div>
+        <span style="margin-top:auto; font-size:11px; color:#A39D91; padding-top:12px; border-top:1px solid #EBE6DC;">profile grows as you read</span>
+      </sc-if>
+
+      <sc-if value="{{ showEntityIndex }}">
+      <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Entities</span>
+      <div style="display:flex; flex-direction:column; gap:2px;">
+        <sc-for list="{{ entityRows }}" as="ent">
+          <button type="button" onClick="{{ ent.select }}" style="display:flex; align-items:center; gap:9px; border:0; background:none; padding:6px 4px; cursor:pointer; font-family:inherit; text-align:left; border-radius:6px;">
+            <span style="font-size:12.5px; color:#26241F; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ent.name }}</span>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ ent.type }}</span>
+            <span style="width: {{ ent.barWidth }}; height:3px; border-radius:2px; background: {{ ent.color }}; flex:none;"></span>
+          </button>
+        </sc-for>
+      </div>
+
+      <!-- Candidates the text proposed and no per-text prior typed. Listing
+           them is the point: silence here would read as "not in the book"
+           when it means "witness-tier knowledge is missing". -->
+      <sc-if value="{{ hasWithheld }}">
+      <div style="display:flex; flex-direction:column; gap:6px; padding-top:10px; margin-top:6px; border-top:1px solid #EBE6DC;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Withheld</span>
+        <span style="font-size:11px; color:#A39D91; line-height:1.5;">{{ withheldSummary }}</span>
+        <div style="display:flex; flex-wrap:wrap; gap:4px;">
+          <sc-for list="{{ withheldRows }}" as="w">
+            <span title="{{ w.reason }}" style="font-size:11px; color:#8A857A; border:1px dashed #E0DACE; border-radius:5px; padding:2px 6px;">{{ w.name }}</span>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <div style="display:flex; flex-direction:column; gap:8px; padding-top:6px;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Relations</span>
+        <sc-for list="{{ relationRows }}" as="rel">
+          <div style="display:flex; gap:8px; align-items:flex-start;">
+            <sc-if value="{{ showGlyphs }}"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; line-height:1.5;">{{ rel.glyph }}</span></sc-if>
+            <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ rel.text }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="margin-top:auto; padding-top:12px; border-top:1px solid #EBE6DC; display:flex; flex-direction:column; gap:3px;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#6E6A60;">{{ entityCountLabel }}</span>
+        <span style="font-size:11px; color:#A39D91;">grows as you read · click a name for its profile</span>
+      </div>
+      </sc-if>
+    </div>
+
+  </div>
+
+  <sc-if value="{{ thinkingModalOpen }}">
+  <div onClick="{{ closeModal }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:10vh 24px 24px; z-index:60;">
+    <div onClick="{{ stopModalClick }}" class="eo-fade-in" style="width:100%; max-width:520px; background:#0B1210; border:1px solid #1B2622; border-radius:12px; padding:18px 18px 16px; display:flex; flex-direction:column; gap:10px;">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#8FE3C0;">Engine activity</span>
+        <sc-if value="{{ streamingLoading }}">
+          <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#556E66;">{{ thinkingPhase }}</span>
+        </sc-if>
+        <button type="button" aria-label="Close" onClick="{{ closeModal }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#556E66; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
+      </div>
+      <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:3px; max-height:50vh;" class="eo-scrollbar">
+        <sc-if value="{{ thinkingLogEmpty }}">
+          <span style="font-size:12px; color:#4E655D; padding-top:4px;">Waiting for engine activity…</span>
+        </sc-if>
+        <sc-for list="{{ thinkingLogRows }}" as="entry">
+          <div style="display:flex; gap:8px; align-items:flex-start; padding:5px 0 5px 4px; border-bottom:1px solid #141D19;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:{{ entry.color }}; flex:none; line-height:1.6;">{{ entry.glyph }}</span>
+            <span style="font-size:12px; color:#D3E0DA; line-height:1.6;">{{ entry.text }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#4E655D;">{{ thinkingLogCount }}</span>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ modalOpen }}">
+  <div onClick="{{ closeModal }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:14vh 24px 24px; z-index:60;">
+    <div onClick="{{ stopModalClick }}" class="eo-fade-in" style="width:100%; max-width:404px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:17px 18px 15px; display:flex; flex-direction:column; gap:13px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#8C877C;">{{ modalTitle }}</span>
+        <button type="button" aria-label="Cancel" onClick="{{ closeModal }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ modalLabel }}</span>
+        <input type="text" ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" onKeyDown="{{ onModalKey }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:inherit; font-size:13.5px; color:#1B1A17; outline:none;" />
+      </div>
+      <sc-if value="{{ modalUpload }}">
+        <div style="display:flex; align-items:center; gap:9px;">
+          <button type="button" onClick="{{ modalPickFile }}" style="display:flex; align-items:center; gap:6px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:9px; padding:7px 11px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;"><i class="ph ph-upload-simple" style="font-size:13px;"></i>Upload file</button>
+          <span style="font-size:11.5px; color:#A39D91;">from this machine</span>
+        </div>
+        <input type="file" multiple="{{ true }}" ref="{{ setSourceFileInput }}" onChange="{{ onSourceFilesSelected }}" style="display:none;" />
+      </sc-if>
+      <sc-if value="{{ modalHint }}">
+        <span style="font-size:11.5px; color:#A39D91; line-height:1.55;">{{ modalHint }}</span>
+      </sc-if>
+      <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px;">
+        <button type="button" onClick="{{ closeModal }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Cancel</button>
+        <button type="button" onClick="{{ submitModal }}" style="border:1px solid {{ modalSubmitBg }}; background:{{ modalSubmitBg }}; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:{{ modalSubmitCursor }};">{{ modalSubmitLabel }}</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showGlyphs&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;proxyUrl&quot;:{&quot;editor&quot;:&quot;string&quot;,&quot;default&quot;:&quot;http://localhost:11435&quot;,&quot;section&quot;:&quot;Backend&quot;},&quot;sessionId&quot;:{&quot;editor&quot;:&quot;string&quot;,&quot;default&quot;:&quot;eochat&quot;,&quot;section&quot;:&quot;Backend&quot;}}">
+// Shared glyph/label vocabulary for the four source types the reader already
+// knows how to display — pdf(text)/video/audio/link, falling back to an
+// opaque binary. Used both to render the open reader and to mark a freshly
+// uploaded source the same way, so an upload isn't a visually distinct thing.
+const TYPE_GLYPH = { pdf: '●', video: '●', audio: '○', spreadsheet: '▦', link: '○', binary: '◱' };
+const TYPE_LABEL = { pdf: 'Text', video: 'Video', audio: 'Audio', spreadsheet: 'Sheet', link: 'Article', binary: 'File' };
+
+class Component extends DCLogic {
+  state = {
+    tab: 'chat', draft: '',
+    webSearch: false,
+    spacesOpen: false, activeSpaceId: 'default', leftCollapsed: false, selectedEntity: null,
+    webHistoryOpen: false,
+    readerOpen: false, readerSourceName: null,
+    readerViewMode: 'scroll', readerSectionIndex: 0,
+    // Set when the reader was opened *by* a citation rather than by picking a
+    // source. Carries the span the answer actually leaned on, so the reader can
+    // mark it: { num, quote, byteStart, byteEnd, source }.
+    readerHighlight: null,
+    // Spreadsheet grid state — sort applies to whichever grid (raw table or
+    // pivot) is currently displayed, by column index, since a pivot output is
+    // just another 2D grid. Reset whenever a different source is opened.
+    readerSortCol: null, readerSortDir: 'asc',
+    readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
+    glassBoxCategory: 'all', expandedGenres: {}, expandedSource: null,
+    turnPanels: {},
+    // One reusable dialog. `modal` holds the shape the template renders
+    // ({ title, label, placeholder, hint, submitLabel, onSubmit }); `modalValue`
+    // is the live field. null ⇒ closed. Never a native browser dialog — that
+    // renders the browser's own chrome, which has no relationship to this app.
+    modal: null, modalValue: '',
+    orbitFocus: 'room',
+    proxyAlive: new Date(0),
+    // turns / retrievals / sources live per-space inside `spaces` — the only
+    // source of truth the template renders from. Never mirror them here.
+    spaces: [],
+    streamingAnswer: null, streamingCitations: null, streamingTurnId: null, streamingLoading: false, thinkingPhase: null, thinkingLog: [], thinkingModalOpen: false,
+    log: [],
+    draftAttachments: [], editingTitleId: null, editTitleValue: '',
+    readerContent: {},
+    orbitBodies: {},
+    orbitEdges: [],
+    // Compose tab: a deliberate long-form generation action, distinct from
+    // ambient chat — always runs holonic_task directly via /api/holonic
+    // rather than waiting for the model to choose to call it. `composeSections`
+    // is keyed by sub-task id; each entry accumulates its own iteration trace
+    // live as SSE events arrive, so the correction loop is visible while it
+    // runs, not just in the final assembled output.
+    composeTask: '', composeRunning: false, composeError: null,
+    composePlan: null, composeSections: {}, composeOrder: [],
+    composeReplan: null, composeResult: null,
+    // Priors catalog from /api/priors — the witness-tier pool, kept separate
+    // from `_proxySources` (the corpus pool) because asking about the priors
+    // and asking about the texts are different questions. null = not fetched.
+    _priors: null, _priorsError: null, priorGenreOpen: {},
+    // Per-source engine projections, keyed by source name.
+    //
+    // `folds` carries the cast: referents a per-text prior actually typed, the
+    // candidates it withheld, and the typed gaps explaining why. This replaces
+    // the capitalized-word regex this file used to run over the chat
+    // transcript — that derived a cast from name-shaped strings, which is the
+    // one thing the engine's coref tier forbids. The engine withholds
+    // "Frankenstein" and "Why" alike unless a prior asserts them; the client
+    // has no standing to second-guess that.
+    //
+    // `outlines` carries real headings with byte offsets, from the same
+    // detector the engine uses — not lines that happen to be uppercase.
+    folds: {}, outlines: {}, foldPending: {},
+    _recycleBin: [],
+    recycleBinOpen: false,
+  };
+
+  proxyUrl() { return this.props.proxyUrl || 'http://localhost:11435'; }
+  sessionId() { return this.props.sessionId || 'eochat'; }
+
+  componentDidMount() {
+    this.tick = this.tick.bind(this);
+    this.checkHealth();
+    this.loadSession();
+    this.fetchSources();
+    this.fetchPriors();
+    this.fetchRecycleBin();
+    // Escape closes the dialog from anywhere inside it, not just while the
+    // input holds focus.
+    this._onWindowKeyDown = (e) => { if (e.key === 'Escape' && this.state.modal) this.closeModal(); };
+    document.addEventListener('keydown', this._onWindowKeyDown);
+  }
+  componentWillUnmount() {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    if (this._healthTimer) clearInterval(this._healthTimer);
+    if (this._onWindowKeyDown) document.removeEventListener('keydown', this._onWindowKeyDown);
+  }
+
+  openModal(cfg) { this.setState({ modal: cfg, modalValue: cfg.initialValue || '' }); }
+  closeModal() { this.setState({ modal: null, modalValue: '', thinkingModalOpen: false }); }
+  openThinkingModal() { this.setState({ thinkingModalOpen: true }); }
+
+  // Whitespace-only input is not a name — reject it rather than creating a
+  // blank-titled space or POSTing an empty path to the proxy.
+  submitModal() {
+    const modal = this.state.modal;
+    if (!modal) return;
+    const value = (this.state.modalValue || '').trim();
+    if (!value) return;
+    this.closeModal();
+    modal.onSubmit(value);
+  }
+  componentDidUpdate() {
+    this.manageOrbitLoop();
+    this.scrollToBottom();
+  }
+
+  scrollToBottom() {
+    const el = this.chatScrollEl;
+    if (!el) return;
+    requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+  }
+
+  async _pingHealth() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/health', { signal: AbortSignal.timeout(3000) });
+      if (res.ok) this.setState({ proxyAlive: new Date() });
+    } catch {}
+  }
+
+  // Re-entrant: the "retry" control calls this again, so clear any existing
+  // timer first or each retry stacks another poller.
+  async checkHealth() {
+    if (this._healthTimer) clearInterval(this._healthTimer);
+    await this._pingHealth();
+    this._healthTimer = setInterval(() => {
+      this._pingHealth();
+      this.fetchSources();
+      this.fetchRecycleBin();
+    }, 15000);
+  }
+  proxyLive() { return (Date.now() - this.state.proxyAlive.getTime()) < 20000; }
+
+  // Corpus pool ONLY. Priors are witness-tier knowledge that steers surf and
+  // fold; they are not things to ask questions of. An older proxy that ignores
+  // ?pool= returns every pool, so the kind/pool filter below is the real
+  // guarantee — a prior must never become an attachable chat source.
+  async fetchSources() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/sources?pool=corpus', { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const list = await res.json();
+        const corpus = (Array.isArray(list) ? list : []).filter(
+          src => (src.pool || 'corpus') === 'corpus' && (src.kind || 'corpus') === 'corpus'
+        );
+        this.setState({ _proxySources: corpus });
+      }
+    } catch {}
+  }
+
+  async fetchRecycleBin() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/recycle-bin', { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const list = await res.json();
+        this.setState({ _recycleBin: Array.isArray(list) ? list : [] });
+      }
+    } catch {}
+  }
+
+  // The priors catalog is a separate pool from /api/sources. A proxy too old
+  // to know the route falls through to the upstream model server and answers
+  // "404 page not found" as text/plain — surface that as an error rather than
+  // rendering an empty tab that reads as "no priors exist".
+  async fetchPriors() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/priors', { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) {
+        this.setState({ _priorsError: `proxy returned ${res.status} for /api/priors — restart the proxy if it predates the priors route` });
+        return;
+      }
+      const data = await res.json();
+      if (!data || !Array.isArray(data.priors)) {
+        this.setState({ _priorsError: 'proxy did not return a priors catalog' });
+        return;
+      }
+      this.setState({ _priors: data.priors, _priorsError: null });
+      this.logAdd('○', `Priors catalog: ${data.priors.length} priors`, 'sources');
+    } catch (err) {
+      this.setState({ _priorsError: `could not reach the proxy: ${err.message}` });
+    }
+  }
+
+  // Shortens a declared source string for a group heading — display only. The
+  // full declared string still shows on every item row, so nothing is hidden by
+  // the trim. Anything that doesn't match the shape is left verbatim rather
+  // than truncated into a guess.
+  _textTitle(declared) {
+    const m = declared.match(/\b(pg\d+)\b\s*[—–-]\s*([^;(]+)/);
+    return m ? `${m[2].trim()} (${m[1]})` : declared;
+  }
+
+  togglePriorGenre(name) {
+    this.setState(s => ({ priorGenreOpen: { ...s.priorGenreOpen, [name]: !s.priorGenreOpen[name] } }));
+  }
+
+  // Priors open by id through /api/priors/read, not through the attachments
+  // endpoint the corpus reader uses — they are not session uploads. The card
+  // layer is the readable projection; the raw JSON is the authority.
+  async openPrior(id) {
+    const name = 'prior:' + id;
+    const already = this.state.readerContent[name];
+    this.setState(s => ({
+      readerOpen: true, readerSourceName: name, readerViewMode: 'scroll', readerSectionIndex: 0,
+      readerSortCol: null, readerSortDir: 'asc',
+      readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
+      readerContent: { ...s.readerContent, [name]: already || 'Loading prior…' }
+    }));
+    this.logAdd('◱', `Opened prior "${id}" in reader`, 'reader');
+    if (already) return;
+    let text;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/priors/read?id=' + encodeURIComponent(id) + '&layer=card', { signal: AbortSignal.timeout(20000) });
+      const data = await res.json();
+      // No card built is a typed gap, not a failure — fall back to raw bytes.
+      if (data.error) {
+        const rawRes = await fetch(this.proxyUrl() + '/api/priors/read?id=' + encodeURIComponent(id) + '&layer=raw', { signal: AbortSignal.timeout(20000) });
+        const raw = await rawRes.json();
+        text = raw.error ? `(prior unreadable — card: ${data.error}; raw: ${raw.error})` : raw.text;
+        if (raw.truncated) text += '\n\n(truncated — the rest is readable by byte range)';
+      } else {
+        text = data.text;
+        if (data.truncated) text += '\n\n(truncated — the rest is readable by byte range)';
+      }
+    } catch (err) {
+      text = `(could not read prior "${id}": ${err.message})`;
+    }
+    this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
+  }
+
+  _baseName(name) { return String(name || '').replace(/^.*[/\\]/, ''); }
+
+  // The rail lists everything a question can be answered FROM, not just what
+  // this room attached. The engine's corpus (texts the proxy auto-ingests at
+  // boot, pages a previous web search pulled in) grounds every answer whether
+  // or not this room added it — so it belongs in the same list, under the same
+  // switch. A source that can be cited at you but cannot be seen or switched
+  // off is the bug this replaced: pills over the composer naming three texts
+  // while the rail read "0 sources".
+  //
+  // Dedupe is on basename: a room row holds whatever ref was ingested (URL,
+  // proxy-host path, upload name) while the engine row holds the basename it
+  // chunked, so the same text otherwise appears twice.
+  roomSources() {
+    const active = this.activeSpace();
+    const off = active.sourcesOff || {};
+    const rows = active.sources.map(s => ({ ...s, engineOnly: false }));
+    const seen = new Set(rows.map(s => this._baseName(s.name)));
+    // Web-pulled pages are listed under Web history, not loose in the rail —
+    // otherwise every search silently lengthens the reader's source list.
+    const webNames = new Set((active.webSources || []).map(w => this._baseName(w.name)));
+    for (const src of (this.state._proxySources || [])) {
+      if (src.kind !== 'corpus') continue;
+      const base = this._baseName(src.name);
+      if (seen.has(base) || webNames.has(base)) continue;
+      seen.add(base);
+      rows.push({
+        name: src.name, glyph: '●', color: '#1F5A4C', ingested: true,
+        enabled: off[base] !== true, engineOnly: true,
+      });
+    }
+    return rows;
+  }
+
+  // Pages pulled in by a web search, kept apart from sources the reader
+  // attached. Same engine, same citations — different provenance, and the
+  // rail says so rather than blending them into one undifferentiated list.
+  webSources() {
+    return (this.activeSpace().webSources || []);
+  }
+
+  recordWebSource(rec) {
+    this.updateActiveSpace(sp => {
+      const existing = (sp.webSources || []);
+      if (existing.some(w => w.url === rec.url)) return sp;
+      return {
+        ...sp,
+        webSources: existing.concat([{
+          name: rec.name, url: rec.url, size: rec.size || 0,
+          query: rec.query || '', ingestedAt: rec.ingestedAt || new Date().toISOString(),
+          enabled: true,
+        }])
+      };
+    });
+  }
+
+  toggleWebSource(url) {
+    this.updateActiveSpace(sp => ({
+      ...sp,
+      webSources: (sp.webSources || []).map(w => w.url === url ? { ...w, enabled: w.enabled === false } : w)
+    }));
+    const row = this.webSources().find(w => w.url === url);
+    this.logAdd('○', `Web source "${row ? row.name : url}" ${row && row.enabled === false ? 'enabled' : 'disabled'}`, 'sources');
+  }
+
+  toggleAllWebSources() {
+    const all = this.webSources();
+    const anyOn = all.some(w => w.enabled !== false);
+    this.updateActiveSpace(sp => ({
+      ...sp,
+      webSources: (sp.webSources || []).map(w => ({ ...w, enabled: !anyOn }))
+    }));
+    this.logAdd('○', `Web history ${anyOn ? 'disabled' : 'enabled'} (${all.length} sites)`, 'sources');
+  }
+
+  // Which sources grounding may draw on. `null` means "no filter" — the engine
+  // sees every source, which is only correct when nothing is switched off.
+  // With a subset switched on we send that subset; with everything off we send
+  // an empty list, which the engine honours as "match nothing" rather than
+  // quietly widening back to the whole corpus.
+  // Web history participates in the same filter: a site switched off there is
+  // withheld from grounding exactly as an attached source switched off is.
+  groundSourceFilter() {
+    const rows = this.roomSources().concat(this.webSources());
+    const on = rows.filter(s => s.enabled !== false);
+    if (!rows.length || on.length === rows.length) return null;
+    return on.map(s => s.name);
+  }
+  // Priors are never source material — they steer retrieval but never appear
+  // in the sources sidebar. This returns only corpus-kind proxy sources.
+  _corpusProxySources() {
+    return (this.state._proxySources || []).filter(s => s.kind === 'corpus');
+  }
+
+  async loadSession() {
+    let spaces = this._loadLocal('eochat.spaces');
+    if (!Array.isArray(spaces) || !spaces.length) {
+      spaces = [{ id: 'default', name: 'Reading Room', turns: [], retrievals: [], sources: [] }];
+    }
+    this.setState({ spaces });
+  }
+
+  _loadLocal(key) {
+    try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
+  }
+  _saveLocal(key, val) {
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+  }
+
+  activeSpace() {
+    return this.state.spaces.find(s => s.id === this.state.activeSpaceId) || this.state.spaces[0] || { id: 'default', name: 'Room', turns: [], retrievals: [], sources: [] };
+  }
+
+  // Every space mutation goes through here. `spaces` is the single source of
+  // truth the template renders from, and it is persisted from the *committed*
+  // state — reading this.state.spaces right after setState would save the
+  // pre-update value.
+  updateActiveSpace(fn) {
+    this.setState(
+      s => ({ spaces: s.spaces.map(sp => (sp.id === s.activeSpaceId ? fn(sp) : sp)) }),
+      () => this._saveLocal('eochat.spaces', this.state.spaces)
+    );
+  }
+
+  setSpaces(fn, extra) {
+    this.setState(
+      s => ({ ...(extra || {}), spaces: fn(s.spaces) }),
+      () => this._saveLocal('eochat.spaces', this.state.spaces)
+    );
+  }
+
+  inferType(name) {
+    const n = name.toLowerCase();
+    // Priors are addressed by id, not filename — `prior:coref/pg84-frankenstein`
+    // has no extension and would fall through to 'binary', which renders a
+    // placeholder instead of the content. Both prior layers are text.
+    if (n.startsWith('prior:')) return 'pdf';
+    if (n.match(/\.(mp4|mov|webm)$/)) return 'video';
+    if (n.match(/\.(wav|mp3|m4a|ogg)$/)) return 'audio';
+    if (n.match(/\.(csv|tsv|xlsx|xls)$/)) return 'spreadsheet';
+    if (n.match(/\.(pdf|docx|doc|txt|md)$/)) return 'pdf';
+    if (n.startsWith('http')) return 'link';
+    return 'binary';
+  }
+
+  // Splits spreadsheet text into rows/cells for the reader grid. As simple as
+  // the csv sense adapter it mirrors (senses/csv/adapter.js) plus quote
+  // stripping — a delimiter embedded inside a quoted field is still not
+  // handled (that adapter's contract is plain split, not a full CSV parser),
+  // but bare quoting (what SheetJS's sheet_to_csv and most exports produce)
+  // renders clean instead of showing literal quote characters.
+  _parseDelimited(text, delimiter) {
+    const unquote = (cell) => {
+      const t = cell.trim();
+      return t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"'
+        ? t.slice(1, -1).replace(/""/g, '"')
+        : t;
+    };
+    return (text || '').split(/\r?\n/).filter(l => l.length).map(l => l.split(delimiter).map(unquote));
+  }
+
+  // The cast of every enabled source, as the engine folded it.
+  //
+  // Entities are never derived here. A referent exists because a per-text prior
+  // in eoPriors asserted an individuation type for it and an anchor verified —
+  // not because a word was capitalized. The surfaces we highlight are the
+  // referent's own `surfaceForms`, scoped evidence the engine already resolved,
+  // so an alias links to the same referent as its canonical name without this
+  // file knowing they are related.
+  castOfEnabledSources() {
+    const byId = {};
+    const withheld = [];
+    const gaps = [];
+    this.roomSources().filter(s => s.enabled !== false).forEach(s => {
+      const fold = this.state.folds[s.name];
+      if (!fold || fold.error) return;
+      (fold.referents || []).forEach(r => {
+        const prev = byId[r.id];
+        // The same referent can be typed in more than one source; mentions add,
+        // surfaces union. Identity is the referent id, never the display string.
+        byId[r.id] = {
+          id: r.id,
+          label: r.name || r.canonicalLabel,
+          type: r.individuation_type || null,
+          mentions: (prev ? prev.mentions : 0) + (r.mentions || 0),
+          frames: Math.max(prev ? prev.frames : 0, r.frames || 0),
+          anchors: (prev ? prev.anchors : []).concat((r.provenance && r.provenance.anchors) || r.evidence || []),
+          // globalSurfaces, never surfaceForms. The latter includes surfaces the
+          // prior scoped to a range — the Creature's narrator "I"/"me"/"my" —
+          // and matching those outside their scope marks Victor's narration as
+          // the Creature. If the engine did not supply the safe set, match the
+          // display name only rather than guessing which forms travel.
+          surfaces: [...new Set((prev ? prev.surfaces : []).concat(r.globalSurfaces || [], [r.name]))].filter(Boolean),
+          source: s.name
+        };
+      });
+      (fold.withheld || []).forEach(w => withheld.push({ ...w, source: s.name }));
+      (fold.gaps || []).forEach(g => gaps.push({ ...g, source: s.name }));
+    });
+    const entities = Object.values(byId).sort((a, b) => b.mentions - a.mentions);
+    return { entities, withheld, gaps };
+  }
+
+  // Longest-surface-first alternation over the fold's surfaces, so "Victor
+  // Frankenstein" wins over "Victor" rather than being split by it.
+  buildSurfaceMatcher() {
+    const { entities } = this.castOfEnabledSources();
+    const surfaceMap = {};
+    const surfaces = [];
+    entities.forEach(e => e.surfaces.forEach(sf => {
+      const key = String(sf).toLowerCase();
+      if (!surfaceMap[key]) { surfaceMap[key] = e; surfaces.push(String(sf)); }
+    }));
+    surfaces.sort((a, b) => b.length - a.length);
+    const esc = surfaces.map(a => a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    // No surfaces ⇒ no regex. An empty alternation `()` matches at every
+    // position and would explode a full-book reader body into per-char nodes.
+    const regex = esc.length ? new RegExp('(' + esc.join('|') + ')', 'g') : null;
+    return { regex, surfaceMap, entities };
+  }
+
+  renderEntityText(text, keyPrefix, onSelect) {
+    if (!text) return text;
+    const { regex, surfaceMap } = this.buildSurfaceMatcher();
+    if (!regex) return text;
+    const parts = text.split(regex);
+    return React.createElement('span', { key: keyPrefix }, ...parts.map((part, i) => {
+      const entity = surfaceMap[String(part).toLowerCase()];
+      if (entity) {
+        return React.createElement('span', {
+          key: keyPrefix + '-' + i, onClick: () => onSelect(entity.id),
+          title: entity.type ? `${entity.label} · ${entity.type}` : entity.label,
+          style: { color: '#1F5A4C', cursor: 'pointer', borderBottom: '1px dotted #1F5A4C' }
+        }, part);
+      }
+      return part;
+    }));
+  }
+
+  // Fold and outline for one source. Both are engine projections keyed by
+  // source name; `foldPending` keeps a slow fold from being launched twice
+  // while the first is still in flight.
+  async fetchFold(name) {
+    if (this.state.folds[name] || this.state.foldPending[name]) return;
+    this.setState(s => ({ foldPending: { ...s.foldPending, [name]: true } }));
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/fold?source=' + encodeURIComponent(name), { signal: AbortSignal.timeout(120000) });
+      const data = await res.json();
+      this.setState(s => ({ folds: { ...s.folds, [name]: data }, foldPending: { ...s.foldPending, [name]: false } }));
+      if (data.error) { this.logAdd('⊘', `Fold unavailable for "${name}" — ${data.error}`, 'perception'); return; }
+      const withheld = (data.withheld || []).length;
+      this.logAdd('⋈', `Fold "${name}": ${(data.referents || []).length} referent(s) typed by prior ${data.prior && data.prior.snapshot ? data.prior.snapshot : '(none)'}, ${withheld} withheld`, 'perception');
+      (data.gaps || []).forEach(g => this.logAdd('⊘', `Gap · ${g.reason || g}`, 'perception'));
+    } catch (e) {
+      this.setState(s => ({ folds: { ...s.folds, [name]: { error: String(e.message || e) } }, foldPending: { ...s.foldPending, [name]: false } }));
+      this.logAdd('⊘', `Fold failed for "${name}" — ${e.message || e}`, 'perception');
+    }
+  }
+
+  async fetchOutline(name) {
+    if (this.state.outlines[name]) return;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/verbatim/outline', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: name }), signal: AbortSignal.timeout(30000)
+      });
+      const data = await res.json();
+      this.setState(s => ({ outlines: { ...s.outlines, [name]: data } }));
+      if (data.error || data.gap) this.logAdd('⊘', `Outline for "${name}" — ${data.error || data.gap}`, 'perception');
+      else this.logAdd('◱', `Outline "${name}": ${(data.headings || []).length} heading(s)`, 'perception');
+    } catch (e) {
+      this.setState(s => ({ outlines: { ...s.outlines, [name]: { error: String(e.message || e) } } }));
+    }
+  }
+
+  // `onGrounding` fires the moment the engine's retrieval lands, which is long
+  // before the model finishes prosifying it. Holding the passage table back
+  // until `done` made a ~400ms mechanical step look like part of a multi-second
+  // generation, and hid the fact that the model is only rewording what the
+  // engine already found.
+  async sendToProxy(q, onGrounding) {
+    const enabledSources = this.roomSources().filter(s => s.enabled !== false);
+    const sysMsg ='You are a helpful reading companion. Answer only from the attached sources, with inline citations in the format [1], [2], etc. Always cite the specific source for each claim. If the sources do not contain enough information to answer, say so clearly.';
+    let userMsg = q;
+    if (enabledSources.length) {
+      userMsg = `I have these sources available:\n${enabledSources.map((s, i) => `[${i + 1}] ${s.name}`).join('\n')}\n\nQuestion: ${q}`;
+    }
+    const res = await fetch(this.proxyUrl() + '/api/chat/tools', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ role: 'system', content: sysMsg }, { role: 'user', content: userMsg }],
+        session: this.sessionId(),
+        webSearch: this.state.webSearch,
+        // Wide intake, narrow mouth.
+        //
+        // groundLimit is how widely the ENGINE sweeps. That is mechanical —
+        // ~400ms, no model — so looking at 16 candidates is nearly free.
+        // groundMaxUnits is how many survive the fold to reach the talker, and
+        // that is a working-memory bottleneck rather than a budget: the world
+        // has already been folded before anything gets said, so what arrives at
+        // the mouth is a handful, not the corpus.
+        //
+        // Measured in the other direction: at 8 units the system prompt reached
+        // 27,471 chars and the answer degenerated to the single token "[7]".
+        // Asking one prompt to hold everything retrieval found IS the failure.
+        groundBudget: 3000, groundMaxUnits: 5, groundLimit: 16, stream: true,
+        groundSource: this.groundSourceFilter(),
+      })
+    });
+    if (!res.ok) throw new Error('Proxy returned ' + res.status);
+
+    // /api/chat/tools emits named SSE events, not OpenAI-style token deltas:
+    //   grounding    → the engine's retrieved passages + real citation table
+    //   response     → full assistant text for a tool-loop round (replaces)
+    //   tool_call/tool_result → progress
+    //   done         → authoritative final content
+    //   error        → typed failure
+    // There is no incremental `content` event; treat one if it ever appears.
+    const pushLog = (glyph, text) => {
+      this.setState(s => ({ thinkingLog: s.thinkingLog.concat([{ glyph, text }]) }));
+    };
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', answer = '', streamErr = null;
+    let grounding = null, model = null;
+    const trace = [];
+    this.setState({ streamingAnswer: '', streamingCitations: [], thinkingPhase: 'Identifying referents…', thinkingMeta: null, thinkingLog: [] });
+    pushLog('⊨', 'Identifying referents in source text…');
+
+    const flush = () => {
+      const parsed = this._resolveCitations(answer, grounding);
+      this.setState({ streamingAnswer: parsed.text, streamingCitations: parsed.citations });
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim() || !line.startsWith('data: ')) continue;
+        let data;
+        try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (data.type === 'source_added') {
+          // A web page the proxy ingested mid-turn. It is a real engine source
+          // now — but it arrived because a search pulled it in, not because the
+          // reader chose it, so it lands in web history rather than loose in
+          // the rail, where it can be inspected and switched off individually.
+          this.recordWebSource(data);
+          const sourceText = data.url ? ` from ${data.url}` : (data.query ? ` for "${data.query.slice(0, 60)}"` : '');
+          pushLog('●', `Ingested "${data.name}"${sourceText}`);
+          this.logAdd('●', `Ingested "${data.name}"${sourceText}`, 'sources');
+        }
+        if (data.type === 'gap') {
+          const msg = `Gap: ${data.reason || data.type}`;
+          pushLog('⊘', msg);
+          this.logAdd('⊘', msg, 'sources');
+        }
+        // A later `grounding` supersedes an earlier one: the proxy re-grounds
+        // after ingesting web pages, and the last table is what the model saw.
+        if (data.sourceCount !== undefined || data.citations) {
+          grounding = data;
+          if (onGrounding) onGrounding(data);
+          const foldedMeta = data.foldedCount !== undefined ? ` · ${data.foldedCount} folded` : '';
+          const metaStr = `${data.sourceCount} found${foldedMeta} · ${data.tokens || 0} tokens`;
+          this.setState({ thinkingPhase: 'Grounded passages', thinkingMeta: metaStr });
+          pushLog('⋈', data.empty
+            ? 'No source material in engine — answer will be ungrounded'
+            : `Grounded ${data.sourceCount} passage(s)${foldedMeta}, ${data.tokens || 0} tokens`);
+          this.logAdd('⋈', data.empty
+            ? 'No source material in engine — answer will be ungrounded'
+            : `Engine grounded ${data.sourceCount} passage(s)${foldedMeta}, ${data.tokens || 0} tokens`, 'sources');
+          (data.gaps || []).forEach(g => {
+            const gm = `Gap: ${g.reason || g.type || JSON.stringify(g)}`;
+            pushLog('⊘', gm);
+            this.logAdd('⊘', gm, 'sources');
+          });
+        }
+        if (data.model) model = data.model;
+        if (data.type === 'content' && data.content) { this.setState({ thinkingPhase: null, thinkingMeta: null }); answer += data.content; flush(); }
+        if (data.type === 'response' && data.content) { this.setState({ thinkingPhase: null, thinkingMeta: null }); answer = data.content; flush(); }
+        if (data.type === 'tool_calls') {
+          (data.calls || []).forEach(c => {
+            trace.push({ kind: 'call', name: c.name || '(unnamed)', detail: typeof c.args === 'string' ? c.args : JSON.stringify(c.args || {}) });
+            let args = '';
+            try { const parsed = typeof c.args === 'string' ? JSON.parse(c.args) : (c.args || {}); args = parsed.query || parsed.url || ''; } catch {}
+            const callDetail = args ? ` — ${args.slice(0, 100)}${args.length > 100 ? '…' : ''}` : '';
+            const text = `→ ${c.name}${callDetail}`;
+            pushLog('→', text);
+            this.logAdd('△', `Tool call: ${c.name}`, 'perception');
+            if (c.name === 'web_search') {
+              this.setState({ thinkingPhase: 'Searching the web…', thinkingMeta: null });
+            } else if (c.name === 'web_fetch') {
+              this.setState({ thinkingPhase: 'Fetching web page…', thinkingMeta: null });
+            } else if (c.name === 'verifold_search' || c.name === 'fold_spans' || c.name === 'fold') {
+              this.setState({ thinkingPhase: 'Folding cast…', thinkingMeta: null });
+              pushLog('⋈', 'Folding referent cast…');
+            } else if (c.name === 'verbatim_search' || c.name === 'search_spans' || c.name === 'search' || c.name === 'engine_search') {
+              this.setState({ thinkingPhase: 'Searching passages…', thinkingMeta: null });
+            }
+          });
+        }
+        if (data.type === 'tool_result') {
+          trace.push({ kind: 'result', name: data.name || '', detail: data.result || '' });
+          const resultText = typeof data.result === 'string' ? data.result : '';
+          const summary = resultText ? resultText.replace(/\n/g, ' ').slice(0, 80).trim() : '';
+          pushLog('←', `${data.name || ''}${summary ? ` — ${summary}${resultText.length > 80 ? '…' : ''}` : ''}`);
+          this.logAdd('△', `Tool result: ${data.name || ''}`, 'perception');
+          if (data.name === 'web_search') {
+            const matchCount = resultText.match(/\[(\d+)\]/g);
+            const n = matchCount ? matchCount.length : '?';
+            this.setState({ thinkingPhase: `Web search: ${n} result(s)`, thinkingMeta: null });
+          } else if (data.name === 'web_fetch') {
+            const chars = (resultText || '').length;
+            this.setState({ thinkingPhase: `Fetched ${chars.toLocaleString()} chars`, thinkingMeta: null });
+          } else if (data.name === 'verifold_search' || data.name === 'fold_spans' || data.name === 'fold') {
+            this.setState({ thinkingPhase: 'Folded cast', thinkingMeta: null });
+            pushLog('⋈', 'Folding complete');
+          }
+        }
+        if (data.type === 'error') streamErr = data.message || 'stream error';
+        if (data.content !== undefined && data.type === undefined) { this.setState({ thinkingPhase: null, thinkingMeta: null }); answer = data.content || answer; flush(); }
+      }
+    }
+    if (streamErr) throw new Error(streamErr);
+    const parsed = this._resolveCitations(answer, grounding);
+    return { answer, citations: parsed.citations, grounding, trace, model };
+  }
+
+  // Engine source ids look like "source:/abs/path/pg2600.txt:chunk-1179".
+  // Keep the filename and the chunk — both identify the passage — and drop the
+  // absolute path, which is unreadable noise in a narrow rail.
+  _shortSource(id) {
+    if (!id) return '(unnamed source)';
+    const m = String(id).match(/^(?:source:)?(.*?)(:chunk-\d+)?$/);
+    const file = (m ? m[1] : String(id)).replace(/^.*[/\\]/, '') || String(id);
+    const chunk = m && m[2] ? m[2].slice(1) : '';
+    return chunk ? `${file} · ${chunk}` : file;
+  }
+
+  // Map each [n] in the answer to a real engine passage. A bracket with no
+  // matching grounding entry is reported as an unresolved gap — never
+  // back-filled with an invented "Source n" label.
+  _resolveCitations(text, grounding) {
+    const table = {};
+    (grounding && grounding.citations || []).forEach(c => { table[String(c.index)] = c; });
+    const seen = new Set();
+    const citations = [];
+    let match;
+    const re = /\[(\d+)\]/g;
+    while ((match = re.exec(text)) !== null) {
+      const num = match[1];
+      if (seen.has(num)) continue;
+      seen.add(num);
+      const c = table[num];
+      citations.push(c
+        ? { num, source: this._shortSource(c.source_id), sourceId: c.source_id,
+            spanId: c.span_id, byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score, quote: (c.text || '').slice(0, 300), resolved: true }
+        : { num, source: '⊘ unresolved — no engine passage for [' + num + ']', resolved: false });
+    }
+    return { text, citations };
+  }
+
+  onComposeTask(e) { this.setState({ composeTask: e.target.value }); }
+
+  // Runs holonic_task directly via the dedicated /api/holonic endpoint (not
+  // the LLM tool-choice loop) and renders each SSE event as it arrives —
+  // per-section iteration scores, replan decisions, and the final assembled
+  // sections with their real mechanical citations. The live iteration trace
+  // IS the point: it's the only place a user can actually see the model
+  // correct itself against the source rather than just reading a finished
+  // essay with no evidence anything was checked.
+  async runCompose() {
+    const task = this.state.composeTask.trim();
+    if (!task || this.state.composeRunning) return;
+
+    this.setState({
+      composeRunning: true, composeError: null, composePlan: null,
+      composeSections: {}, composeOrder: [], composeReplan: null, composeResult: null,
+    });
+    this.logAdd('⊨', `Compose: "${task.slice(0, 60)}${task.length > 60 ? '…' : ''}"`, 'chat');
+
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/holonic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task }),
+      });
+      if (!res.ok) throw new Error('Proxy returned ' + res.status);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim() || !line.startsWith('data: ')) continue;
+          let data;
+          try { data = JSON.parse(line.slice(6)); } catch { continue; }
+          this._applyComposeEvent(data);
+        }
+      }
+    } catch (err) {
+      this.setState({ composeError: err.message, composeRunning: false });
+      this.logAdd('⊘', `Compose failed: ${err.message}`, 'chat');
+      return;
+    }
+    this.setState({ composeRunning: false });
+  }
+
+  // Each holonic_* payload carries enough of its own shape (msg + phase-
+  // specific fields) to route on without needing the SSE `event:` line.
+  _applyComposeEvent(data) {
+    if (data.subTasks) {
+      // holonic_plan
+      this.setState({ composePlan: data.subTasks });
+      this.logAdd('⊚', `Compose plan: ${data.subTasks.length} section(s)`, 'chat');
+      return;
+    }
+    if (data.id && data.label !== undefined && data.iteration === undefined && data.groundingScore === undefined) {
+      // holonic_subtask_start
+      this.setState(s => ({
+        composeSections: { ...s.composeSections, [data.id]: { id: data.id, label: data.label, iterations: [], done: false } },
+        composeOrder: s.composeOrder.includes(data.id) ? s.composeOrder : [...s.composeOrder, data.id],
+      }));
+      return;
+    }
+    if (data.id && data.iteration !== undefined && data.groundingScore !== undefined && data.citationsCount === undefined) {
+      // holonic_subtask_iteration
+      this.setState(s => {
+        const existing = s.composeSections[data.id] || { id: data.id, label: data.id, iterations: [], done: false };
+        return { composeSections: { ...s.composeSections, [data.id]: { ...existing, iterations: [...existing.iterations, data] } } };
+      });
+      return;
+    }
+    if (data.id && data.citationsCount !== undefined) {
+      // holonic_subtask_done
+      this.setState(s => {
+        const existing = s.composeSections[data.id] || { id: data.id, label: data.label, iterations: [], done: false };
+        return { composeSections: { ...s.composeSections, [data.id]: { ...existing, done: true, groundingScore: data.groundingScore, citationsCount: data.citationsCount } } };
+      });
+      return;
+    }
+    if (data.unresolvedIds || data.redundantPairs) {
+      // holonic_replan_start
+      this.setState({ composeReplan: { status: 'running', unresolvedIds: data.unresolvedIds || [], redundantPairs: data.redundantPairs || [] } });
+      this.logAdd('⊚', `Replanning: ${(data.unresolvedIds || []).length} unresolved, ${(data.redundantPairs || []).length} redundant`, 'chat');
+      return;
+    }
+    if (data.changes) {
+      // holonic_replan_done
+      this.setState({ composeReplan: { status: 'done', changes: data.changes } });
+      return;
+    }
+    if (data.sections !== undefined && data.output !== undefined) {
+      // final `done` event
+      this.setState({ composeResult: data });
+      this.logAdd('⊨', `Compose done: ${data.sections} section(s), ${data.mechanicalCitations} citations`, 'chat');
+      return;
+    }
+    if (data.message && !data.msg) {
+      // error event
+      this.setState({ composeError: data.message });
+    }
+  }
+
+  async send() {
+    const q = this.state.draft.trim();
+    if (!q && !this.state.draftAttachments.length) return;
+    const attachments = this.state.draftAttachments;
+    const id = 'turn-' + Date.now();
+    this.logAdd('⊨', `Asked: "${q.slice(0, 44)}${q.length > 44 ? '…' : ''}"`, 'chat');
+    this.setState({ draft: '', draftAttachments: [], streamingLoading: true, streamingAnswer: null, streamingCitations: null, streamingTurnId: id });
+    this.updateActiveSpace(sp => ({
+      ...sp,
+      turns: sp.turns.concat([{ id, q, attachments, hasAttachments: !!attachments.length, retrieval: null, prompt: '', a: null, citations: null, streaming: false }])
+    }));
+
+    const patchTurn = (patch) => this.updateActiveSpace(sp => ({
+      ...sp, turns: sp.turns.map(t => (t.id === id ? { ...t, ...patch } : t))
+    }));
+
+    try {
+      // Retrieval is mechanical and already finished; show it now. The turn
+      // renders its passage table while the model is still writing, so the
+      // prose visibly arrives second, over evidence the reader already has.
+      const result = await this.sendToProxy(q, (g) => patchTurn({
+        grounding: g,
+        prompt: g.systemContext || null,
+      }));
+      // Provenance shows the engine's own passage text, not a slice of the
+      // model's answer — the answer is what we are trying to check.
+      const resolved = result.citations.filter(c => c.resolved);
+      const retrieval = resolved.length
+        ? { source: [...new Set(resolved.map(c => c.source))].join(', '), quote: resolved[0].quote || '' }
+        : null;
+      this.setState({ streamingLoading: false, streamingAnswer: null, streamingCitations: null, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null, thinkingLog: [], thinkingModalOpen: false });
+      patchTurn({
+        retrieval, a: result.answer, citations: result.citations,
+        grounding: result.grounding, trace: result.trace, model: result.model,
+        // The prompt the proxy actually injected, when it reports one.
+        prompt: (result.grounding && result.grounding.systemContext) || null
+      });
+      if (retrieval) {
+        this.updateActiveSpace(sp => ({ ...sp, retrievals: (sp.retrievals || []).concat([retrieval]) }));
+        this.logAdd('⋈', `Quoted passage retrieved`, 'sources');
+      }
+    } catch (err) {
+      this.setState({ streamingLoading: false, streamingAnswer: null, streamingCitations: null, streamingTurnId: null });
+      patchTurn({ a: '(Proxy unavailable — ' + err.message + ')', citations: [], retrieval: null });
+      this.logAdd('○', `Chat failed — ${err.message}`, 'chat');
+    }
+  }
+
+  addSource() {
+    this.openModal({
+      title: 'Add source',
+      label: 'URL or file path',
+      placeholder: 'https://example.com/article',
+      hint: 'A URL is fetched, stripped of markup and chunked into the engine. A bare path resolves on the proxy host. To use a file from this machine, upload it — the bytes cross the wire; a link would not. Text formats (.txt/.md/.json/…) are indexed and citable; .csv/.tsv/.xlsx/.xls open as a real spreadsheet grid and are indexed too; video/audio/PDF/DOCX have no parser yet, so they open in the reader but are not searchable.',
+      submitLabel: 'Ingest',
+      upload: true,
+      onSubmit: (ref) => this.ingestSource(ref)
+    });
+  }
+
+  // Sources move through three states in the rail: pending ○, ingested ●,
+  // failed ⊘. Every ingest path (upload / URL / proxy path) uses these, so a
+  // failure is always visible rather than swallowed.
+  addSourceRow(name) {
+    this.updateActiveSpace(sp => sp.sources.some(x => x.name === name)
+      ? sp
+      : ({ ...sp, sources: sp.sources.concat([{ name, glyph: '○', color: '#A39D91', enabled: true }]) }));
+  }
+  markSource(name, patch) {
+    this.updateActiveSpace(sp => ({ ...sp, sources: sp.sources.map(x => x.name === name ? { ...x, ...patch } : x) }));
+  }
+
+  // A URL is ingested, not merely mentioned: the proxy fetches it and chunks the
+  // text into the same engine session as any other source, so it is citable.
+  // A bare path still resolves on the proxy host's filesystem.
+  async ingestSource(ref) {
+    const name = (ref || '').trim();
+    if (!name) return;
+    const isUrl = /^https?:\/\//i.test(name);
+    this.addSourceRow(name);
+    this.markSource(name, { glyph: '○', color: '#A39D91' });
+    this.logAdd('○', `Ingesting "${name}"…`, 'sources');
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isUrl
+          ? { url: name, session: this.sessionId() }
+          : { path: name, session: this.sessionId() })
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
+      this.markSource(name, { glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      this.logAdd('⋈', `Ingested "${name}" (${result.chunks || 0} chunks)`, 'sources');
+      this.fetchSources();
+    } catch (err) {
+      this.markSource(name, { glyph: '⊘', color: '#A3592B', ingestError: err.message });
+      this.logAdd('⊘', `Ingest failed for "${name}" — ${err.message}`, 'sources');
+    }
+  }
+
+  // Only these extensions are safe to read with file.text() — everything
+  // `inferType` buckets as pdf/video/audio/binary is a real binary format (or,
+  // for .pdf/.doc/.docx, one this app has no parser for) and decoding it as
+  // UTF-8 produces mojibake, not text. Per the nameless-referent principle,
+  // a missing capability is a typed gap, never a silently wrong (garbled) span.
+  _isTextIngestible(name) {
+    return /\.(txt|md|markdown|json|js|jsx|ts|tsx|py|csv|tsv|html?|xml|log|css|ya?ml)$/i.test(name);
+  }
+
+  _extractTitle(text, fallback) {
+    const lines = (text || '').split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    for (const line of lines) {
+      const m = line.match(/^#{1,3}\s+(.+)/);
+      if (m) return m[1].trim().slice(0, 100);
+    }
+    const htmlTitle = text.match(/<title[^>]*>([^<]+)<\/title>/i);
+    if (htmlTitle) return htmlTitle[1].trim().slice(0, 100);
+    const firstLine = lines[0];
+    if (firstLine && firstLine.length > 3 && firstLine.length < 120) return firstLine.slice(0, 100);
+    const para = text.split(/\n\s*\n/).find(p => p.trim().length > 10);
+    if (para) {
+      const sentence = para.match(/^[^.!?]*[.!?]/);
+      if (sentence && sentence[0].length > 3 && sentence[0].length < 120) return sentence[0].trim().slice(0, 100);
+    }
+    return fallback;
+  }
+
+  // Uploads split two ways:
+  //  - text-ingestible files: bytes cross the wire and are chunked into the
+  //    engine, same as before — these are citable.
+  //  - everything else (video/audio/pdf/doc/binary): no parser exists for
+  //    these, so the file is kept client-side as a blob URL for the reader
+  //    (video plays back; others get the same "not indexed" story the reader
+  //    already tells for pre-existing binary sources) instead of being mangled
+  //    into fake text and corrupting the search index.
+  async uploadFiles(fileList) {
+    for (const file of fileList) {
+      this.addSourceRow(file.name);
+      if (/\.(xlsx|xls)$/i.test(file.name)) {
+        await this._uploadSpreadsheetBinary(file);
+        continue;
+      }
+      const type = this.inferType(file.name);
+      if (!this._isTextIngestible(file.name)) {
+        if (!this._uploadBlobUrls) this._uploadBlobUrls = new Map();
+        this._uploadBlobUrls.set(file.name, URL.createObjectURL(file));
+        const glyph = TYPE_GLYPH[type] || '◱';
+        const label = TYPE_LABEL[type] || 'File';
+        this.markSource(file.name, { glyph, color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+        this.logAdd('◱', `Stored "${file.name}" for reading — ${label.toLowerCase()} isn't parsed for search (no ${type} extractor)`, 'sources');
+        continue;
+      }
+      this.markSource(file.name, { glyph: '○', color: '#A39D91' });
+      this.logAdd('○', `Ingesting "${file.name}"…`, 'sources');
+      try {
+        const text = await file.text();
+        const result = await this._ingestTextContent(file.name, text);
+        this.markSource(file.name, { glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+        // Cache locally so the reader can render it (e.g. the spreadsheet grid)
+        // without a round trip back through the proxy's attachment store.
+        this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: text } }));
+        this.logAdd('⋈', `Uploaded "${file.name}" (${result.chunks || 0} chunks)`, 'sources');
+      } catch (err) {
+        this.markSource(file.name, { glyph: '⊘', color: '#A3592B', ingestError: err.message });
+        this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
+      }
+    }
+    this.fetchSources();
+  }
+
+  async _ingestTextContent(name, text) {
+    const res = await fetch(this.proxyUrl() + '/api/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: text.slice(0, 500000), name, session: this.sessionId() })
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
+    return result;
+  }
+
+  // .xlsx/.xls are real binary containers, not text — parsed in-browser via
+  // SheetJS (loaded from a CDN in <head>, same convention as the Phosphor
+  // icons/fonts already loaded there) into CSV, then ingested through the
+  // same text path as any .csv upload. If SheetJS didn't load (offline, CDN
+  // blocked), this degrades to the same "stored, not searchable" state as any
+  // other unparseable binary — a typed gap, not a silent wrong parse.
+  async _uploadSpreadsheetBinary(file) {
+    this.logAdd('○', `Ingesting "${file.name}" as spreadsheet…`, 'sources');
+    if (typeof XLSX === 'undefined') {
+      this.markSource(file.name, { glyph: '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+      this.logAdd('◱', `Stored "${file.name}" for reading — SheetJS didn't load, spreadsheet not parsed`, 'sources');
+      return;
+    }
+    try {
+      const buf = await file.arrayBuffer();
+      const workbook = XLSX.read(buf, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
+      const result = await this._ingestTextContent(file.name, csv);
+      this.markSource(file.name, { glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: csv } }));
+      const moreSheets = workbook.SheetNames.length - 1;
+      this.logAdd('⋈', `Uploaded "${file.name}" — parsed sheet "${sheetName}"${moreSheets ? ` (${moreSheets} more sheet(s) not shown)` : ''} (${result.chunks || 0} chunks)`, 'sources');
+    } catch (err) {
+      this.markSource(file.name, { glyph: '⊘', color: '#A3592B', ingestError: err.message });
+      this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
+    }
+  }
+
+  searchWeb() {
+    this.openModal({
+      title: 'Search the web',
+      label: 'Query',
+      placeholder: 'What are you looking for?',
+      hint: 'Results are bonded to this room as citable sources.',
+      submitLabel: 'Search',
+      onSubmit: (q) => this.runWebSearch(q)
+    });
+  }
+
+  async runWebSearch(q) {
+    this.logAdd('○', `Searching the web for "${q}"`, 'sources');
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/verbatim?q=' + encodeURIComponent(q) + '&limit=5', { signal: AbortSignal.timeout(15000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.passages && data.passages.length) {
+          const existing = new Set(this.activeSpace().sources.map(s => s.name));
+          const fresh = data.passages
+            .map((p, i) => (p.source ? this._shortSource(p.source) : 'Result ' + (i + 1)))
+            .filter(n => !existing.has(n))
+            .map(n => ({ name: n, glyph: '●', color: '#1F5A4C', enabled: true, ingested: true }));
+          this.updateActiveSpace(sp => ({ ...sp, sources: sp.sources.concat(fresh) }));
+          data.passages.forEach(p => this.logAdd('⋈', `Found passage from ${p.source ? this._shortSource(p.source) : 'web'}`, 'sources'));
+          return;
+        }
+      }
+      const res2 = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`);
+      const data2 = await res2.json();
+      const urls = [];
+      if (data2.AbstractURL) urls.push(data2.AbstractURL);
+      (data2.RelatedTopics || []).forEach(t => { if (urls.length < 4 && t.FirstURL) urls.push(t.FirstURL); });
+      if (!urls.length) { this.logAdd('○', `No web results found for "${q}"`, 'sources'); return; }
+      this.updateActiveSpace(sp => ({ ...sp, sources: sp.sources.concat(urls.map(u => ({ name: u, glyph: '○', color: '#A39D91', enabled: true }))) }));
+      urls.forEach(u => this.logAdd('⋈', `Found "${u}" from web search`, 'sources'));
+    } catch (err) { this.logAdd('○', `Web search unavailable — ${err.message}`, 'sources'); }
+  }
+
+  // Room sources carry their own `enabled` flag; engine-tier sources are not
+  // in sp.sources at all, so their off-state is recorded per room in
+  // `sp.sourcesOff` (keyed by basename). Both persist with the space.
+  toggleSource(name) {
+    const row = this.roomSources().find(s => s.name === name);
+    if (!row) return;
+    const nowEnabled = row.enabled === false;
+    if (row.engineOnly) {
+      const base = this._baseName(name);
+      this.updateActiveSpace(sp => ({ ...sp, sourcesOff: { ...(sp.sourcesOff || {}), [base]: !nowEnabled } }));
+    } else {
+      this.updateActiveSpace(sp => ({ ...sp, sources: sp.sources.map(src => src.name === name ? { ...src, enabled: nowEnabled } : src) }));
+    }
+    this.logAdd('○', `Source "${name}" ${nowEnabled ? 'enabled' : 'disabled'}`, 'sources');
+  }
+
+  deleteSource(name) {
+    if (!confirm(`Delete "${name}"? It will move to the recycle bin and can be restored later.`)) return;
+    const key = this.roomSources().find(s => s.name === name)?.name || name;
+    const base = this._baseName(key);
+    this.updateActiveSpace(sp => ({
+      ...sp,
+      sources: sp.sources.filter(x => x.name !== key && this._baseName(x.name) !== base),
+      sourcesOff: { ...(sp.sourcesOff || {}) }
+    }));
+    delete (this.activeSpace().sourcesOff || {})[base];
+    fetch(this.proxyUrl() + '/api/sources?source=' + encodeURIComponent(key), { method: 'DELETE' })
+      .then(r => r.json())
+      .then(result => {
+        if (result.error) { this.logAdd('⊘', `Delete failed for "${name}": ${result.error}`, 'sources'); }
+        else { this.logAdd('●', `Deleted "${name}" (${result.spansRemoved || 0} spans removed)`, 'sources'); this.fetchRecycleBin(); }
+      })
+      .catch(err => this.logAdd('⊘', `Delete failed for "${name}": ${err.message}`, 'sources'));
+  }
+
+  async restoreSource(name) {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/recycle-bin/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: name }),
+      });
+      const result = await res.json();
+      if (result.error) { this.logAdd('⊘', `Restore failed for "${name}": ${result.error}`, 'sources'); }
+      else {
+        this.logAdd('●', `Restored "${name}" (${result.spansRestored || 0} spans)`, 'sources');
+        this.fetchRecycleBin();
+        this.fetchSources();
+      }
+    } catch (err) { this.logAdd('⊘', `Restore failed for "${name}": ${err.message}`, 'sources'); }
+  }
+
+  async purgeSource(name) {
+    if (!confirm(`Permanently delete "${name}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/recycle-bin?source=' + encodeURIComponent(name), { method: 'DELETE' });
+      const result = await res.json();
+      if (result.error) { this.logAdd('⊘', `Permanent delete failed for "${name}": ${result.error}`, 'sources'); }
+      else { this.logAdd('●', `Permanently deleted "${name}"`, 'sources'); this.fetchRecycleBin(); }
+    } catch (err) { this.logAdd('⊘', `Permanent delete failed for "${name}": ${err.message}`, 'sources'); }
+  }
+
+  async emptyRecycleBin() {
+    if (!confirm('Permanently delete ALL sources in the recycle bin? This cannot be undone.')) return;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/recycle-bin', { method: 'DELETE' });
+      const result = await res.json();
+      this.logAdd('●', `Recycle bin emptied (${result.purged || 0} sources)`, 'sources');
+      this.setState({ _recycleBin: [], recycleBinOpen: false });
+    } catch (err) { this.logAdd('⊘', `Failed to empty recycle bin: ${err.message}`, 'sources'); }
+  }
+
+  toggleRecycleBin() {
+    this.setState(s => ({ recycleBinOpen: !s.recycleBinOpen }));
+  }
+
+  // Body text for the reader.
+  //
+  // Two different stores back a "source" here and only one of them knows the
+  // books: /api/attachments/content serves this session's uploads, while the
+  // corpus ingested at startup lives in the engine and was unreachable from
+  // this panel entirely — every book opened as "(Content not available)".
+  // /api/source/text reads the engine's own bytes, so it is tried first and
+  // the attachment store remains the fallback for uploads.
+  async fetchSourceContent(name) {
+    if (this.state.readerContent[name]) return;
+    const put = (text) => this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/source/text?source=' + encodeURIComponent(name), { signal: AbortSignal.timeout(30000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (!data.error && typeof data.text === 'string') {
+          put(data.text);
+          this.logAdd('◱', `Read "${name}" — bytes ${data.byte_start}–${data.byte_end} of ${data.total_bytes}${data.truncated ? ' (truncated)' : ''}`, 'reader');
+          return;
+        }
+      }
+    } catch {}
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/attachments/content?session=' + this.sessionId() + '&name=' + encodeURIComponent(name), { signal: AbortSignal.timeout(5000) });
+      if (res.ok) { put(await res.text()); return; }
+    } catch {}
+    put('(Content not available from proxy)');
+  }
+
+  addSpace() {
+    // Close the switcher behind the dialog; the create path re-asserts it so
+    // the new space still lands active on the chat tab.
+    this.setState({ spacesOpen: false });
+    this.openModal({
+      title: 'New space',
+      label: 'Space name',
+      placeholder: 'Reading Room',
+      submitLabel: 'Create',
+      onSubmit: (name) => {
+        const id = 'sp-' + Date.now();
+        this.setSpaces(spaces => spaces.concat([{ id, name, turns: [], retrievals: [], sources: [] }]), { activeSpaceId: id, spacesOpen: false, tab: 'chat', selectedEntity: null });
+        this.logAdd('●', `Space "${name}" created`, 'spaces');
+      }
+    });
+  }
+
+  forkSpace(upToTurnIndex) {
+    const active = this.activeSpace();
+    const turnsCopy = active.turns.slice(0, upToTurnIndex + 1);
+    const retrievedCount = turnsCopy.filter(t => t.retrieval).length;
+    const id = 'sp-' + Date.now();
+    const name = active.name + ' (fork)';
+    this.setSpaces(spaces => spaces.concat([{ id, name, turns: turnsCopy, retrievals: (active.retrievals || []).slice(0, retrievedCount), sources: active.sources.slice() }]), { activeSpaceId: id, tab: 'chat', selectedEntity: null });
+    this.logAdd('△', `Forked "${active.name}" into "${name}" at turn ${upToTurnIndex + 1}`, 'spaces');
+  }
+
+  onFilesSelected(e) {
+    const fileList = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!fileList.length) return;
+    const files = fileList.map((f, i) => ({ id: Date.now() + '-' + i, name: f.name, file: f }));
+    this.setState(s => ({ draftAttachments: s.draftAttachments.concat(files) }));
+    this.logAdd('●', `Attached ${fileList.length} file(s)`, 'sources');
+    this.uploadFiles(fileList);
+    fileList.forEach(async (f, i) => {
+      if (this._isTextIngestible(f.name)) {
+        try {
+          const head = await f.slice(0, 4096).text();
+          const title = this._extractTitle(head, f.name);
+          this.setState(s => ({
+            draftAttachments: s.draftAttachments.map(a => a.id === files[i].id ? { ...a, title } : a)
+          }));
+        } catch {}
+      }
+    });
+  }
+
+  onSourceFilesSelected(e) {
+    const fileList = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!fileList.length) return;
+    this.closeModal();
+    this.uploadFiles(fileList);
+  }
+
+  // Bring a freshly-marked span into view once — and only once per span, so
+  // scrolling away to read around it isn't undone by the next render. Content
+  // arrives asynchronously, so this fires on the update that first paints it,
+  // not at click time.
+  componentDidUpdate() {
+    const hl = this.state.readerHighlight;
+    if (!hl || !this.state.readerOpen) { this._scrolledHl = null; return; }
+    const key = `${this.state.readerSourceName} ${hl.num}`;
+    if (this._scrolledHl === key) return;
+    const el = document.getElementById('eo-reader-hl');
+    if (!el) return;
+    this._scrolledHl = key;
+    requestAnimationFrame(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+  }
+
+  openReader(name, highlight = null) {
+    this.setState({
+      readerOpen: true, readerSourceName: name, readerViewMode: 'scroll', readerSectionIndex: 0,
+      readerHighlight: highlight,
+      readerSortCol: null, readerSortDir: 'asc',
+      readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
+    });
+    this.logAdd('◱', highlight ? `Opened "${name}" at [${highlight.num}]` : `Opened "${name}" in reader`, 'reader');
+    if (!this.state.readerContent[name]) this.fetchSourceContent(name);
+  }
+  // Open the reader at a byte offset the engine measured (an outline heading,
+  // a citation anchor). A whole book does not fit in one read, so this pulls a
+  // window starting at the offset rather than the head of the file — which is
+  // what "seek to Chapter 5" has to mean for a source larger than the cap.
+  async openReaderAtByte(name, byteStart, highlight) {
+    if (byteStart == null) { this.openReader(name, highlight); return; }
+    this.setState({
+      readerOpen: true, readerSourceName: name, readerViewMode: 'scroll',
+      readerSectionIndex: 0, readerHighlight: highlight || null,
+      readerContent: { ...this.state.readerContent, [name]: 'Loading…' }
+    });
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/source/text?source=' + encodeURIComponent(name) + '&start=' + byteStart, { signal: AbortSignal.timeout(30000) });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: data.text } }));
+      this.logAdd('◱', `Seek "${name}" → byte ${data.byte_start}${data.truncated ? ` (window ends ${data.byte_end} of ${data.total_bytes})` : ''}`, 'reader');
+    } catch (e) {
+      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: `(Could not read from byte ${byteStart} — ${e.message || e})` } }));
+      this.logAdd('⊘', `Seek failed for "${name}" — ${e.message || e}`, 'reader');
+    }
+  }
+  closeReader() { this.setState({ readerOpen: false, readerHighlight: null }); }
+  clearReaderHighlight() { this.setState({ readerHighlight: null }); }
+
+  // Two namespaces have to be reconciled here: engine source ids
+  // ("source:/abs/path/pg2600.txt:chunk-1179") and bonded source names, which
+  // for anything auto-bonded from a retrieval arrive already shortened
+  // ("pg2600.txt · chunk-1179"). Strip path and chunk from both sides — the
+  // file is the only part they reliably share. No match is a real answer: the
+  // passage came from something this room cannot open, and the citation says
+  // so rather than opening an empty reader.
+  _sourceForCitation(sourceId) {
+    if (!sourceId) return null;
+    const file = v => String(v || '')
+      .replace(/^source:/, '')
+      .replace(/(?::|\s·\s)chunk-\d+$/, '')
+      .replace(/^.*[/\\]/, '');
+    const base = file(sourceId);
+    if (!base) return null;
+    const names = (this.activeSpace().sources || []).map(s => s.name);
+    // A name carrying the same chunk is the better door — it is that exact
+    // passage, not merely the same file.
+    return names.find(n => n === this._shortSource(sourceId))
+        || names.find(n => n === base)
+        || names.find(n => file(n) === base)
+        || null;
+  }
+
+  // The primary affordance in the app: a bracket in the answer is a door into
+  // the bytes that justify it.
+  openCitation(cit) {
+    if (cit.resolved === false || !cit.sourceId) {
+      this.logAdd('⊘', `[${cit.num}] has no engine passage — nothing to open`, 'reader');
+      return;
+    }
+    const name = this._sourceForCitation(cit.sourceId);
+    if (!name) {
+      this.logAdd('⊘', `[${cit.num}] cites "${cit.source}" — not bonded to this room`, 'reader');
+      return;
+    }
+    this.openReader(name, {
+      num: cit.num, quote: cit.quote || '', source: cit.source,
+      byteStart: cit.byteStart, byteEnd: cit.byteEnd,
+    });
+  }
+
+  logAdd(glyph, text, category) {
+    this.setState(s => {
+      const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      return { log: s.log.concat([{ time, glyph, text, category }]) };
+    });
+  }
+
+  goToApp() { window.location.href = './index.html'; }
+  retryProxy() { this.checkHealth(); }
+
+  manageOrbitLoop() {
+    const running = this.state.tab === 'orbit' && this.canvasEl && Object.keys(this.state.orbitBodies).length;
+    if (running && !this.raf) { this.lastT = performance.now(); this.raf = requestAnimationFrame(this.tick); }
+    else if (!running && this.raf) { cancelAnimationFrame(this.raf); this.raf = null; }
+  }
+
+  getPos(id, t, cache) {
+    if (cache[id]) return cache[id];
+    const n = this.state.orbitBodies[id];
+    if (!n) return { x: 0, y: 0 };
+    if (!n.parent) { cache[id] = { x: 0, y: 0 }; return cache[id]; }
+    const p = this.getPos(n.parent, t, cache);
+    const ang = n.phase + t * n.omega;
+    cache[id] = { x: p.x + n.r * Math.cos(ang), y: p.y + n.r * Math.sin(ang) };
+    return cache[id];
+  }
+
+  tick(t) {
+    this.t = ((t - (this.t0 || (this.t0 = t))) / 1000);
+    this.draw();
+    this.raf = requestAnimationFrame(this.tick);
+  }
+
+  draw() {
+    const canvas = this.canvasEl;
+    if (!canvas) return;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    const cx = w / 2, cy = h / 2, scale = Math.min(w, h) / 300;
+    const cache = {}, ids = Object.keys(this.state.orbitBodies);
+    if (!ids.length) {
+      ctx.fillStyle = '#D5DFD9'; ctx.font = '14px "Instrument Sans", sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText('Entities appear as you chat', w / 2, h / 2);
+      return;
+    }
+    const positions = {};
+    ids.forEach(id => { positions[id] = this.getPos(id, this.t || 0, cache); });
+    const focus = positions[this.state.orbitFocus] || { x: 0, y: 0 };
+    const screen = {};
+    ids.forEach(id => { screen[id] = { x: cx + (positions[id].x - focus.x) * scale, y: cy + (positions[id].y - focus.y) * scale }; });
+    this.nodeScreen = screen;
+    ctx.strokeStyle = '#E4DFD5'; ctx.lineWidth = 1;
+    this.state.orbitEdges.forEach(([a, b]) => {
+      ctx.beginPath(); ctx.moveTo(screen[a].x, screen[a].y); ctx.lineTo(screen[b].x, screen[b].y); ctx.stroke();
+    });
+    ids.forEach(id => {
+      const n = this.state.orbitBodies[id], p = screen[id], focused = id === this.state.orbitFocus;
+      if (focused) {
+        ctx.strokeStyle = '#1F5A4C'; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(p.x, p.y, (n.size + 8) * scale, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.fillStyle = focused ? '#1F5A4C' : (n.parent ? '#7FA396' : '#1F5A4C');
+      ctx.beginPath(); ctx.arc(p.x, p.y, n.size * scale, 0, Math.PI * 2); ctx.fill();
+      ctx.font = `${11 * scale}px 'Instrument Sans', sans-serif`;
+      ctx.fillStyle = '#26241F'; ctx.textAlign = 'center';
+      ctx.fillText(n.label, p.x, p.y - (n.size + 8) * scale);
+    });
+  }
+
+  onOrbitClick(e) {
+    const canvas = this.canvasEl;
+    if (!canvas || !this.nodeScreen) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    let best = null, bestD = 26;
+    Object.keys(this.nodeScreen).forEach(id => {
+      const p = this.nodeScreen[id], d = Math.hypot(p.x - x, p.y - y);
+      if (d < bestD) { bestD = d; best = id; }
+    });
+    if (best && this.state.orbitBodies[best]) {
+      this.setState({ orbitFocus: best });
+      this.logAdd('△', `Orbit refocused on "${this.state.orbitBodies[best].label}"`, 'reader');
+    }
+  }
+
+  // Orbit is a view of the fold's cast, so a body exists here only if a prior
+  // typed that referent. Radius and period are read off measured quantities —
+  // mentions and frame span — rather than the index in a list, so two bodies
+  // at the same distance are equally present in the text and mean it.
+  computeOrbit() {
+    const active = this.activeSpace();
+    const { entities } = this.castOfEnabledSources();
+    const bodies = { room: { parent: null, r: 0, omega: 0, phase: 0, size: 18, label: active.name || 'Room' } };
+    const edges = [];
+    const shown = entities.slice(0, 8);
+    const angleStep = (Math.PI * 2) / Math.max(shown.length, 1);
+    const maxMentions = Math.max(1, ...shown.map(e => e.mentions || 0));
+    shown.forEach((e, i) => {
+      const key = e.id;
+      const weight = (e.mentions || 0) / maxMentions;
+      bodies[key] = {
+        parent: 'room',
+        // Most-mentioned sits closest; a wider frame span orbits slower.
+        r: 70 + Math.round((1 - weight) * 60),
+        omega: 2 * Math.PI / (18 + Math.round((e.frames || 0) % 16)),
+        phase: angleStep * i + 0.3,
+        size: 5 + Math.round(weight * 9),
+        label: e.label,
+        entityId: e.id
+      };
+      edges.push(['room', key]);
+    });
+    return { orbitBodies: bodies, orbitEdges: edges };
+  }
+
+  // Progressive disclosure for one answer. Four levels, each only offered when
+  // there is something real behind it:
+  //   0 answer prose · 1 citation pills · 2 passages · 3 trace · 4 raw prompt
+  // A level with no evidence shows no control, so an empty panel is never a
+  // thing you can open.
+  turnVals(turn, i) {
+    const panels = this.state.turnPanels[turn.id] || {};
+    const cits = turn.citations || [];
+    const resolved = cits.filter(c => c.resolved);
+    const unresolved = cits.filter(c => !c.resolved);
+    const g = turn.grounding || null;
+    const trace = turn.trace || [];
+    const chevron = open => (open ? 'ph ph-caret-down' : 'ph ph-caret-right');
+    const toggle = key => () => this.setState(s => ({
+      turnPanels: { ...s.turnPanels, [turn.id]: { ...(s.turnPanels[turn.id] || {}), [key]: !((s.turnPanels[turn.id] || {})[key]) } }
+    }));
+
+    const gaps = (g && g.gaps || []).map(x => ({ text: x.reason || x.note || x.type || JSON.stringify(x) }));
+
+    // Show every passage the engine retrieved, not just the ones the model
+    // happened to cite. "Retrieved but uncited" is the most diagnostic state
+    // there is — it is how you catch an answer that ignored its evidence.
+    const citedNums = new Set(resolved.map(c => c.num));
+
+    // Prefer the full ranked list — every span retrieval returned, including
+    // the ones the fold dropped. A table of survivors alone cannot show that a
+    // better passage lost to the token budget, which is the failure that reads
+    // as "the model ignored its evidence" when it is really "the evidence never
+    // fit". Falls back to the kept citations for a proxy that predates this.
+    const fullText = new Map((g && g.citations || []).map(c => [c.span_id, c.text]));
+    const pct = v => (v === null || v === undefined) ? null : `${Math.round(v * 100)}%`;
+
+    const retrieved = (g && g.retrieved && g.retrieved.length)
+      ? g.retrieved.map(r => {
+          const text = fullText.get(r.span_id) || r.preview || '';
+          const cited = r.citation !== null && citedNums.has(String(r.citation));
+          return {
+            num: r.citation !== null ? String(r.citation) : '·',
+            rank: r.rank,
+            source: this._shortSource(r.source_id),
+            sourceId: r.source_id,
+            byteStart: r.byte_start, byteEnd: r.byte_end,
+            rawQuote: String(text).slice(0, 300),
+            cited,
+            kept: r.kept,
+            meta: [
+              `#${r.rank}`,
+              r.byte_start !== undefined && r.byte_start !== null ? `bytes ${r.byte_start}–${r.byte_end}` : null,
+              // Why it ranked here, in the engine's own terms.
+              pct(r.coverage) ? `terms ${pct(r.coverage)}` : null,
+              r.phrase ? `phrase ${pct(r.phrase)}` : null,
+              // Which of the three states this passage is in. They are
+              // different failures and must not look alike: the fold never saw
+              // it, the model never used it, or it was actually cited.
+              !r.kept ? 'dropped by fold' : (cited ? null : 'uncited')
+            ].filter(Boolean).join(' · '),
+            quote: text ? `“${String(text).slice(0, 300)}”` : '(engine returned no text for this span)'
+          };
+        })
+      : (g && g.citations || []).map(c => ({
+          num: String(c.index),
+          source: this._shortSource(c.source_id),
+          sourceId: c.source_id,
+          byteStart: c.byte_start, byteEnd: c.byte_end,
+          rawQuote: String(c.text || '').slice(0, 300),
+          cited: citedNums.has(String(c.index)),
+          kept: true,
+          meta: [
+            c.byte_start !== undefined ? `bytes ${c.byte_start}–${c.byte_end}` : null,
+            c.score !== undefined ? `${c.score}` : null,
+            citedNums.has(String(c.index)) ? null : 'uncited'
+          ].filter(Boolean).join(' · '),
+          quote: c.text ? `“${String(c.text).slice(0, 300)}”` : '(engine returned no text for this span)'
+        }));
+    // Fall back to the resolved citations if grounding did not enumerate.
+    const passages = retrieved.length ? retrieved : resolved.map(c => ({
+      num: c.num,
+      source: c.source,
+      sourceId: c.sourceId,
+      byteStart: c.byteStart, byteEnd: c.byteEnd,
+      rawQuote: c.quote || '',
+      cited: true,
+      meta: [
+        c.byteStart !== undefined ? `bytes ${c.byteStart}–${c.byteEnd}` : null,
+        c.score !== undefined ? `${c.score}` : null
+      ].filter(Boolean).join(' · '),
+      quote: c.quote ? `“${c.quote}”` : '(engine returned no text for this span)'
+    }));
+
+    // Honest account of where the answer's brackets stand.
+    let ungroundedNotice = null;
+    if (turn.a && unresolved.length) {
+      ungroundedNotice = `${unresolved.length} citation${unresolved.length > 1 ? 's' : ''} in this answer (${unresolved.map(c => '[' + c.num + ']').join(' ')}) ${unresolved.length > 1 ? 'have' : 'has'} no matching engine passage — treat ${unresolved.length > 1 ? 'them' : 'it'} as unverified.`;
+    } else if (turn.a && g && !g.empty && retrieved.some(r => r.kept) && !resolved.length) {
+      // Count only what the model could actually cite. Blaming it for ignoring
+      // passages the fold dropped before it ever saw them is the wrong diagnosis.
+      const offered = retrieved.filter(r => r.kept).length;
+      const dropped = retrieved.length - offered;
+      ungroundedNotice = `The engine retrieved ${retrieved.length} passage${retrieved.length > 1 ? 's' : ''} and offered the model ${offered}${dropped ? ` (${dropped} dropped by the fold budget)` : ''}, but the answer cites none of them — nothing here is traceable to a source.`;
+    } else if (turn.a && g && g.empty) {
+      // "Still loading" and "your sources are silent" both produced this
+      // notice, so a warm-up window looked like a claim about the corpus.
+      ungroundedNotice = g.warming
+        ? 'The document index was still loading when this was asked — nothing here is from your sources. Ask again in a moment for a grounded answer.'
+        : 'No passage in your sources matches this question — this answer is from the model\'s general knowledge, not your documents.';
+    } else if (turn.a && !g) {
+      ungroundedNotice = 'This turn reported no grounding — nothing here is engine-backed.';
+    }
+
+    const groundMeta = g && !g.empty
+      ? [
+          `${g.sourceCount} found`,
+          g.foldedCount !== undefined ? `${g.foldedCount} kept` : null,
+          g.dropped ? `${g.dropped} dropped` : null,
+          g.tokens !== undefined ? `${g.tokens}/${g.budget || '?'} tokens` : null
+        ].filter(Boolean).join(' · ')
+      : '';
+
+    return {
+      ...turn,
+      attachments: (turn.attachments || []).map(a => ({ ...a, displayName: a.title || a.name })),
+      copy: () => navigator.clipboard.writeText(`Q: ${turn.q}${turn.a ? `\n\nA: ${turn.a}` : ''}${resolved.length ? '\n\n' + resolved.map(c => `[${c.num}] ${c.source}${c.byteStart !== undefined ? ` bytes ${c.byteStart}–${c.byteEnd}` : ''}\n"${c.quote}"`).join('\n\n') : ''}`),
+      copyJson: () => navigator.clipboard.writeText(JSON.stringify({ question: turn.q, answer: turn.a, model: turn.model, citations: cits, grounding: turn.grounding, trace: turn.trace, prompt: turn.prompt }, null, 2)),
+      fork: () => this.forkSpace(i),
+
+      // A bracket is a door. Openable only when the cited source is actually
+      // bonded to this room — an unopenable citation looks different rather
+      // than looking identical and doing nothing when clicked.
+      citations: cits.map(c => {
+        const openable = c.resolved && !!this._sourceForCitation(c.sourceId);
+        return {
+          ...c, openable,
+          open: () => this.openCitation(c),
+          icon: openable ? 'ph ph-arrow-square-out' : 'ph ph-prohibit',
+          cursor: openable ? 'pointer' : 'not-allowed',
+          color: openable ? '#4A463E' : '#8C877C',
+          border: openable ? '#E4DFD5' : '#EDE9E1',
+          bg: openable ? '#FAF8F4' : 'transparent',
+          title: openable ? `Open ${c.source} at this passage` : `${c.source} is not open in this room`,
+        };
+      }),
+
+      hasPassages: passages.length > 0 || gaps.length > 0,
+      passagesOpen: !!panels.passages,
+      togglePassages: toggle('passages'),
+      passagesChevron: chevron(panels.passages),
+      passagesColor: panels.passages ? '#1F5A4C' : '#8C877C',
+      passagesLabel: retrieved.length && resolved.length < retrieved.length
+        ? `passages (${resolved.length} of ${retrieved.length} cited)`
+        : `passages (${passages.length})`,
+      passagesHeading: groundMeta ? `retrieved by the engine · ${groundMeta}` : 'retrieved by the engine',
+      passages: passages.map(p => ({
+        ...p,
+        open: () => this.openCitation({ ...p, quote: p.rawQuote, resolved: true }),
+        openCursor: this._sourceForCitation(p.sourceId) ? 'pointer' : 'default',
+        rail: p.cited ? '#1F5A4C' : '#E0DACE',
+        opacity: p.cited ? '1' : '.62',
+        numColor: p.cited ? '#1F5A4C' : '#8C877C',
+        numBg: p.cited ? '#E5EDE9' : '#F1EEE7'
+      })),
+      gaps,
+
+      hasTrace: trace.length > 0,
+      traceOpen: !!panels.trace,
+      toggleTrace: toggle('trace'),
+      traceChevron: chevron(panels.trace),
+      traceColor: panels.trace ? '#1F5A4C' : '#8C877C',
+      traceLabel: `trace (${trace.length})`,
+      traceHeading: turn.model ? `tool loop · ${turn.model}` : 'tool loop',
+      traceRows: trace.map(t => ({
+        glyph: t.kind === 'call' ? '→' : '←',
+        color: t.kind === 'call' ? '#1F5A4C' : '#A39D91',
+        name: t.name,
+        detail: (t.detail || '').slice(0, 600)
+      })),
+
+      hasRaw: !!turn.prompt || !!turn.a,
+      rawOpen: !!panels.raw,
+      toggleRaw: toggle('raw'),
+      rawChevron: chevron(panels.raw),
+      rawColor: panels.raw ? '#1F5A4C' : '#8C877C',
+      rawHeading: turn.prompt ? 'prompt sent to model' : 'prompt not reported by proxy',
+      rawPrompt: turn.prompt || 'The proxy did not report an injected prompt for this turn. Nothing is reconstructed here — use “copy json” for everything the client actually received.',
+
+      ungroundedNotice
+    };
+  }
+
+  renderVals() {
+    const S = this.state;
+    const t = S.tab;
+    const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
+    const c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose');
+    const active = this.activeSpace();
+    const live = this.proxyLive();
+    // Selection is by referent id — the identity the engine assigned — so two
+    // surfaces of the same referent select the same thing.
+    const selectEntity = (id) => this.setState({ selectedEntity: id });
+    const modal = S.modal;
+    const modalValid = (S.modalValue || '').trim().length > 0;
+
+    const _commitEdit = (attId) => {
+      const v = S.editTitleValue.trim();
+      this.setState(s => ({
+        editingTitleId: null, editTitleValue: '',
+        draftAttachments: s.draftAttachments.map(a => a.id === attId ? { ...a, title: v || a.name } : a)
+      }));
+    };
+    const draftAttachments = S.draftAttachments.map(att => ({
+      name: att.name,
+      title: att.title || att.name,
+      editing: S.editingTitleId === att.id,
+      notEditing: S.editingTitleId !== att.id,
+      editValue: S.editTitleValue,
+      startEdit: () => this.setState({ editingTitleId: att.id, editTitleValue: att.title || att.name }),
+      setInputRef: (el) => { if (el) requestAnimationFrame(() => el.focus()); },
+      onEditChange: (e) => this.setState({ editTitleValue: e.target.value }),
+      commitEdit: () => _commitEdit(att.id),
+      commitEditKey: (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); _commitEdit(att.id); }
+        else if (e.key === 'Escape') { e.preventDefault(); this.setState({ editingTitleId: null, editTitleValue: '' }); }
+      },
+      remove: () => this.setState(s => ({ draftAttachments: s.draftAttachments.filter(x => x.id !== att.id) }))
+    }));
+    const spaces = S.spaces.map(sp => ({
+      name: sp.name, marker: sp.id === S.activeSpaceId ? '●' : '○',
+      bg: sp.id === S.activeSpaceId ? '#F2EFE8' : 'transparent',
+      select: () => this.setState({ activeSpaceId: sp.id, spacesOpen: false, tab: 'chat', selectedEntity: null })
+    }));
+    const previewByType = { pdf: 'A text document — bonded to this room and citable.', video: 'Structure found by segmenting raw container bytes — no frame decoded.', audio: 'Transcribed locally by an on-device model.', spreadsheet: 'A spreadsheet — parsed into rows and columns, bonded to this room and citable.', link: 'A web source bonded and citable.', binary: 'Preview not available — stored as an opaque binary.' };
+    const roomSources = this.roomSources();
+    const activeSources = roomSources.map(s => {
+      const type = this.inferType(s.name);
+      const expanded = S.expandedSource === s.name;
+      const content = S.readerContent[s.name];
+      // An engine-tier source was never attached to this room, so the room's
+      // attachment store has no bytes for it — say what it is instead of
+      // fetching a miss and rendering "content not available".
+      const preview = content
+        ? this._extractTitle(content.replace(/\s+/g, ' ').trim(), s.name)
+        : s.engineOnly
+          ? 'In the engine corpus — searched and citable, not attached to this room.'
+          : (previewByType[type] || previewByType.binary);
+      return {
+        ...s, open: () => this.openReader(s.name),
+        toggle: () => {
+          const isOpening = this.state.expandedSource !== s.name;
+          this.setState(st => ({ expandedSource: isOpening ? s.name : null }));
+          // engineOnly sources used to be skipped here because nothing could
+          // serve their bytes. /api/source/text can, so they open like any other.
+          if (isOpening && !this.state.readerContent[s.name]) this.fetchSourceContent(s.name);
+          if (isOpening) { this.fetchFold(s.name); this.fetchOutline(s.name); }
+        },
+        toggleEnabled: () => this.toggleSource(s.name),
+        delete: () => this.deleteSource(s.name),
+        rowOpacity: s.enabled === false ? 0.45 : 1,
+        switchBg: s.enabled === false ? '#E0DACE' : '#1F5A4C',
+        knobLeft: s.enabled === false ? '2px' : '13px',
+        expanded, chevronClass: expanded ? 'ph ph-caret-down' : 'ph ph-caret-right',
+        preview
+      };
+    });
+    const enabledSourceCount = roomSources.filter(s => s.enabled !== false).length;
+
+    // Web history: newest first, each row carrying the query that pulled it in
+    // and when — the audit trail, not just a list of hostnames.
+    const webRows = this.webSources().slice().reverse().map(w => {
+      let host = w.name;
+      try { host = new URL(w.url).hostname.replace(/^www\./, ''); } catch {}
+      const when = w.ingestedAt ? new Date(w.ingestedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+      const on = w.enabled !== false;
+      return {
+        host,
+        meta: [when, w.query ? `“${String(w.query).slice(0, 40)}”` : null].filter(Boolean).join(' · '),
+        toggleLabel: `${on ? 'Disable' : 'Enable'} ${host}`,
+        open: () => this.openReader(w.name),
+        toggleEnabled: () => this.toggleWebSource(w.url),
+        rowOpacity: on ? 1 : 0.45,
+        switchBg: on ? '#1F5A4C' : '#E0DACE',
+        knobLeft: on ? '13px' : '2px',
+      };
+    });
+    const anyWebOn = this.webSources().some(w => w.enabled !== false);
+
+    const { entities: castEntities, withheld: castWithheld, gaps: castGaps } = this.castOfEnabledSources();
+    const maxCount = castEntities.length ? (castEntities[0].mentions || 1) : 1;
+    const entityColors = ['#1F5A4C', '#3D7A6A', '#5FA08E', '#8CBBB0', '#B5D3CA', '#D5E3DE', '#EBE6DC'];
+    const entityRows = castEntities.map((e, i) => ({
+      name: e.label,
+      type: e.type || '',
+      mentions: e.mentions,
+      color: entityColors[i % entityColors.length],
+      barWidth: Math.max(4, Math.round(((e.mentions || 0) / maxCount) * 28)) + 'px',
+      select: () => this.setState({ selectedEntity: e.id })
+    }));
+    // Candidates the text proposed and no prior typed. Shown, not hidden: an
+    // absent name here would read as "not in the book", when what it means is
+    // "no witness-tier prior asserts it". That distinction is the whole tier
+    // boundary, and burying it is how a gap turns into a silent wrong answer.
+    const withheldRows = castWithheld.slice(0, 40).map(w => ({
+      name: w.name,
+      reason: w.withheld_because || 'no per-text prior asserts this referent'
+    }));
+    const withheldCount = castWithheld.length;
+    const withheldSummary = withheldCount
+      ? `${withheldCount} candidate${withheldCount === 1 ? '' : 's'} withheld — no per-text prior asserts an individuation type`
+      : '';
+    const castGapRows = castGaps.map(g => ({ reason: (g.reason || String(g)), source: g.source || '' }));
+
+    const { orbitBodies, orbitEdges } = this.computeOrbit();
+    const orbitNode = orbitBodies[S.orbitFocus];
+    const orbitKids = Object.keys(orbitBodies).filter(k => orbitBodies[k].parent === S.orbitFocus);
+
+    const readerType = S.readerSourceName ? this.inferType(S.readerSourceName) : null;
+    const readerGlyph = TYPE_GLYPH[readerType] || '●';
+    const readerTypeLabel = TYPE_LABEL[readerType] || '';
+    // Only claim a pipeline that ran. Video and audio have no perceiver here —
+    // their bytes are stored and displayed, nothing is decoded or transcribed —
+    // so they name the gap instead of describing an analysis that never happened.
+    const readerPipelineLabel = { video: 'no video perceiver · bytes stored, not decoded', audio: 'no audio perceiver · bytes stored, not transcribed', spreadsheet: 'parsed into rows · cols' }[readerType] || null;
+    const contentText = S.readerSourceName ? (S.readerContent[S.readerSourceName] || 'Loading content…') : '';
+    const contentLines = contentText.split('\n').filter(l => l.trim());
+
+    // Locating a cited span: prefer its verbatim text, not its byte offsets.
+    // byte_start/byte_end are UTF-8 offsets and this string is UTF-16, so the
+    // two only coincide on pure-ASCII sources — trusting them blind would mark
+    // the wrong run of text on anything with a curly quote in it. Bytes are the
+    // fallback, and only when the text really is ASCII. If neither lands, say
+    // so; a mislocated highlight is worse than none.
+    const hl = S.readerHighlight;
+    const hlKey = hl ? `${S.readerSourceName}::${hl.num}::${contentText.length}` : null;
+    if (hlKey && (this._hlCache || {}).key !== hlKey) {
+      const q = (hl.quote || '').trim();
+      const at = q ? contentText.indexOf(q) : -1;
+      let range = null, note = null;
+      if (at >= 0) range = [at, at + q.length];
+      else if (hl.byteStart != null && hl.byteEnd > hl.byteStart && hl.byteEnd <= contentText.length
+               && !/[^\x00-\x7F]/.test(contentText)) range = [hl.byteStart, hl.byteEnd];
+      else note = `[${hl.num}] could not be located in this text — showing the source unmarked.`;
+      this._hlCache = { key: hlKey, range, note };
+    }
+    const hlFound = hl && this._hlCache && this._hlCache.key === hlKey ? this._hlCache : null;
+    const readerHighlightNote = hlFound ? hlFound.note : null;
+    const hlRange = contentLines.length && hlFound ? hlFound.range : null;
+
+    // The document's real sections. Pagination and the outline chips key off
+    // this and only this — marking a citation must not invent structure the
+    // source does not have.
+    const readerSections = contentLines.length
+      ? [{ heading: 'Content', body: contentText }]
+      : [{ heading: 'No content', body: 'Source content not yet loaded.' }];
+
+    // Display-only split: the same single section cut into before / cited /
+    // after so the cited run can carry its own styling.
+    const readerScrollSections = hlRange
+      ? [
+          { heading: readerSections[0].heading, body: contentText.slice(0, hlRange[0]) },
+          { heading: '', body: contentText.slice(hlRange[0], hlRange[1]), hl: true },
+          { heading: '', body: contentText.slice(hlRange[1]) },
+        ].filter(s => s.hl || s.body)
+      : readerSections;
+
+    // Spreadsheet content (raw .csv/.tsv text, or a .xlsx normalized to CSV by
+    // uploadFiles) is rendered as an actual grid instead of the Georgia prose
+    // block — a row-major dump read as one paragraph is unreadable.
+    const readerIsSpreadsheet = readerType === 'spreadsheet';
+    let readerSheetHeader = [], readerSheetRows = [], readerSheetGridCols = '';
+    let readerSheetTruncated = false, readerSheetTruncatedNote = '';
+    let readerPivotOptions = [];
+    if (readerIsSpreadsheet && contentText && contentText !== 'Loading content…') {
+      const delimiter = /\.tsv$/i.test(S.readerSourceName || '') ? '\t' : ',';
+      const allRows = this._parseDelimited(contentText, delimiter);
+      const rawHeader = allRows[0] || [];
+      const dataRows = allRows.slice(1);
+      readerPivotOptions = rawHeader.map((h, i) => ({ value: String(i), label: h || `Column ${i + 1}` }));
+
+      let gridHeader, gridRows;
+      const pivotOn = S.readerPivotMode && rawHeader.length > 0;
+      if (pivotOn) {
+        // Group every data row (the FULL sheet, not just the 300 displayed
+        // below) by the chosen column and fold in one aggregate — a summary
+        // is only trustworthy if it isn't silently based on a display cap.
+        const groupIdx = S.readerPivotGroupCol != null ? Number(S.readerPivotGroupCol) : 0;
+        const valueIdx = S.readerPivotValueCol !== null && S.readerPivotValueCol !== '' && S.readerPivotValueCol !== undefined
+          ? Number(S.readerPivotValueCol) : null;
+        const agg = S.readerPivotAgg || 'count';
+        const groups = new Map();
+        for (const row of dataRows) {
+          const key = row[groupIdx] ?? '';
+          const g = groups.get(key) || { count: 0, sum: 0, numCount: 0, min: Infinity, max: -Infinity };
+          g.count++;
+          if (valueIdx != null) {
+            const n = parseFloat(row[valueIdx]);
+            if (!Number.isNaN(n)) { g.sum += n; g.numCount++; g.min = Math.min(g.min, n); g.max = Math.max(g.max, n); }
+          }
+          groups.set(key, g);
+        }
+        const aggLabel = { count: 'Count', sum: 'Sum', avg: 'Average', min: 'Min', max: 'Max' }[agg] || 'Count';
+        const valueColLabel = valueIdx != null ? (rawHeader[valueIdx] || `Column ${valueIdx + 1}`) : '';
+        gridHeader = [rawHeader[groupIdx] || `Column ${groupIdx + 1}`, valueColLabel ? `${aggLabel} of ${valueColLabel}` : aggLabel];
+        gridRows = [...groups.entries()].map(([key, g]) => {
+          let v = '';
+          if (agg === 'count') v = g.count;
+          else if (agg === 'sum') v = g.numCount ? g.sum : '';
+          else if (agg === 'avg') v = g.numCount ? +(g.sum / g.numCount).toFixed(2) : '';
+          else if (agg === 'min') v = g.numCount ? g.min : '';
+          else if (agg === 'max') v = g.numCount ? g.max : '';
+          return [key, String(v)];
+        });
+      } else {
+        gridHeader = rawHeader;
+        gridRows = dataRows;
+      }
+
+      // Sort applies to whichever grid is on screen — table or pivot — since
+      // a pivot's output is itself just a 2-column grid. Column index is the
+      // only thing that needs to carry over between the two modes.
+      if (S.readerSortCol != null && gridRows.length) {
+        const col = S.readerSortCol, dir = S.readerSortDir === 'desc' ? -1 : 1;
+        gridRows = gridRows.slice().sort((a, b) => {
+          const av = a[col] ?? '', bv = b[col] ?? '';
+          const an = parseFloat(av), bn = parseFloat(bv);
+          const numeric = av !== '' && bv !== '' && !Number.isNaN(an) && !Number.isNaN(bn);
+          return numeric ? (an - bn) * dir : String(av).localeCompare(String(bv)) * dir;
+        });
+      }
+
+      const ROW_CAP = 300, COL_CAP = 40;
+      const cappedHeader = gridHeader.slice(0, COL_CAP);
+      readerSheetHeader = cappedHeader.map((label, i) => ({
+        label: label || `Column ${i + 1}`,
+        arrow: S.readerSortCol === i ? (S.readerSortDir === 'desc' ? ' ▼' : ' ▲') : '',
+        isLast: i === cappedHeader.length - 1,
+        sort: () => this.setState(s => ({
+          readerSortCol: i,
+          readerSortDir: s.readerSortCol === i && s.readerSortDir === 'asc' ? 'desc' : 'asc',
+        })),
+      }));
+      readerSheetRows = gridRows.slice(0, ROW_CAP).map((cells, i) => ({
+        id: i,
+        cells: cells.slice(0, COL_CAP).map((cell, j) => ({ value: cell, isLast: j === Math.min(cells.length, COL_CAP) - 1 })),
+      }));
+      readerSheetGridCols = `repeat(${Math.max(1, cappedHeader.length)}, minmax(96px, 1fr))`;
+      const dropped = Math.max(0, gridRows.length - ROW_CAP);
+      readerSheetTruncated = dropped > 0;
+      readerSheetTruncatedNote = `Showing first ${ROW_CAP} of ${gridRows.length} rows (${dropped} more not shown).`;
+    }
+    const readerSectionIndex = Math.min(S.readerSectionIndex, Math.max(0, readerSections.length - 1));
+    const docOutline = readerSections.length > 1 ? readerSections.map((sec, i) => ({
+      label: sec.heading, bg: i === (S.readerViewMode === 'paginated' ? readerSectionIndex : -1) ? '#F2EFE8' : 'transparent', color: '#26241F',
+      jump: () => this.setState({ readerViewMode: 'paginated', readerSectionIndex: i })
+    })) : [];
+
+    const selectedCastEntity = castEntities.find(e => e.id === S.selectedEntity) || null;
+    // Relations used to be counted by seeing which capitalized words shared a
+    // chat turn. That measures the transcript, not the text, and it inferred a
+    // relationship from proximity in an answer the model wrote. The fold does
+    // not project relations, so there is nothing here to show and saying so is
+    // the correct output.
+    const selectedEntityRelations = [];
+    // Verified byte anchors are real evidence and can be offered.
+    const selectedEntityAnchors = (selectedCastEntity ? selectedCastEntity.anchors : []).slice(0, 8).map(a => ({
+      surface: a.surface || selectedCastEntity.label,
+      range: `${a.byte_start}–${a.byte_end}`,
+      open: () => this.openReaderAtByte(selectedCastEntity.source, a.byte_start)
+    }));
+
+    const catList = ['all', 'sources', 'chat', 'spaces', 'reader', 'perception'];
+    const categoryChips = catList.map(cat => ({
+      label: cat === 'all' ? 'All' : cat[0].toUpperCase() + cat.slice(1),
+      select: () => this.setState({ glassBoxCategory: cat }),
+      // Quiet by default; the selected chip lifts a step, not a full accent border.
+      border: S.glassBoxCategory === cat ? '#33544A' : '#1E2A26',
+      bg: S.glassBoxCategory === cat ? '#16241F' : 'transparent',
+      color: S.glassBoxCategory === cat ? '#9FE9C8' : '#66807A'
+    }));
+    // Chronological, as logged — the trace is read in the order it happened.
+    const filteredLog = S.log.filter(e => S.glassBoxCategory === 'all' || e.category === S.glassBoxCategory);
+
+    return {
+      showGlyphs: this.props.showGlyphs ?? true,
+      isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose',
+      webSearch: S.webSearch,
+      // Web is opt-in: off until the reader asks for it, per turn-level consent.
+      webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
+      webBg: S.webSearch ? '#1F5A4C' : 'none',
+      webColor: S.webSearch ? '#FFFDFA' : '#8C877C',
+      webBorder: S.webSearch ? '#1F5A4C' : '#E0DACE',
+      toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch })),
+      proxyLive: live, proxyDead: !live,
+      proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
+      retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
+      tabChat: () => this.setState({ tab: 'chat' }), tabOutline: () => this.setState({ tab: 'outline' }),
+      tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
+      tabPriors: () => this.setState({ tab: 'priors' }), tabCompose: () => this.setState({ tab: 'compose' }),
+      tabChatColor: c.color, tabChatUnderline: c.underline,
+      tabOutlineColor: o.color, tabOutlineUnderline: o.underline,
+      tabOrbitColor: r.color, tabOrbitUnderline: r.underline,
+      tabGlassBoxColor: g.color, tabGlassBoxUnderline: g.underline,
+      tabPriorsColor: pr.color, tabPriorsUnderline: pr.underline,
+      tabComposeColor: cp.color, tabComposeUnderline: cp.underline,
+      composeTask: S.composeTask,
+      onComposeTask: (e) => this.onComposeTask(e),
+      composeRunning: S.composeRunning,
+      composeCanRun: S.composeTask.trim().length > 0 && !S.composeRunning,
+      composeButtonBg: (S.composeTask.trim().length > 0 && !S.composeRunning) ? '#1F5A4C' : '#E0DACE',
+      runCompose: () => this.runCompose(),
+      composeButtonLabel: S.composeRunning ? 'Generating…' : 'Generate',
+      hasComposePlan: !!S.composePlan,
+      composePlanCount: S.composePlan ? S.composePlan.length : 0,
+      composeSectionRows: S.composeOrder.map(id => {
+        const sec = S.composeSections[id] || { id, label: id, iterations: [], done: false };
+        const trail = sec.iterations.map(it => it.groundingScore.toFixed(2)).join(' → ') || '…';
+        return {
+          id: sec.id,
+          label: sec.label,
+          groundingTrail: trail,
+          statusLabel: sec.done
+            ? `done — ${sec.citationsCount || 0} citation${sec.citationsCount === 1 ? '' : 's'}`
+            : (sec.iterations.length > 1 ? 'correcting…' : 'writing…'),
+          statusColor: sec.done ? '#1F5A4C' : '#A39D91',
+        };
+      }),
+      hasComposeSections: S.composeOrder.length > 0,
+      composeReplanNotice: S.composeReplan
+        ? (S.composeReplan.status === 'done'
+            ? (S.composeReplan.changes || []).map(c => `${c.action}: ${c.justification}`).join(' · ') || null
+            : 'Replanning — a section never grounded well or two sections turned out redundant…')
+        : null,
+      hasComposeError: !!S.composeError,
+      composeError: S.composeError,
+      composeDone: !!S.composeResult,
+      composeSummary: S.composeResult
+        ? `${S.composeResult.sections} section(s), ${S.composeResult.mechanicalCitations} mechanical citation(s), ${S.composeResult.gaps} gap(s)`
+        : '',
+      composeResultSections: (S.composeResult && S.composeResult.results || []).map(r => ({
+        id: r.id,
+        label: r.label,
+        content: r.content,
+        citations: (r.citations || []).map(cit => {
+          const s = (r.surf || [])[cit.surfIndex];
+          return {
+            jaccard: cit.evidence.jaccard.toFixed(3),
+            source: this._shortSource(s ? s.source : ''),
+            quote: (s ? s.text : '').slice(0, 240),
+          };
+        }),
+      })),
+      draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
+      composerHint: enabledSourceCount === 0 && roomSources.length
+        ? 'Every source is switched off — switch one on in the rail to ask.'
+        : 'Answers cite only what your sources say.',
+      composerHintColor: enabledSourceCount === 0 && roomSources.length ? '#A3592B' : '#A39D91',
+      turns: active.turns.map((turn, i) => this.turnVals(turn, i)),
+      streamingAnswer: S.streamingAnswer, streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
+      thinkingPhase: S.thinkingPhase || `Reading across ${enabledSourceCount} source${enabledSourceCount === 1 ? '' : 's'}`,
+      thinkingMeta: S.thinkingMeta,
+      thinkingModalOpen: S.thinkingModalOpen,
+      openThinkingModal: () => this.openThinkingModal(),
+      thinkingLogEmpty: !S.thinkingLog || !S.thinkingLog.length,
+      thinkingLogRows: (S.thinkingLog || []).map(e => ({
+        glyph: e.glyph,
+        text: e.text,
+        color: e.glyph === '⊘' ? '#E06B4A' : (e.glyph === '→' ? '#8FE3C0' : (e.glyph === '←' ? '#A39D91' : '#D3E0DA'))
+      })),
+      thinkingLogCount: S.thinkingLog ? `${S.thinkingLog.length} step(s)` : '',
+      showEmptyChat: active.turns.length === 0 && !S.streamingLoading && !S.streamingAnswer,
+      onDraft: (e) => this.setState({ draft: e.target.value }),
+      onKey: (e) => { if (e.key === 'Enter') this.send(); }, send: () => this.send(),
+      activeSpaceName: active.name, spacesOpen: S.spacesOpen,
+      toggleSpaces: () => this.setState(s => ({ spacesOpen: !s.spacesOpen })),
+      spaces, addSpace: () => this.addSpace(),
+      activeSources, noSources: roomSources.length === 0, sourceCount: roomSources.length,
+      hasWebHistory: webRows.length > 0,
+      webHistoryCount: webRows.length,
+      webHistoryOpen: S.webHistoryOpen,
+      webHistoryChevron: S.webHistoryOpen ? 'ph ph-caret-down' : 'ph ph-caret-right',
+      toggleWebHistoryOpen: () => this.setState(s => ({ webHistoryOpen: !s.webHistoryOpen })),
+      toggleAllWeb: () => this.toggleAllWebSources(),
+      webAllSwitchBg: anyWebOn ? '#1F5A4C' : '#E0DACE',
+      webAllKnobLeft: anyWebOn ? '13px' : '2px',
+      webHistoryRows: webRows,
+      recycleBinRows: (S._recycleBin || []).map(d => ({
+        name: d.name || d.sourceKey,
+        restore: () => this.restoreSource(d.sourceKey || d.name),
+        purge: () => this.purgeSource(d.sourceKey || d.name),
+      })),
+      hasRecycleBin: (S._recycleBin || []).length > 0,
+      recycleBinCount: (S._recycleBin || []).length,
+      recycleBinOpen: S.recycleBinOpen,
+      recycleBinChevron: S.recycleBinOpen ? 'ph ph-caret-down' : 'ph ph-caret-right',
+      toggleRecycleBin: () => this.toggleRecycleBin(),
+      emptyRecycleBin: () => this.emptyRecycleBin(),
+      enabledSourceCount,
+      sourceFooterNote: enabledSourceCount === roomSources.length
+        ? 'always canonical'
+        : `${enabledSourceCount} switched on`,
+      leftCollapsed: S.leftCollapsed, leftExpanded: !S.leftCollapsed,
+      leftPadding: S.leftCollapsed ? '18px 8px' : '18px 16px',
+      leftAlign: S.leftCollapsed ? 'center' : 'stretch',
+      leftColWidth: S.leftCollapsed ? '52px' : '232px',
+      toggleLeftCollapsed: () => this.setState(s => ({ leftCollapsed: !s.leftCollapsed })),
+      addSource: () => this.addSource(), searchWeb: () => this.searchWeb(),
+      modalOpen: !!modal,
+      modalTitle: modal ? modal.title : '',
+      modalLabel: modal ? modal.label : '',
+      modalPlaceholder: modal ? (modal.placeholder || '') : '',
+      modalHint: modal ? (modal.hint || '') : '',
+      modalUpload: !!(modal && modal.upload),
+      setSourceFileInput: (el) => { this.sourceFileInputEl = el; },
+      modalPickFile: () => this.sourceFileInputEl && this.sourceFileInputEl.click(),
+      onSourceFilesSelected: (e) => this.onSourceFilesSelected(e),
+      modalSubmitLabel: modal ? (modal.submitLabel || 'Create') : '',
+      modalValue: S.modalValue,
+      modalSubmitBg: modalValid ? '#1F5A4C' : '#B8B3A8',
+      modalSubmitCursor: modalValid ? 'pointer' : 'not-allowed',
+      // The input is remounted each time the dialog opens, so the dataset flag
+      // is fresh per-open — it only suppresses the refocus that React's
+      // detach/reattach of an inline ref would otherwise cause on every render.
+      setModalInput: (el) => {
+        if (!el || el.dataset.eoFocused) return;
+        el.dataset.eoFocused = '1';
+        requestAnimationFrame(() => el.focus());
+      },
+      onModalInput: (e) => this.setState({ modalValue: e.target.value }),
+      onModalKey: (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); this.submitModal(); }
+        else if (e.key === 'Escape') { e.preventDefault(); this.closeModal(); }
+      },
+      submitModal: () => this.submitModal(),
+      closeModal: () => this.closeModal(),
+      stopModalClick: (e) => e.stopPropagation(),
+      retrievals: (active.retrievals || []).map(r => ({ quote: (r.quote || '').slice(0, 200), source: r.source || '' })),
+      hasRetrievals: (active.retrievals || []).length > 0,
+      draftAttachments, hasDraftAttachments: draftAttachments.length > 0,
+      setFileInput: (el) => { this.fileInputEl = el; },
+      openFileDialog: () => this.fileInputEl && this.fileInputEl.click(),
+      onFilesSelected: (e) => this.onFilesSelected(e),
+      chatScrollRef: (el) => { this.chatScrollEl = el; this.scrollToBottom(); },
+      setCanvas: (el) => { this.canvasEl = el; this.manageOrbitLoop(); if (el) this.draw(); },
+      onOrbitClick: (e) => this.onOrbitClick(e),
+      orbitFocusLabel: orbitNode ? orbitNode.label : '',
+      orbitHint: orbitKids.length ? 'click a node — swap universes to it' : 'entities appear as you chat',
+      orbitStatus: orbitKids.length ? ` · ${orbitKids.map(k => orbitBodies[k].label).join(', ')} orbit${orbitKids.length > 1 ? '' : 's'} it` : ' · entities from chat will appear here',
+      // The reader sits *beside* the chat, never on top of it. Checking a
+      // source used to cost you the conversation, which is why nobody checked.
+      readerOpen: S.readerOpen, showTabs: true,
+      readerColWidth: S.readerOpen ? 'minmax(0, 1fr)' : '0px',
+      readerName: S.readerSourceName, readerGlyph, readerTypeLabel, readerPipelineLabel,
+      showReaderPipeline: !!readerPipelineLabel, showSectionChips: docOutline.length > 1,
+      readerIsVideo: readerType === 'video', readerIsAudioType: readerType === 'audio',
+      readerIsSpreadsheet, readerSheetHeader, readerSheetRows, readerSheetGridCols,
+      readerSheetTruncated, readerSheetTruncatedNote,
+      readerPivotMode: S.readerPivotMode,
+      togglePivotMode: () => this.setState(s => ({ readerPivotMode: !s.readerPivotMode, readerSortCol: null })),
+      pivotToggleLabel: S.readerPivotMode ? 'Table' : 'Pivot',
+      pivotToggleIcon: S.readerPivotMode ? 'ph-table' : 'ph-funnel-simple',
+      readerPivotOptions,
+      readerPivotGroupCol: S.readerPivotGroupCol != null ? String(S.readerPivotGroupCol) : '0',
+      onPivotGroupChange: (e) => this.setState({ readerPivotGroupCol: e.target.value, readerSortCol: null }),
+      readerPivotValueCol: S.readerPivotValueCol != null ? String(S.readerPivotValueCol) : '',
+      onPivotValueChange: (e) => this.setState({ readerPivotValueCol: e.target.value }),
+      readerPivotAgg: S.readerPivotAgg || 'count',
+      onPivotAggChange: (e) => this.setState({ readerPivotAgg: e.target.value }),
+      readerPivotAggOptions: [
+        { value: 'count', label: 'Count' }, { value: 'sum', label: 'Sum' },
+        { value: 'avg', label: 'Average' }, { value: 'min', label: 'Min' }, { value: 'max', label: 'Max' },
+      ],
+      // An uploaded video exists only as an in-memory File — its blob URL is
+      // the only thing that can be a <video src>. A pre-existing sample video
+      // is served statically, so its name IS already a playable relative URL.
+      readerVideoSrc: readerType === 'video' && S.readerSourceName
+        ? ((this._uploadBlobUrls && this._uploadBlobUrls.get(S.readerSourceName)) || S.readerSourceName)
+        : '',
+      readerShowModeToggle: readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet',
+      closeReader: () => this.closeReader(),
+      docOutline,
+      readerModeScroll: readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && S.readerViewMode !== 'paginated',
+      readerModePaginated: readerType !== 'video' && readerType !== 'spreadsheet' && S.readerViewMode === 'paginated',
+      setReaderScroll: () => this.setState({ readerViewMode: 'scroll' }),
+      setReaderPaginated: () => this.setState({ readerViewMode: 'paginated' }),
+      readerScrollColor: S.readerViewMode !== 'paginated' ? '#1F5A4C' : '#8C877C',
+      readerScrollBg: S.readerViewMode !== 'paginated' ? '#E5EDE9' : 'transparent',
+      readerPaginateColor: S.readerViewMode === 'paginated' ? '#1F5A4C' : '#8C877C',
+      readerPaginateBg: S.readerViewMode === 'paginated' ? '#E5EDE9' : 'transparent',
+      readerSections: readerScrollSections.map((s, i) => ({
+        heading: s.heading, body: s.body, showHeading: !!s.heading,
+        anchorId: s.hl ? 'eo-reader-hl' : '',
+        secBg: s.hl ? '#E5EDE9' : 'transparent',
+        secRail: s.hl ? '3px solid #1F5A4C' : '0',
+        secPad: s.hl ? '10px 14px' : '0',
+        secMargin: s.hl ? '10px 0' : '0 0 26px',
+        bodyNodes: this.renderEntityText(s.body, 'rs' + i, selectEntity),
+      })),
+      readerHighlightNote, hasReaderHighlightNote: !!readerHighlightNote,
+      hasReaderHighlight: !!(S.readerHighlight && S.readerOpen),
+      readerHighlightLabel: S.readerHighlight ? `showing [${S.readerHighlight.num}]` : '',
+      clearReaderHighlight: () => this.clearReaderHighlight(),
+      readerCurrentHeading: (readerSections[readerSectionIndex] || {}).heading || '',
+      readerCurrentBody: (readerSections[readerSectionIndex] || {}).body || '',
+      readerCurrentBodyNodes: this.renderEntityText((readerSections[readerSectionIndex] || {}).body || '', 'rc', selectEntity),
+      readerSectionPos: `${readerSectionIndex + 1} of ${readerSections.length || 1}`,
+      readerSectionPrev: () => this.setState(s => ({ readerSectionIndex: Math.max(0, s.readerSectionIndex - 1) })),
+      readerSectionNext: () => this.setState(s => ({ readerSectionIndex: Math.min(readerSections.length - 1, s.readerSectionIndex + 1) })),
+      entityRows,
+      withheldRows, withheldSummary, hasWithheld: !!withheldRows.length,
+      castGapRows,
+      // No relation projection exists on this endpoint, so none is invented.
+      relationRows: [],
+      hasSelectedEntity: !!S.selectedEntity, showEntityIndex: !S.selectedEntity,
+      selectedEntityName: selectedCastEntity ? selectedCastEntity.label : '',
+      selectedEntityMentions: selectedCastEntity ? selectedCastEntity.mentions : 0,
+      selectedEntityRelations,
+      selectedEntityAnchors,
+      selectedEntityNoRelations: !!S.selectedEntity && selectedEntityRelations.length === 0,
+      clearSelectedEntity: () => this.setState({ selectedEntity: null }),
+      entityCountLabel: castEntities.length + ' entities',
+      // Priors group by what they are ABOUT, from the `scope` each artifact
+      // declares (proxy-side, priors-source.js::scopeOf) — not by schema family
+      // and not by filename. A prior scoped to one text only applies while
+      // reading that text; a corpus-wide fold conditions any reading. That is
+      // the distinction worth surfacing, and the artifacts state it themselves.
+      // Undeclared scope gets its own group rather than being quietly filed as
+      // corpus-wide — a typed gap, never a guess.
+      priorGenres: (() => {
+        const ORDER = { text: 0, corpus: 1, prior: 2, none: 3 };
+        const groups = new Map();
+        (S._priors || []).forEach(p => {
+          const sc = p.scope || { kind: 'none', label: 'scope not declared' };
+          // One group per distinct text; the other kinds each collapse to one.
+          const key = sc.kind === 'text' ? `text:${sc.label}` : sc.kind;
+          if (!groups.has(key)) groups.set(key, { kind: sc.kind, label: sc.label, items: [] });
+          groups.get(key).items.push(p);
+        });
+        return [...groups.entries()]
+          .sort((a, b) => (ORDER[a[1].kind] - ORDER[b[1].kind]) || a[1].label.localeCompare(b[1].label))
+          .map(([key, g]) => ({
+            name: g.kind === 'text' ? `Per-text — ${this._textTitle(g.label)}`
+              : g.kind === 'corpus' ? 'Corpus-wide'
+              : g.kind === 'prior' ? 'Derived from another prior'
+              : 'Scope not declared',
+            count: String(g.items.length),
+            expanded: !!S.priorGenreOpen[key],
+            chevronClass: S.priorGenreOpen[key] ? 'ph ph-caret-down' : 'ph ph-caret-right',
+            toggle: () => this.togglePriorGenre(key),
+            items: g.items.slice().sort((a, b) => a.id.localeCompare(b.id)).map(p => {
+              const sc = p.scope || {};
+              // Scope detail first — it says what this prior covers. The family
+              // and size follow; they say what shape it is.
+              const detail = sc.kind === 'text' ? sc.label : (sc.detail || '');
+              // Two gaps can apply at once and they are different claims: p.gap
+              // is what the engine could not ingest, sc.gap is why the artifact
+              // itself declares no scope. Show both rather than picking one.
+              const gaps = [p.gap, sc.gap].filter(Boolean);
+              return {
+                name: p.id,
+                prior: (detail ? detail + ' · ' : '') + `${p.family} · ${(p.bytes / 1024).toFixed(0)} KB`,
+                surprising: !!gaps.length,
+                notSurprising: !gaps.length,
+                gapLabel: gaps.join(' — '),
+                openInExplorer: () => this.openPrior(p.id)
+              };
+            })
+          }));
+      })(),
+      noPriors: !(S._priors || []).length,
+      priorsMessage: S._priorsError
+        ? `Priors unavailable — ${S._priorsError}`
+        : (S._priors === null ? 'Loading priors…' : 'No priors in the pool.'),
+      // Headings from the engine's boundary detector, not from lines that
+      // happen to be uppercase — that heuristic returned Gutenberg's licence
+      // banner and missed every "Chapter 5". Each entry carries the byte offset
+      // the engine measured, so clicking one seeks to it instead of hunting for
+      // a matching string in the body.
+      outlineItems: (() => {
+        const items = [];
+        let n = 0;
+        this.roomSources().filter(s => s.enabled !== false).forEach(s => {
+          const o = S.outlines[s.name];
+          if (!o || o.error || !(o.headings || []).length) return;
+          o.headings.forEach(h => {
+            n += 1;
+            items.push({
+              num: String(n).padStart(2, '0'),
+              label: h.label,
+              source: s.name,
+              seek: () => this.openReaderAtByte(s.name, h.byte_start)
+            });
+          });
+        });
+        return items;
+      })(),
+      outlineNotes: (() => {
+        const notes = [];
+        this.roomSources().filter(s => s.enabled !== false).forEach(s => {
+          const o = S.outlines[s.name];
+          if (o && (o.error || o.gap)) notes.push(`${s.name} — ${o.error || o.gap}`);
+        });
+        return notes.map(text => ({ text }));
+      })(),
+      outlineEmpty: !Object.keys(S.outlines).length,
+      filteredLog,
+      // Header and rows share these tracks — drop the glyph track when glyphs are off
+      // or the text cell would slide into the glyph column.
+      logGridCols: (this.props.showGlyphs ?? true) ? '58px 14px 1fr' : '58px 1fr',
+      logEmpty: !filteredLog.length,
+      logCount: filteredLog.length === S.log.length
+        ? `${S.log.length} events`
+        : `${filteredLog.length} of ${S.log.length} events`,
+      categoryChips
+    };
+  }
+}
+</script>
+</body>
+</html>

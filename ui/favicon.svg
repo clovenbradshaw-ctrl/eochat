@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="EOReader favicon">
+  <defs>
+    <linearGradient id="bg" x1="12" y1="4" x2="52" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f4efe4"/>
+      <stop offset="0.56" stop-color="#d8d1c4"/>
+      <stop offset="1" stop-color="#b9aa91"/>
+    </linearGradient>
+    <linearGradient id="orbit" x1="15" y1="15" x2="50" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#335c67"/>
+      <stop offset="1" stop-color="#7a4f2a"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#1f2426"/>
+  <path d="M18 13h21c5 0 9 4 9 9v29H25c-5 0-9-4-9-9V15c0-1 .9-2 2-2Z" fill="url(#bg)"/>
+  <path d="M24 22h17M24 30h15M24 38h11" stroke="#5f574c" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="42" cy="42" r="9" fill="none" stroke="url(#orbit)" stroke-width="4"/>
+  <path d="M48 48l7 7" stroke="#e09f3e" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="42" cy="42" r="3" fill="#335c67"/>
+</svg>
