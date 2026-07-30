@@ -16,6 +16,8 @@ import fs from "node:fs";
 import { engineGroundQuery } from "../server/engine-ground.js";
 import { outlineFromEvidence, reviseDraft, fidelityResidual, attributionResidual } from "../server/longform.js";
 import { loadCorefPrior, earnNesting } from "../server/borrowed-form.js";
+import { discoverCast, castSurfaces } from "../vendor/eoreader5/packages/engine/referents/discover-cast.js";
+const castedSources = new Set();
 import { outlineOfText } from "../server/engine-ground.js";
 import { projectTasks } from "../server/task-log.js";
 
@@ -65,24 +67,37 @@ if (!ground.citations.length) {
 // A first-person subject is a surface fixed by SCOPE. Frankenstein nests:
 // without these spans every "I" in the creature's tale is silently Victor,
 // which is exactly the misattribution the essay shipped.
+// The cast is DISCOVERED from the sources themselves, so this works on any
+// corpus with enough to surf and fold — no hand-typed prior per text. A coref
+// prior, where one exists, is UNIONED in: it carries the model-tier referents
+// discovery cannot reach (an emanon like "the creature" has no name to cluster).
 let narratorSpans = [];
-let cast = null;
+let cast = [];
+for (const c of ground.citations) {
+  const src = String(c.source_id ?? "").replace(/^source:/, "").replace(/:chunk-\d+$/, "");
+  if (!src || castedSources.has(src)) continue;
+  castedSources.add(src);
+  try {
+    const body = fs.readFileSync(src, "utf8");
+    const found = discoverCast(body);
+    cast.push(...castSurfaces(found.cast));
+    console.log(`  cast from ${src.replace(/^.*\//, "")}: ${found.cast.length} referents (${found.gaps.length} gaps)`);
+  } catch { /* unreadable source — its referents simply are not nameable */ }
+}
 try {
   const { prior: coref } = loadCorefPrior("pg84-frankenstein");
   if (coref) {
-    // The cast IS the prior's referents plus their admitted surfaces. Without
-    // it the organ reports disagreements but asserts no swap — capitalization
-    // is not identity.
-    cast = (coref.referents ?? []).flatMap((r) => [
+    cast.push(...(coref.referents ?? []).flatMap((r) => [
       r.id, r.display,
       ...(r.surfaces ?? []).map((s) => s.surface),
-    ]).filter(Boolean).map((x) => String(x).toLowerCase());
+    ]).filter(Boolean).map((x) => String(x).toLowerCase()));
     const srcText = fs.readFileSync(new URL("../../pg84.txt", import.meta.url), "utf8");
     const sections = outlineOfText(srcText, { max: 60 }).headings;
     narratorSpans = earnNesting(srcText, sections, coref).spans;
   }
 } catch { /* no narrator prior for this corpus — reported as a gap below */ }
-console.log(`narrator frames resolved: ${narratorSpans.length} · cast: ${cast ? cast.length + " surfaces" : "none (no swap will be asserted)"}`);
+cast = [...new Set(cast)];
+console.log(`narrator frames resolved: ${narratorSpans.length} · cast: ${cast.length} surfaces (discovered + prior)`);
 
 // ── earn an outline, then fold ──
 const { sections, levels, closure, withheld, withheld_ids } = outlineFromEvidence(ground.citations, { maxSections: 5 });
