@@ -39,7 +39,61 @@
 // structure was discovered rather than imposed, and the passages that did not
 // survive are visible rather than quietly dropped.
 
+import fs from "node:fs";
+import path from "node:path";
 import { createTaskLog, append, projectTasks, deriveLevels, foldToWorkingSet, produce, ENTRY_KINDS, OPERATOR_BASIS } from "./task-log.js";
+import { checkAttribution } from "../vendor/eoreader5/packages/def/attribution.js";
+import { PRIORS_ROOT } from "./paths.js";
+
+// The morphology prior, loaded once. Absent => checkAttribution reports a gap
+// and degrades to suffix stemming, which provably misses every irregular.
+let _morph;
+function morphologyPrior() {
+  if (_morph !== undefined) return _morph;
+  const p = path.join(PRIORS_ROOT, "priors", "morphology-eng.json");
+  _morph = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null;
+  return _morph;
+}
+
+/**
+ * Check a draft the way the ENGINE checks it: who did what to whom.
+ *
+ * This replaces the word-overlap residual for the failure that residual could
+ * not see. Measured on real output: "prompting Frankenstein to grasp its
+ * throat and silence it" cites a passage that says "I grasped his throat" —
+ * inside the CREATURE's narrator span, so the act is the creature's and the
+ * claim hands it to Victor. Every name in the claim is in the passage and
+ * every content word is ordinary, so the residual scored it 0.29 and passed
+ * it. Agent and patient were swapped, and the swap is the whole meaning.
+ *
+ * `narratorSpans` is what makes "I" resolvable — a first-person subject is a
+ * surface fixed by scope, not by the token. Without it every "I" in the
+ * creature's tale is silently Victor.
+ */
+export async function attributionResidual(draft, citedPassages, { narratorSpans = [], aliases = [], cast = null } = {}) {
+  const evidence = citedPassages.map((p) => String(p.text ?? "")).join("\n\n");
+  if (!evidence.trim()) return { residual: null, gap: "no evidence text to check against", vetoes: [] };
+
+  const r = await checkAttribution(draft, evidence, {
+    narratorSpans,
+    aliases,
+    cast,
+    morphology: morphologyPrior(),
+  });
+
+  const hard = r.vetoes.filter((v) => v.severity === "hard");
+  return {
+    // A single misattribution is disqualifying, so this is not averaged — one
+    // swapped agent makes the paragraph false regardless of how much around it
+    // is correct.
+    residual: r.checked === 0 ? null : hard.length / Math.max(1, r.checked),
+    misattributions: hard,
+    vetoes: r.vetoes,
+    checked: r.checked,
+    gap: r.checked === 0 ? "no relation in this draft could be checked against the evidence" : null,
+    engineGaps: r.gaps,
+  };
+}
 
 /**
  * Earn an outline from evidence, rather than asking a model for headings.

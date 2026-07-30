@@ -14,7 +14,9 @@
 
 import fs from "node:fs";
 import { engineGroundQuery } from "../server/engine-ground.js";
-import { outlineFromEvidence, reviseDraft, fidelityResidual } from "../server/longform.js";
+import { outlineFromEvidence, reviseDraft, fidelityResidual, attributionResidual } from "../server/longform.js";
+import { loadCorefPrior, earnNesting } from "../server/borrowed-form.js";
+import { outlineOfText } from "../server/engine-ground.js";
 import { projectTasks } from "../server/task-log.js";
 
 const args = process.argv.slice(2);
@@ -58,6 +60,30 @@ if (!ground.citations.length) {
   process.exit(1);
 }
 
+// ── narrator frames, so "I" is resolvable ──
+//
+// A first-person subject is a surface fixed by SCOPE. Frankenstein nests:
+// without these spans every "I" in the creature's tale is silently Victor,
+// which is exactly the misattribution the essay shipped.
+let narratorSpans = [];
+let cast = null;
+try {
+  const { prior: coref } = loadCorefPrior("pg84-frankenstein");
+  if (coref) {
+    // The cast IS the prior's referents plus their admitted surfaces. Without
+    // it the organ reports disagreements but asserts no swap — capitalization
+    // is not identity.
+    cast = (coref.referents ?? []).flatMap((r) => [
+      r.id, r.display,
+      ...(r.surfaces ?? []).map((s) => s.surface),
+    ]).filter(Boolean).map((x) => String(x).toLowerCase());
+    const srcText = fs.readFileSync(new URL("../../pg84.txt", import.meta.url), "utf8");
+    const sections = outlineOfText(srcText, { max: 60 }).headings;
+    narratorSpans = earnNesting(srcText, sections, coref).spans;
+  }
+} catch { /* no narrator prior for this corpus — reported as a gap below */ }
+console.log(`narrator frames resolved: ${narratorSpans.length} · cast: ${cast ? cast.length + " surfaces" : "none (no swap will be asserted)"}`);
+
 // ── earn an outline, then fold ──
 const { sections, levels, closure, withheld, withheld_ids } = outlineFromEvidence(ground.citations, { maxSections: 5 });
 console.log(`outline produced in ${closure.steps} steps, halted by ${closure.halted_by}`);
@@ -98,8 +124,10 @@ for (const s of sections) {
   }
   const draft = await say(system, `Section: ${titles.get(s.task_id) ?? s.description}\n\nQuestion: ${question}`);
   drafts.set(s.task_id, draft);
-  const { residual } = fidelityResidual(draft, cited);
-  console.log(`  wrote ${s.task_id} (${draft.split(/\s+/).length} words, residual ${residual === null ? "n/a" : residual.toFixed(2)})`);
+  const att = await attributionResidual(draft, cited, { narratorSpans, cast });
+  const lex = fidelityResidual(draft, cited);
+  console.log(`  wrote ${s.task_id} (${draft.split(/\s+/).length} words · lexical ${lex.residual === null ? "n/a" : lex.residual.toFixed(2)} · attribution ${att.residual === null ? "n/a" : att.residual.toFixed(2)}${att.misattributions?.length ? ` · ${att.misattributions.length} MISATTRIBUTION` : ""})`);
+  for (const m of att.misattributions ?? []) console.log(`      ✗ ${m.message}`);
 }
 
 // ── re-read and revise ──
@@ -147,9 +175,19 @@ const dropped = [];
 const kept = [];
 for (const t of live) {
   const cited = evidenceBySection.get(t.task_id) ?? [];
-  const { residual } = fidelityResidual(drafts.get(t.task_id), cited);
-  if (residual === null || residual > CLOSE_AT) {
-    dropped.push({ t, residual });
+  const lex = fidelityResidual(drafts.get(t.task_id), cited);
+  const att = await attributionResidual(drafts.get(t.task_id), cited, { narratorSpans, cast });
+
+  // A single misattribution is disqualifying on its own. It does not average
+  // against the lexical score, because a paragraph that hands one character's
+  // act to another is false no matter how well the rest is grounded — and the
+  // lexical check scored exactly that paragraph 0.29 and published it.
+  if (att.misattributions?.length) {
+    dropped.push({ t, residual: lex.residual, why: att.misattributions[0].message });
+    continue;
+  }
+  if (lex.residual === null || lex.residual > CLOSE_AT) {
+    dropped.push({ t, residual: lex.residual, why: null });
   } else kept.push(t);
 }
 
@@ -182,9 +220,9 @@ out.push(`- ${withheld} section(s) were retrieved but withheld by the fold: ${wi
 out.push(`- the log holds ${log.entries.length} entries; superseded drafts are retained, not erased`);
 for (const g of ground.gaps ?? []) out.push(`- engine gap: ${g.reason || g}`);
 for (const d of dropped) {
-  out.push(`- DROPPED "${titleOf(d.t)}": ${d.residual === null ? "unmeasurable" : (d.residual * 100).toFixed(0) + "% of its content words were not carried by its evidence"} — not printed rather than printed unsupported`);
+  out.push(`- DROPPED "${titleOf(d.t)}": ${d.why ? "misattribution — " + d.why : (d.residual === null ? "unmeasurable" : (d.residual * 100).toFixed(0) + "% of its content words were not carried by its evidence")} — not printed rather than printed unsupported`);
 }
 
 fs.writeFileSync(OUT, out.join("\n"));
 console.log(`\nwrote ${OUT} · ${kept.length} section(s) kept, ${dropped.length} dropped for not closing · ${used.length} sources cited · ${((Date.now() - t0) / 1000).toFixed(0)}s`);
-for (const d of dropped) console.log(`  dropped "${titleOf(d.t)}" (residual ${d.residual === null ? "n/a" : d.residual.toFixed(2)})`);
+for (const d of dropped) console.log(`  dropped "${titleOf(d.t)}" ${d.why ? "— MISATTRIBUTION" : `(residual ${d.residual === null ? "n/a" : d.residual.toFixed(2)})`}`);
