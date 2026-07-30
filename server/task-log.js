@@ -157,9 +157,14 @@ export function projectTasks(log) {
     byId.set(e.task_id, {
       ...prior,
       ...payload,
-      // Evidence accumulates; it is admitted, not replaced.
-      evidence: e.kind === ENTRY_KINDS.EVIDENCE
-        ? [...prior.evidence, ...e.evidence]
+      // Evidence accumulates from ANY entry that carries it, not only from
+      // EVIDENCE-kind entries. Gating on kind meant a task proposed WITH its
+      // evidence — the normal case when the evidence is what produced the task
+      // in the first place — projected with an empty evidence list, and every
+      // section downstream had nothing to cite. Same failure shape as dropping
+      // the domain payload: the fold silently handed on an emptied structure.
+      evidence: e.evidence?.length
+        ? [...new Set([...prior.evidence, ...e.evidence])]
         : prior.evidence,
       result: e.kind === ENTRY_KINDS.RESULT ? e.result : prior.result,
       description: e.description ?? prior.description,

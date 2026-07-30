@@ -114,7 +114,9 @@ test("the mouth takes a handful and says what it withheld", () => {
   let log = createTaskLog();
   for (let i = 0; i < 12; i++) {
     log = append(log, propose(`t${i}`));
-    log = append(log, { kind: ENTRY_KINDS.EVIDENCE, task_id: `t${i}`, evidence: Array(i).fill("span") });
+    // Distinct span ids: evidence is DEDUPED on projection, because the same
+    // span admitted twice is one piece of evidence, not two.
+    log = append(log, { kind: ENTRY_KINDS.EVIDENCE, task_id: `t${i}`, evidence: Array.from({ length: i }, (_, j) => `span:${i}:${j}`) });
   }
 
   const { working, withheld, withheld_ids } = foldToWorkingSet(projectTasks(log), { k: 7 });
@@ -123,4 +125,15 @@ test("the mouth takes a handful and says what it withheld", () => {
   assert.equal(withheld_ids.length, 5);
   // Ranked by evidence, so the best-evidenced task reaches the mouth.
   assert.equal(working[0].task_id, "t11");
+});
+
+test("evidence attached at propose time survives projection", () => {
+  // Regression: evidence was accumulated only from EVIDENCE-kind entries, so a
+  // task proposed WITH its evidence — the normal case when the evidence is what
+  // produced the task — projected empty, and every section downstream had
+  // nothing to cite.
+  let log = createTaskLog();
+  log = append(log, propose("t", { evidence: ["span:a", "span:b"] }));
+  const [t] = projectTasks(log);
+  assert.deepEqual(t.evidence, ["span:a", "span:b"]);
 });
