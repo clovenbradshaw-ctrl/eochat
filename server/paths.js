@@ -4,13 +4,13 @@
 // absolute paths and reached for `../eoPriors` by walking up out of its own
 // directory. Both assumed one developer's checkout: the first breaks on any
 // other machine, and the second breaks the moment the file moves. This repo
-// vendors its dependencies as pinned submodules under `vendor/`, so the
-// defaults below are repo-relative and correct for any clone.
+// keeps its live engine and priors as sibling checkouts, so the defaults
+// below are workspace-relative and correct for any clone of the workspace.
 //
-// Every value is overridable by environment variable, because the submodule is
-// the DEFAULT source of engine/priors, not the only legal one — a developer
-// working on eoreader5 itself will want to point EOChat at their live checkout
-// without editing code.
+// Every value is overridable by environment variable, because the sibling
+// checkout is the DEFAULT source of engine/priors, not the only legal one — a
+// developer working on the engine itself will want to point EOChat at their
+// live checkout without editing code.
 
 import path from "node:path";
 import fs from "node:fs";
@@ -21,9 +21,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** The eochat repo root — one level up from server/. */
 export const REPO_ROOT = path.resolve(__dirname, "..");
 
-/** Pinned engine checkout. Override with EOCHAT_ENGINE_PATH. */
+/** Live engine checkout. Override with EOCHAT_ENGINE_PATH. */
 export const ENGINE_ROOT = path.resolve(
-  process.env.EOCHAT_ENGINE_PATH || path.join(REPO_ROOT, "vendor", "eoreader5")
+  process.env.EOCHAT_ENGINE_PATH || path.resolve(REPO_ROOT, "..", "eoreader6")
 );
 
 /** Pinned priors checkout. Override with EOCHAT_PRIORS_PATH. */

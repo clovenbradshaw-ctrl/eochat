@@ -36,7 +36,7 @@ import {
 // This way a v1 host still links and the fold path reports a typed gap.
 import * as corpusFacade from "@eoreader/host/corpus";
 import { INDIVIDUATION_TYPES } from "@eoreader/engine/referents";
-import { loadCorefPrior, surfaceMatcher } from "./priors-bridge.js";
+import { loadCorefPrior, surfaceMatcher, activatePriors } from "./priors-bridge.js";
 
 // v2 is additive over v1 — it adds documentIds/documentText/sessionOutline/
 // sessionReferents/sessionPivot and changes no signature this bridge calls
@@ -126,14 +126,62 @@ function sourceMatcher(sourceFilter) {
   return (sp) => !!sp.source_id && bases.some((b) => sp.source_id.includes(b));
 }
 
+// ── Prior steering ──
+//
+// Retrieval is widened by witness-tier coref priors before searchSpans runs.
+// A query that names "the creature" activates the pg84-frankenstein prior's
+// creature referent, and its OTHER surfaces ("the monster", "the wretch", …)
+// are added to the search terms, so a passage that says "the monster" scores
+// against a query that said "creature". This is the engine's canonical path
+// (presence → referents → per-text priors) exercised through the same bridge
+// holonic-task.js uses; nothing here resolves identity itself, and a prior's
+// surfaces never appear in any prompt as rules — they only steer which spans
+// the engine returns (AGENTS.md: "priors steer retrieval; never model
+// context").
+//
+// Only expansion surfaces join the query — forms already in the query are
+// already there. A referent that did NOT match the query contributes nothing,
+// so a query about "Pierre" is never widened toward Frankenstein's creature.
+// A pool whose sources have no coref priors (or a query that activates none)
+// returns the query unchanged, and `priorWidening` is null so a caller can
+// tell steering happened from a straight lexical search.
+function widenQueryWithPriors(query, poolName) {
+  const text = String(query ?? "");
+  if (!text.trim()) return { searchQuery: text, priorWidening: null };
+  const p = pool(poolName);
+  const widening = [];
+  for (const [sourcePath, info] of p.sources) {
+    const prior = loadCorefPrior(info?.id || sourcePath);
+    if (!prior || prior.gap) continue;
+    const { activated } = activatePriors(text, prior);
+    for (const a of activated || []) {
+      if (!a.expansionSurfaces?.length) continue;
+      widening.push({
+        referentId: a.referentId,
+        display: a.display,
+        priorId: a.priorId,
+        sourceId: sourcePath,
+        surfaces: a.expansionSurfaces,
+      });
+    }
+  }
+  if (!widening.length) return { searchQuery: text, priorWidening: null };
+  return {
+    searchQuery: [...text.split(/\s+/).filter(Boolean), ...widening.flatMap((w) => w.surfaces)].join(" "),
+    priorWidening: widening,
+  };
+}
+
 export function engineSearch(query, limit = 10, { maxChars = 800, source: sourceFilter, pool: poolName = DEFAULT_POOL } = {}) {
   const s = ensureSession(poolName);
-  let { spans, gaps } = searchSpans(s, { query, limit: Math.min(limit, 40) });
+  const { searchQuery, priorWidening } = widenQueryWithPriors(query, poolName);
+  let { spans, gaps } = searchSpans(s, { query: searchQuery, limit: Math.min(limit, 40) });
   const match = sourceMatcher(sourceFilter);
   if (match) spans = spans.filter(match);
   const units = spanUnits(s, spans);
   return {
     query,
+    priorWidening,
     pool: poolName,
     total: spans.length,
     passages: spans.map((sp, i) => {
@@ -237,10 +285,32 @@ function buildCitedContext(kept, foldResult, gaps) {
 //   rather than accepting a silently-lossy default.
 export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit = 30, source: sourceFilter, pool: poolName = DEFAULT_POOL } = {}) {
   const s = ensureSession(poolName);
-  let { spans, gaps } = searchSpans(s, { query, limit });
+  const { searchQuery, priorWidening } = widenQueryWithPriors(query, poolName);
+  let { spans, gaps } = searchSpans(s, { query: searchQuery, limit });
   const match = sourceMatcher(sourceFilter);
   if (match) spans = spans.filter(match);
-  const units = spanUnits(s, spans);
+  let units = spanUnits(s, spans);
+
+  // When a prior activated, prefer that referent's source on EQUAL score.
+  // foldSpans breaks ties by insertion order, and insertion order is
+  // ingestion order — so in a pool holding several books, the biggest,
+  // first-ingested one won every tie and its noise passages slid into the
+  // fold ahead of the source the reader actually named. The reader's words
+  // activated a prior whose surfaces are in play; on equal evidence the
+  // fold should look there first. This changes NO score — a prior-activated
+  // source still must earn its place — it only decides the order the fold
+  // visits equal-score passages.
+  if (priorWidening?.length) {
+    const activatedPaths = priorWidening.map((w) => w.sourceId).filter(Boolean);
+    const isActivated = (sourceId) =>
+      activatedPaths.some((p) => String(sourceId || "").includes(String(p)));
+    units.sort((a, b) => {
+      const sc = (b.score || 0) - (a.score || 0);
+      if (sc !== 0) return sc;
+      return (isActivated(b.meta?.source_id) ? 1 : 0) - (isActivated(a.meta?.source_id) ? 1 : 0);
+    });
+  }
+
   const foldResult = foldSpans(s, { units, query, tokenBudget: budget, maxUnits });
 
   // Extract the full mechanical citation record for every kept span.
@@ -302,6 +372,7 @@ export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit =
 
   return {
     query,
+    priorWidening,
     context,
     citations: kept,
     retrieved,

@@ -2498,6 +2498,10 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
         text: c.text,
       })),
       gaps: groundResult.gaps || [],
+      // Which witness-tier coref priors widened this search and with which
+      // surface forms — the reader sees what shaped retrieval, never a rule
+      // the model was told (priors steer the engine, not the prompt).
+      priorWidening: groundResult.priorWidening || null,
     });
     return groundResult;
   };
