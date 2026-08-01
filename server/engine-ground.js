@@ -283,13 +283,34 @@ function buildCitedContext(kept, foldResult, gaps) {
 //   score.  The text is the EXACT admitted value — not a preview, not a
 //   reconstruction.  Callers that need a shorter snippet truncate explicitly
 //   rather than accepting a silently-lossy default.
-export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit = 30, source: sourceFilter, pool: poolName = DEFAULT_POOL } = {}) {
+// searchSpans' score is corpus-wide rarity-weighted coverage (eoreader6
+// packages/host/corpus.js), not a fixed-scale probability — but its floor and
+// ceiling are measured on the real corpus this bridge serves. A query sharing
+// no real content word with the corpus (e.g. "who is neil armstrong" against
+// War and Peace) scores ~0.10 — both matched words are near-ubiquitous, so
+// their combined weight is small next to the unmatchable rare terms padding
+// the denominator. A query that shares even one genuine content word scores
+// 0.33+ (measured: "who is Pierre Bezukhov" — "bezukhov" doesn't occur in
+// this PG edition at all, yet the surviving "pierre" match alone still clears
+// 0.32). 0.2 sits in the measured gap between those two regimes. Below it,
+// the fold was about to hand the model a citation number for text NOT worth
+// citing — the failure mode this constant exists to close: an off-topic query
+// retrieved a real (if irrelevant) span, and the model, told a citation was
+// found, invented plot detail and attributed it to that span's number.
+const MIN_RELEVANCE_SCORE = 0.2;
+
+export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit = 30, minScore = MIN_RELEVANCE_SCORE, source: sourceFilter, pool: poolName = DEFAULT_POOL } = {}) {
   const s = ensureSession(poolName);
   const { searchQuery, priorWidening } = widenQueryWithPriors(query, poolName);
   let { spans, gaps } = searchSpans(s, { query: searchQuery, limit });
   const match = sourceMatcher(sourceFilter);
   if (match) spans = spans.filter(match);
-  let units = spanUnits(s, spans);
+  // Below the floor, a span is noise wearing a citation number, not evidence
+  // (see MIN_RELEVANCE_SCORE). Filtered here, before folding, so `retrieved`
+  // below still reports these spans (kept: false) for transparency — `total`
+  // stays an honest count of everything search found, only the fold's
+  // citation numbers get withheld from what didn't earn them.
+  let units = spanUnits(s, spans).filter((u) => (u.score ?? 0) >= minScore);
 
   // When a prior activated, prefer that referent's source on EQUAL score.
   // foldSpans breaks ties by insertion order, and insertion order is
@@ -910,14 +931,63 @@ function saveRecycleBin() {
 
 loadRecycleBin();
 
-export function engineDeleteSource(sourceKey, { pool: poolName = DEFAULT_POOL } = {}) {
+// Does this span belong to the document registered under `sourceKey`?
+//
+// The two ingest paths key `p.sources` differently — engineIngestFile by the
+// bare file path, engineIngestText by a full `source:...` id — while spans
+// always carry `<document id>:chunk-N`. Stripping the chunk suffix and
+// comparing against both spellings covers each without a substring test.
+// The predicate this replaced asked `sourceKey.includes(rec.source_id)`,
+// which is backwards: the key is the SHORTER string, so it never matched and
+// every "deleted" source kept all of its spans in the retrieval index —
+// still searchable, still citable, still answering questions after the reader
+// removed it. spansRemoved: 0 on every delete was the visible symptom.
+function spanBelongsToSource(spanSourceId, sourceKey) {
+  if (!spanSourceId) return false;
+  const docId = String(spanSourceId).replace(/:chunk-\d+$/, "");
+  return docId === sourceKey || docId === `source:${sourceKey}`;
+}
+
+// Resolve a caller's source reference against a pool's registry — the same
+// exact-first, ambiguity-is-an-error discipline as resolveDocument, over
+// `p.sources` rather than the span-derived catalog (a source whose spans were
+// already removed must still be addressable). Callers hold the display name
+// /api/sources hands them; the registry is keyed by path or document id.
+function resolveSourceKey(p, ref) {
+  const wanted = String(ref ?? "").trim();
+  if (!wanted) return { error: "missing 'source'" };
+  const entries = Array.from(p.sources.entries()).map(([key, info]) => ({
+    key,
+    info,
+    base: key.replace(/^.*[/\\]/, ""),
+  }));
+  if (!entries.length) return { error: `no sources ingested in pool "${p.name}"` };
+
+  for (const match of [
+    (e) => e.key === wanted,
+    (e) => e.info.name === wanted,
+    (e) => e.base === wanted,
+  ]) {
+    const hits = entries.filter(match);
+    if (hits.length === 1) return { key: hits[0].key, info: hits[0].info };
+    if (hits.length > 1) {
+      return { error: `ambiguous source "${wanted}": ${hits.map((h) => h.key).join(", ")}` };
+    }
+  }
+  return {
+    error: `Source not found: ${wanted}. Known: ${entries.map((e) => e.info.name).join(", ")}`,
+  };
+}
+
+export function engineDeleteSource(sourceRef, { pool: poolName = DEFAULT_POOL } = {}) {
   const p = pool(poolName);
-  const info = p.sources.get(sourceKey);
-  if (!info) return { error: `Source not found: ${sourceKey}` };
+  const resolved = resolveSourceKey(p, sourceRef);
+  if (resolved.error) return { error: resolved.error };
+  const { key: sourceKey, info } = resolved;
 
   const deletedSpans = [];
   for (const [spanId, rec] of p.session.spans) {
-    if (rec.source_id && sourceKey.includes(rec.source_id) || rec.source_id === sourceKey) {
+    if (spanBelongsToSource(rec.source_id, sourceKey)) {
       deletedSpans.push({ span_id: spanId, source_id: rec.source_id, byte_start: rec.byte_start, byte_end: rec.byte_end, text: rec.text, score: rec.score });
     }
   }
@@ -960,9 +1030,39 @@ export function engineListRecycleBin() {
   }));
 }
 
-export function engineRestoreSource(sourceKey, { pool: poolName } = {}) {
-  const entry = recycleBin.get(sourceKey);
-  if (!entry) return { error: `Deleted source not found: ${sourceKey}` };
+// Same resolution as resolveSourceKey, over the recycle bin. A reader who can
+// delete "pg84.txt" by name must be able to restore it by the same name; the
+// bin is keyed by the internal source key, which the UI never sees.
+function resolveDeletedKey(ref) {
+  const wanted = String(ref ?? "").trim();
+  if (!wanted) return { error: "missing 'source'" };
+  const entries = Array.from(recycleBin.values()).map((entry) => ({
+    entry,
+    base: entry.sourceKey.replace(/^.*[/\\]/, ""),
+  }));
+  if (!entries.length) return { error: "recycle bin is empty" };
+
+  for (const match of [
+    (e) => e.entry.sourceKey === wanted,
+    (e) => e.entry.info.name === wanted,
+    (e) => e.base === wanted,
+  ]) {
+    const hits = entries.filter(match);
+    if (hits.length === 1) return { entry: hits[0].entry };
+    if (hits.length > 1) {
+      return { error: `ambiguous source "${wanted}": ${hits.map((h) => h.entry.sourceKey).join(", ")}` };
+    }
+  }
+  return {
+    error: `Deleted source not found: ${wanted}. In bin: ${entries.map((e) => e.entry.info.name).join(", ")}`,
+  };
+}
+
+export function engineRestoreSource(sourceRef, { pool: poolName } = {}) {
+  const resolved = resolveDeletedKey(sourceRef);
+  if (resolved.error) return { error: resolved.error };
+  const { entry } = resolved;
+  const sourceKey = entry.sourceKey;
 
   const p = pool(poolName || entry.info.pool || DEFAULT_POOL);
   p.sources.set(entry.sourceKey, { ...entry.info });
@@ -990,10 +1090,11 @@ export function engineRestoreSource(sourceKey, { pool: poolName } = {}) {
   };
 }
 
-export function enginePurgeSource(sourceKey) {
-  const entry = recycleBin.get(sourceKey);
-  if (!entry) return { error: `Deleted source not found: ${sourceKey}` };
-  recycleBin.delete(sourceKey);
+export function enginePurgeSource(sourceRef) {
+  const resolved = resolveDeletedKey(sourceRef);
+  if (resolved.error) return { error: resolved.error };
+  const { entry } = resolved;
+  recycleBin.delete(entry.sourceKey);
   saveRecycleBin();
   return {
     path: entry.sourceKey,

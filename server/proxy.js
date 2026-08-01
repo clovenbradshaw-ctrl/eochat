@@ -746,6 +746,65 @@ function validateCitations(content, maxCitation) {
   });
 }
 
+// ── Mechanical fidelity check ──
+//
+// The grounding citations are the only text this server can vouch for — the
+// exact admitted bytes from the engine's span registry
+// (specs/mechanical-citation-surface.md). The model's own prose is
+// generation, always potentially unfaithful, and nothing previously checked
+// whether a quotation mark in that prose actually reproduced the source it
+// sat next to. Measured failure: asked for "verbatim" text, the model wrote
+// a fluent paragraph inventing plot specifics (a date, a place) not in any
+// retrieved passage, framed as a quotation, and numbered it [1] against a
+// real but unrelated citation — a fabrication indistinguishable from a real
+// quote by reading tone alone.
+//
+// This check is model-blind BY CONSTRUCTION, the same way validateCitations
+// above is: it runs after the model's answer is complete, compares against
+// citations[] the engine computed before the model ever ran, and its verdict
+// is never fed back into the prompt. The model cannot see or influence it,
+// and cannot satisfy it except by actually quoting the source — the
+// comparison is literal substring matching (after whitespace/quote-style
+// normalization), not a judgment call the model could talk its way past.
+const QUOTE_RE = /[“"]([^“”"]{20,}?)[”"]/g;
+
+function normalizeForFidelity(s) {
+  return String(s || "")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Every double-quoted run of 20+ chars in the answer is treated as a claimed
+// verbatim quote. Short quoted fragments (a name, a single word) are skipped —
+// too little text to mean "verbatim" rather than ordinary emphasis, and
+// short strings are near-guaranteed to appear as a substring somewhere by
+// chance, which would make "verified" meaningless.
+function verifyQuotedFidelity(content, citations) {
+  const quotes = [];
+  let m;
+  QUOTE_RE.lastIndex = 0;
+  while ((m = QUOTE_RE.exec(content || ""))) quotes.push(m[1]);
+  if (!quotes.length) return { quotesChecked: 0, verified: 0, unverified: [] };
+
+  const haystacks = citations.map((c) => ({
+    index: c.index,
+    source_id: c.source_id,
+    norm: normalizeForFidelity(c.text),
+  }));
+
+  const unverified = [];
+  let verified = 0;
+  for (const q of quotes) {
+    const normQ = normalizeForFidelity(q);
+    const hit = haystacks.find((c) => c.norm.includes(normQ));
+    if (hit) verified++;
+    else unverified.push({ quote: q.length > 300 ? q.slice(0, 300) + "…" : q });
+  }
+  return { quotesChecked: quotes.length, verified, unverified };
+}
+
 // ── Context assembly ──
 
 const tok = (t) => Math.ceil((t || "").length / 3.5);
@@ -2195,7 +2254,7 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
       const body = {
         model,
         messages,
-        stream: false,
+        stream: effectiveTools.length === 0,
         options: {
           temperature: 0.7,
           num_predict: 4096,
@@ -2219,19 +2278,62 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
       console.error(`[proxy] llm_call round=${round} model=${model} tools=${effectiveTools.length} msgs=[${messages.map(m => `${m.role}:${(m.content || "").length}`).join(" ")}]`);
       if (onEvent) onEvent({ type: "llm_call", round, tools: effectiveTools.length, model });
 
-      const resp = await withRetry(() => safeFetch(`${TARGET}/api/chat`, {
+      const callOllama = () => safeFetch(`${TARGET}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      }, 120000), { label: "Ollama chat", maxRetries: 2 });
+      }, 120000);
 
-      if (!resp.ok) {
-        const errText = await resp.text().catch(() => resp.statusText);
-        throw new Error(`Ollama ${resp.status}: ${errText}`);
+      let msg;
+      if (effectiveTools.length === 0) {
+        // Token-stream the answer so the reader watches it arrive word by
+        // word instead of a silent multi-second gap ending in one `response`
+        // burst. The UI's `content` handler appends deltas incrementally; a
+        // single trailing `response` with the full text still fires, so any
+        // consumer keyed on `response` is unchanged. (The tool loop cannot
+        // stream: tool calls only appear at the end of an ollama stream, so
+        // the loop's salvage-and-recall machinery needs the whole message.)
+        const streamResp = await withRetry(callOllama, { label: "Ollama chat (stream)", maxRetries: 2 });
+        if (!streamResp.ok) {
+          const errText = await streamResp.text().catch(() => streamResp.statusText);
+          throw new Error(`Ollama ${streamResp.status}: ${errText}`);
+        }
+        const reader = streamResp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "", content = "", ollamaErr = null;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() || "";
+          for (const line of lines) {
+            // Ollama's /api/chat streams bare newline-delimited JSON — no
+            // "data:" prefix (that is the OpenAI /v1 shape). Tolerate either.
+            const t = line.trim().replace(/^data:\s*/, "");
+            if (!t) continue;
+            let j;
+            try { j = JSON.parse(t); } catch { continue; }
+            if (j.error) { ollamaErr = j.error; break; }
+            const delta = j.message?.content || "";
+            if (delta) {
+              content += delta;
+              if (onEvent) onEvent({ type: "content", content: delta, model });
+            }
+          }
+          if (ollamaErr) break;
+        }
+        if (ollamaErr) throw new Error(`Ollama: ${ollamaErr}`);
+        msg = { content };
+      } else {
+        const resp = await withRetry(callOllama, { label: "Ollama chat", maxRetries: 2 });
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => resp.statusText);
+          throw new Error(`Ollama ${resp.status}: ${errText}`);
+        }
+        const data = await resp.json();
+        msg = data.message || {};
       }
-
-      const data = await resp.json();
-      const msg = data.message || {};
 
       // Smaller local models routinely emit a tool call as prose — a bare or
       // fenced {"name":…,"arguments":…} in `content` with `tool_calls` empty.
@@ -2377,6 +2479,27 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
     effectiveTools = all.filter(t => webTools.has(t.function?.name || t.name || ""));
   }
 
+  // verbatim_search / verbatim_read are mechanical — byte-offset-anchored
+  // reads with no model step (specs/mechanical-citation-surface.md). The
+  // grounding system prompt injected below unconditionally tells the model
+  // "you have access to tools... use verbatim_search" on EVERY grounded turn,
+  // not just when a caller opts into the full tool list. Without this, that
+  // promise was false whenever `tools` wasn't passed: the model had no way to
+  // fulfil the instruction it was just given, so a "give me verbatim text"
+  // request fell back to freehand-quoting the folded context — observed
+  // producing a passage with an invented plot detail under a real citation
+  // number that pointed at unrelated source text. These two cost nothing to
+  // always include; unlike the other 23, they carry no prompt weight beyond
+  // their own schema.
+  const haveToolNames = new Set(effectiveTools.map(t => t.function?.name || t.name));
+  const missingVerbatim = ["verbatim_search", "verbatim_read"].filter((n) => !haveToolNames.has(n));
+  if (missingVerbatim.length) {
+    const all = await getAllTools();
+    effectiveTools = effectiveTools.concat(
+      all.filter((t) => missingVerbatim.includes(t.function?.name || t.name || "")),
+    );
+  }
+
   sendSSE("tools_available", { count: effectiveTools.length });
 
   // Engine-grounded context: search + fold before the LLM sees anything.
@@ -2391,6 +2514,12 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
   // message, so a web-sourced passage is numbered and cited by the identical
   // mechanism as a file-sourced one.
   let groundedSystemMsg = null;
+  // The [1], [2]... citation records from the most recent grounding pass, in
+  // display order — what verifyQuotedFidelity checks the model's quotes
+  // against once the answer is complete. Kept separate from
+  // groundedSystemMsg (which only tracks a count) because the fidelity check
+  // needs the actual verbatim text, not just how many citations exist.
+  let lastCitations = [];
   const groundNow = () => {
     if (query === null) return null;
     const groundResult = engineGroundQuery(query, {
@@ -2410,13 +2539,22 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
       // one. It may still answer from its own knowledge — that is useful — but
       // the answer is MODEL-tier, and saying so is the whole contract. A
       // bracketed number here would be indistinguishable from a real citation.
+      // The reader is told outside the answer (a UI banner driven by the
+      // `grounding` SSE event below, not by anything the model writes) when a
+      // turn is ungrounded. The model itself must not narrate this — no
+      // preamble about lacking sources, no mention of an index, retrieval, or
+      // "source material". It just answers, as itself. Telling the model to
+      // self-disclose here produced exactly that meta-commentary in the
+      // answer text (observed: "According to the source material, I don't
+      // currently possess direct knowledge about..." — echoing this prompt's
+      // own wording back to the reader).
       const ungroundedSystem = warming
-        ? `The document index is still loading, so no source passages are available for this question yet. ` +
-          `Tell the reader the index is still warming up and offer to answer again in a moment. ` +
-          `Do NOT use bracketed citations like [1] — there are no passages to cite.`
-        : `No passage in the reader's sources matches this question. ` +
-          `Answer from your own general knowledge, and open with one short sentence saying plainly ` +
-          `that this is not from their sources. Do NOT use bracketed citations like [1], [2] — ` +
+        ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+          `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
+          `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
+        : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+          `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
+          `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
           `there are no source passages, and a bracket would look like a citation that does not exist.`;
 
       if (groundedSystemMsg) {
@@ -2428,6 +2566,7 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
         else messages.unshift(groundedSystemMsg);
       }
       groundedSystemMsg._citationCount = 0;
+      lastCitations = [];
 
       sendSSE("grounding", {
         sourceCount: 0,
@@ -2450,16 +2589,17 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
       : "";
 
     const systemContext =
-      `You are answering a question grounded in SOURCE MATERIAL below. ` +
+      `Answer the reader's question using the material below, citing the passages you draw on ` +
+      `with bracketed numbers like [1], [2], etc. ` +
       citationRange +
-      `Cite specific passages using bracketed numbers like [1], [2], etc. ` +
-      `Do NOT invent facts beyond what the sources contain. If the sources ` +
-      `do not contain the answer, say so honestly.\n\n` +
-      `IMPORTANT: You have access to tools. If the source material above is ` +
+      `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
+      `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
+      `"the provided text", "your sources", or similar; just answer directly.\n\n` +
+      `IMPORTANT: You have access to tools. If the material above is ` +
       `insufficient, use verbatim_search to find more exact passages from ` +
       `ingested documents, or search_memory for relevant context. Do NOT say ` +
       `"no information" without first trying these tools.\n\n` +
-      `--- Source material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
+      `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
       `${groundResult.context}`;
 
     if (groundedSystemMsg) {
@@ -2472,6 +2612,7 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
       else messages.unshift(groundedSystemMsg);
     }
     groundedSystemMsg._citationCount = groundResult.citations.length;
+    lastCitations = groundResult.citations.map((c, i) => ({ index: i + 1, source_id: c.source_id, text: c.text }));
 
     sendSSE("grounding", {
       sourceCount: groundResult.total,
@@ -2559,6 +2700,14 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
     const content = maxCitation > 0
       ? validateCitations(rawContent, maxCitation)
       : rawContent;
+
+    // Model-blind fidelity check: does every claimed quotation in the answer
+    // actually occur in the cited source's real bytes? Sent as its own event,
+    // ahead of "done", so a client can never conflate "the model produced
+    // text" with "the text was verified" — the two are structurally separate
+    // events, one generated, one computed from ground truth.
+    const fidelity = verifyQuotedFidelity(content, lastCitations);
+    if (fidelity.quotesChecked > 0) sendSSE("fidelity", fidelity);
 
     sendSSE("done", { content });
 
@@ -2685,9 +2834,18 @@ const server = http.createServer((req, res) => {
     req.on("data", c => { body += c; });
     req.on("end", async () => {
       try {
-        const { sessionId, role, content } = JSON.parse(body);
-        const result = await discourse.addMessage(sessionId || "default", role, content);
-        store.ingest(content, role, { session: sessionId || "default" });
+        // `session` is the spelling every other surface uses — the ?session=
+        // query param on the reads, args.session on the tools, data.session on
+        // /api/chat. This endpoint alone read `sessionId`, so a client that
+        // posted {session: "x"} silently wrote into "default": the message
+        // landed in a conversation the caller never named, and the read side
+        // reported the named session as empty. `sessionId` stays accepted so
+        // existing callers keep working.
+        const parsed = JSON.parse(body);
+        const sessionId = parsed.session || parsed.sessionId || "default";
+        const { role, content } = parsed;
+        const result = await discourse.addMessage(sessionId, role, content);
+        store.ingest(content, role, { session: sessionId });
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(result));
       } catch (err) {
@@ -2704,10 +2862,14 @@ const server = http.createServer((req, res) => {
     req.on("data", c => { body += c; });
     req.on("end", async () => {
       try {
-        const { sessionId } = JSON.parse(body);
-        await discourse.clearSession(sessionId || "default");
+        // Same `session`/`sessionId` mismatch as /api/discourse/message, and
+        // more costly here: a client asking to clear session "x" wiped
+        // "default" instead — someone else's conversation, irreversibly.
+        const parsed = JSON.parse(body);
+        const sessionId = parsed.session || parsed.sessionId || "default";
+        await discourse.clearSession(sessionId);
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ cleared: true }));
+        res.end(JSON.stringify({ cleared: true, session: sessionId }));
       } catch (err) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));

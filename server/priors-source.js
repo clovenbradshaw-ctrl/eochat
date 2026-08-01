@@ -47,6 +47,10 @@ const RAW_INGEST_MAX_BYTES = 2 * 1024 * 1024;
 // way to the right artifact, not for replacing it.
 const MAX_TABLE_ROWS = 40;
 const MAX_LIST_ITEMS = 30;
+// Object keys are the same kind of "finding your way" surface as table rows:
+// an artifact keyed by surface form (e.g. morphology-eng's `irregular` has
+// ~45k entries) must not render itself into a card as large as the source.
+const MAX_OBJECT_KEYS = 200;
 
 // ── Catalog ──
 
@@ -218,6 +222,7 @@ function fmtScalar(v) {
 }
 
 function cellFor(v) {
+  if (v === undefined || v === null) return "—";
   if (isScalar(v)) return fmtScalar(v).replace(/\|/g, "\\|").replace(/\n/g, " ");
   if (Array.isArray(v)) return `[${v.length} items]`;
   return `{${Object.keys(v).slice(0, 4).join(", ")}}`;
@@ -293,9 +298,13 @@ function renderNode(key, value, depth, ctx) {
   const out = [];
   const heading = "#".repeat(Math.min(depth + 2, 6));
   out.push(`${heading} ${key}`, "");
-  if (scalars.length) {
-    out.push(...scalars.map(([k, v]) => `- **${k}**: ${fmtScalar(v)}`), "");
+  const scalarShown = scalars.slice(0, MAX_OBJECT_KEYS);
+  for (const [k, v] of scalarShown) out.push(`- **${k}**: ${fmtScalar(v)}`);
+  if (scalars.length > scalarShown.length) {
+    out.push(`- _… ${scalars.length - scalarShown.length} more scalar field(s) not rendered — read \`${ctx.rel}\`._`);
+    ctx.truncations.push(`${key}: ${scalars.length - scalarShown.length} of ${scalars.length} scalar fields not rendered`);
   }
+  if (scalars.length) out.push("");
   // Depth guard: past three levels the projection stops being readable and
   // the raw file is the better artifact to send the reader to.
   if (depth >= 3) {
@@ -305,7 +314,16 @@ function renderNode(key, value, depth, ctx) {
     }
     return out;
   }
-  for (const [k, v] of complex) out.push(...renderNode(k, v, depth + 1, ctx));
+  const complexShown = complex.slice(0, MAX_OBJECT_KEYS);
+  for (const [k, v] of complexShown) {
+    // Append by loop, never `body.push(...)`: a node with tens of thousands
+    // of sibling keys would otherwise blow the call stack on the spread.
+    for (const line of renderNode(k, v, depth + 1, ctx)) out.push(line);
+  }
+  if (complex.length > complexShown.length) {
+    out.push(`_… ${complex.length - complexShown.length} more nested field(s) not rendered — read \`${ctx.rel}\`._`, "");
+    ctx.truncations.push(`${key}: ${complex.length - complexShown.length} of ${complex.length} nested fields not rendered`);
+  }
   return out;
 }
 
@@ -338,9 +356,25 @@ export function renderCard(item, json = readPriorJson(item).json) {
     "",
   );
   if (scalars.length) {
-    body.push(`## Declared`, "", ...scalars.map(([k, v]) => `- **${k}**: ${fmtScalar(v)}`), "");
+    body.push(`## Declared`, "");
+    const shown = scalars.slice(0, MAX_OBJECT_KEYS);
+    for (const [k, v] of shown) body.push(`- **${k}**: ${fmtScalar(v)}`);
+    if (scalars.length > shown.length) {
+      body.push(`- _… ${scalars.length - shown.length} more top-level scalar field(s) not rendered — read \`${ctx.rel}\`._`);
+      ctx.truncations.push(`${scalars.length - shown.length} of ${scalars.length} top-level scalar fields not rendered`);
+    }
+    body.push("");
   }
-  for (const [k, v] of complex) body.push(...renderNode(k, v, 1, ctx));
+  const complexShown = complex.slice(0, MAX_OBJECT_KEYS);
+  for (const [k, v] of complexShown) {
+    // Append by loop, never `body.push(...)`: a top-level field with tens of
+    // thousands of sibling keys would otherwise blow the call stack.
+    for (const line of renderNode(k, v, 1, ctx)) body.push(line);
+  }
+  if (complex.length > complexShown.length) {
+    body.push(`_… ${complex.length - complexShown.length} more top-level nested field(s) not rendered — read \`${ctx.rel}\`._`, "");
+    ctx.truncations.push(`${complex.length - complexShown.length} of ${complex.length} top-level nested fields not rendered`);
+  }
 
   const gaps = [...ctx.truncations];
   if (item.gap) gaps.unshift(item.gap);
