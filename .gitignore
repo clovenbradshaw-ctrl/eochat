@@ -1,5 +1,5 @@
 node_modules/
-memory/*.jsonl
+memory/
 chats/
 audit-output/
 .DS_Store
