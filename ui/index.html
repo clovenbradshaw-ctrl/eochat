@@ -52,8 +52,8 @@
 </style>
 </helmet>
 
-<div style="height:100svh; box-sizing:border-box; padding:40px 32px; font-family:'Instrument Sans', system-ui, sans-serif; color:#1B1A17; display:flex; flex-direction:column; overflow:hidden;">
-<div style="width:100%; max-width:1180px; flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overflow:hidden; position:relative;">
+<div style="height:100svh; box-sizing:border-box; padding:16px; font-family:'Instrument Sans', system-ui, sans-serif; color:#1B1A17; display:flex; flex-direction:column; overflow:hidden;">
+<div style="width:100%; max-width:100%; flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overflow:hidden; position:relative;">
 
   <div style="display:flex; align-items:center; justify-content:space-between; padding:0 2px;">
     <div style="display:flex; align-items:center; gap:10px; position:relative;">
@@ -267,7 +267,7 @@
 
           <sc-for list="{{ turns }}" as="turn">
             <div style="display:flex; flex-direction:column; gap:8px;">
-              <div style="align-self:flex-end; max-width:74%; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+              <div style="align-self:flex-end; max-width:96%; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
                 <sc-if value="{{ turn.hasAttachments }}">
                   <div style="display:flex; flex-wrap:wrap; gap:5px; justify-content:flex-end;">
                     <sc-for list="{{ turn.attachments }}" as="att">
@@ -292,7 +292,7 @@
                 </div>
               </sc-if>
               <sc-if value="{{ turn.a }}">
-                <div style="max-width:88%; display:flex; flex-direction:column; gap:8px;">
+                <div style="max-width:96%; display:flex; flex-direction:column; gap:8px;">
                   <span style="font-size:14px; color:#1B1A17; line-height:1.72; text-wrap:pretty;">{{ turn.a }}</span>
                   <sc-if value="{{ turn.wasInterrupted }}">
                     <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A3592B;">⊘ stopped — partial answer</span>
@@ -398,7 +398,7 @@
             </div>
           </sc-for>
           <sc-if value="{{ streamingAnswer }}">
-            <div style="max-width:88%; display:flex; flex-direction:column; gap:8px;">
+            <div style="max-width:96%; display:flex; flex-direction:column; gap:8px;">
               <span style="font-size:14px; color:#1B1A17; line-height:1.72; text-wrap:pretty;">{{ streamingAnswer }}</span>
               <sc-if value="{{ streamingCitations }}">
                 <div style="display:flex; flex-wrap:wrap; gap:6px;">
@@ -430,6 +430,16 @@
           <input type="file" multiple="{{ true }}" ref="{{ setFileInput }}" onChange="{{ onFilesSelected }}" style="display:none;" />
           <input type="text" placeholder="Ask across your sources" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
+          <sc-if value="{{ hasModels }}">
+            <select value="{{ provider }}" onChange="{{ onProviderChange }}" style="flex:none; border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; color:#4A463E; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:4px 6px; cursor:pointer; max-width:100px;">
+              <sc-for list="{{ modelOptions }}" as="opt">
+                <option value="{{ opt.id }}">{{ opt.label }}</option>
+              </sc-for>
+            </select>
+          </sc-if>
+          <sc-if value="{{ hasModels }}">
+            <input type="text" placeholder="model" value="{{ model }}" onChange="{{ onModelChange }}" style="width:80px; flex:none; border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; color:#4A463E; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:4px 6px; outline:none;" />
+          </sc-if>
           <button type="button" aria-label="{{ localLabel }}" aria-pressed="{{ localModel }}" title="{{ localLabel }}" onClick="{{ toggleLocalModel }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ localBorder }}; border-radius:8px; background:{{ localBg }}; color:{{ localColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ localIcon }}" style="font-size:12px;"></i>Local</button>
           <sc-if value="{{ streamingLoading }}">
             <button type="button" aria-label="Stop generating" onClick="{{ stopGeneration }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:#26241F; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-stop" style="font-size:13px;"></i></button>
@@ -529,7 +539,7 @@
       <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Priors</span>
         <span style="font-size:12px; color:#8C877C; line-height:1.5;">Witness-tier knowledge about corpora, grouped by what each prior is about — as it declares itself, not by filename. Descend into one to see its scope, and open it in Explorer.</span>
-        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; max-width:560px;" class="eo-scrollbar">
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; max-width:100%;" class="eo-scrollbar">
           <sc-for list="{{ priorGenres }}" as="genre">
             <div style="border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4; overflow:hidden;">
               <button type="button" onClick="{{ genre.toggle }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:10px 12px; cursor:pointer; font-family:inherit; text-align:left;">
@@ -674,7 +684,7 @@
       </div>
       </sc-if>
       <div style="flex:1; overflow-y:auto; padding:32px 0; display:flex; justify-content:center;" class="eo-scrollbar">
-        <div style="width:100%; max-width:72ch; padding:0 24px; margin:0 auto;">
+        <div style="width:100%; max-width:100%; padding:0 24px;">
 
           <sc-if value="{{ readerIsVideo }}">
             <video src="{{ readerVideoSrc }}" controls="{{ true }}" style="width:100%; border-radius:10px; background:#000; display:block; margin-bottom:16px;"></video>
@@ -910,6 +920,7 @@ class Component extends DCLogic {
   state = {
     tab: 'chat', draft: '',
     webSearch: false,
+    provider: 'ollama', model: null, _availableModels: [],
     // Local mode: answer entirely in this tab via WebLLM (see
     // webllm-client.js / window.EOWebLLM), no proxy generation call.
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
@@ -994,6 +1005,7 @@ class Component extends DCLogic {
     this.fetchSources();
     this.fetchPriors();
     this.fetchRecycleBin();
+    this.fetchModels();
     // Escape closes the dialog from anywhere inside it, not just while the
     // input holds focus.
     this._onWindowKeyDown = (e) => { if (e.key === 'Escape' && this.state.modal) this.closeModal(); };
@@ -1104,6 +1116,20 @@ class Component extends DCLogic {
       if (res.ok) {
         const list = await res.json();
         this.setState({ _recycleBin: Array.isArray(list) ? list : [] });
+      }
+    } catch {}
+  }
+
+  async fetchModels() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/models', { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const data = await res.json();
+        this.setState({
+          _availableModels: data.providers || [],
+          provider: data.defaultProvider || 'ollama',
+          model: data.defaultModel || null,
+        });
       }
     } catch {}
   }
@@ -1674,7 +1700,7 @@ class Component extends DCLogic {
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, sourceScope: this.groundSourceFilter(), webSearch: this.state.webSearch }),
+        body: JSON.stringify({ question, sourceScope: this.groundSourceFilter(), webSearch: this.state.webSearch, provider: this.state.provider, model: this.state.model }),
       });
       if (!res.ok) throw new Error('Proxy returned ' + res.status);
 
@@ -3219,6 +3245,15 @@ class Component extends DCLogic {
       webColor: S.webSearch ? '#FFFDFA' : '#8C877C',
       webBorder: S.webSearch ? '#1F5A4C' : '#E0DACE',
       toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch })),
+      provider: S.provider,
+      model: S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : ''),
+      onProviderChange: (e) => {
+        const p = S._availableModels.find(m => m.id === e.target.value);
+        this.setState({ provider: e.target.value, model: p ? p.defaultModel : S.model });
+      },
+      onModelChange: (e) => this.setState({ model: e.target.value }),
+      hasModels: S._availableModels.length > 0,
+      modelOptions: S._availableModels,
       ...this._localModelProps(S),
       proxyLive: live, proxyDead: !live,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',

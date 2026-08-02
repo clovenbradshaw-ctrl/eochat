@@ -71,6 +71,8 @@ function parseArg(name, def, parse = (v) => v) {
 const REPO_PATH = parseArg("repo", REPO_ROOT);
 const PORT = parseArg("port", 11435, Number);
 const TARGET = parseArg("target", "http://localhost:11434");
+const ANTHROPIC_KEY = parseArg("anthropic-key", process.env.ANTHROPIC_API_KEY || "");
+const ANTHROPIC_MODEL = parseArg("anthropic-model", "claude-sonnet-4-20250514");
 const TOKEN_LIMIT = parseArg("limit", 3000, Number);
 const MAX_BODY = parseArg("max-body", 5_242_880, Number);
 const STORE_TTL = parseArg("store-ttl", 3_600_000, Number);
@@ -107,6 +109,11 @@ const LATENCY_BUDGET_MS = parseArg("latency-budget-ms", 8000, Number);
 // passages plus the answer, and small enough that the model stays resident on
 // the GPU — see the num_ctx comment at the /api/chat call site.
 const NUM_CTX = parseArg("num-ctx", 8192, Number);
+
+const PROVIDERS = [
+  { id: "ollama", label: "Ollama", defaultModel: TINY_MODEL },
+  ...(ANTHROPIC_KEY ? [{ id: "anthropic", label: "Anthropic", defaultModel: ANTHROPIC_MODEL }] : []),
+];
 
 function selectModel(messages) {
   const text = (messages || []).map(m => m.content || "").join(" ");
@@ -160,6 +167,8 @@ const turnController = createTurnController({
   conversationStore,
   groundQuery: engineGroundQuery,
   target: TARGET,
+  anthropicKey: ANTHROPIC_KEY,
+  anthropicModel: ANTHROPIC_MODEL,
   numCtx: NUM_CTX,
   modelRouter,
   heuristicModel: selectModel,
@@ -2746,6 +2755,18 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Available providers and models for the frontend model picker
+  if (req.method === "GET" && req.url === "/api/models") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      providers: PROVIDERS,
+      defaultProvider: "ollama",
+      defaultModel: MEDIUM_MODEL,
+      anthropicAvailable: !!ANTHROPIC_KEY,
+    }));
+    return;
+  }
+
   // Learned model-router state (competency ledger snapshot, read-only)
   if (req.method === "GET" && req.url === "/v1/router") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -3564,6 +3585,7 @@ const server = http.createServer((req, res) => {
             const { done } = await turnController.startTurn({
               conversationId, question: data.question,
               sourceScope: data.sourceScope, pool: data.pool, attachments: data.attachments || [],
+              provider: data.provider, model: data.model,
             }, sendEvent);
             await done;
           } catch (err) {

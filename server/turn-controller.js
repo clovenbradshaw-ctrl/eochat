@@ -52,11 +52,15 @@ function resolveCitationBrackets(text, citations) {
   return { citations: resolved, unresolvedNums };
 }
 
+const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+
 /**
  * @param {object} deps
  * @param {import('./conversation-store.js').ConversationStore} deps.conversationStore
  * @param {(query: string, opts: object) => object} deps.groundQuery - engineGroundQuery
  * @param {string} deps.target - Ollama base URL
+ * @param {string} deps.anthropicKey - Anthropic API key (empty string if not configured)
+ * @param {string} deps.anthropicModel - default Anthropic model id
  * @param {number} deps.numCtx
  * @param {object|null} deps.modelRouter - learned router (has .pick/.reveal), or null
  * @param {(messages: object[]) => string} deps.heuristicModel - cold-start model choice, latency/shape based (not EO/keyword classification)
@@ -65,7 +69,8 @@ function resolveCitationBrackets(text, citations) {
  */
 export function createTurnController(deps) {
   const {
-    conversationStore, groundQuery, target, numCtx,
+    conversationStore, groundQuery, target, anthropicKey, anthropicModel,
+    numCtx,
     modelRouter, heuristicModel, latencyBudgetMs, isWarming,
   } = deps;
 
@@ -119,15 +124,7 @@ export function createTurnController(deps) {
     return out;
   }
 
-  async function callModelStreaming(messages, { signal, onDelta }) {
-    let model, routerCtx;
-    if (modelRouter) {
-      ({ model, ctx: routerCtx } = modelRouter.pick(messages));
-    } else {
-      model = heuristicModel(messages);
-      routerCtx = null;
-    }
-    const startedAt = Date.now();
+  async function callOllamaStreaming(model, messages, { signal, onDelta }) {
     const resp = await fetch(`${target}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -160,17 +157,88 @@ export function createTurnController(deps) {
         if (delta) { text += delta; onDelta(delta, text); }
       }
     }
+    return { text, model };
+  }
+
+  async function callAnthropicStreaming(model, messages, { signal, onDelta }) {
+    const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
+    const nonSystem = messages.filter(m => m.role !== "system");
+    const body = {
+      model,
+      max_tokens: 4096,
+      messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
+      stream: true,
+    };
+    if (systemMessages) body.system = systemMessages;
+    const resp = await fetch(ANTHROPIC_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": anthropicKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => resp.statusText);
+      throw new Error(`Anthropic ${resp.status}: ${errText}`);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "", text = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t || !t.startsWith("data: ")) continue;
+        const json = t.slice(6);
+        if (json === "[DONE]") continue;
+        let j;
+        try { j = JSON.parse(json); } catch { continue; }
+        if (j.type === "content_block_delta" && j.delta?.text) {
+          text += j.delta.text;
+          onDelta(j.delta.text, text);
+        }
+      }
+    }
+    return { text, model };
+  }
+
+  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride }) {
+    let model, routerCtx;
+    const useAnthropic = provider === "anthropic" && anthropicKey;
+    if (useAnthropic) {
+      model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
+      routerCtx = null;
+    } else if (modelOverride) {
+      model = modelOverride;
+      routerCtx = null;
+    } else if (modelRouter) {
+      ({ model, ctx: routerCtx } = modelRouter.pick(messages));
+    } else {
+      model = heuristicModel(messages);
+      routerCtx = null;
+    }
+    const startedAt = Date.now();
+    const result = useAnthropic
+      ? await callAnthropicStreaming(model, messages, { signal, onDelta })
+      : await callOllamaStreaming(model, messages, { signal, onDelta });
     const elapsedMs = Date.now() - startedAt;
     if (routerCtx) {
       const outcome = elapsedMs > latencyBudgetMs ? "failure" : "success";
       try { await modelRouter.reveal(routerCtx, outcome); } catch { /* best-effort */ }
     }
-    return { text, model };
+    return result;
   }
 
   // The core pipeline shared by a fresh turn and a regenerate — both already
   // have a turnId/answerId and a question by the time this runs.
-  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool }, sendEvent) {
+  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride }, sendEvent) {
     const key = newAnswerEventKey(conv.id, turn.id);
     const controller = new AbortController();
     activeControllers.set(key, controller);
@@ -233,7 +301,7 @@ export function createTurnController(deps) {
 
       let sawStart = false;
       const { text: rawText, model } = await callModelStreaming(messages, {
-        signal: controller.signal,
+        signal: controller.signal, provider, modelOverride,
         onDelta: (delta, text) => {
           // Captured on the controller itself so a stop mid-stream can persist
           // exactly what the reader already saw, not an empty answer.
@@ -312,7 +380,7 @@ export function createTurnController(deps) {
     }
   }
 
-  async function startTurn({ conversationId, question, sourceScope, pool, attachments }, sendEvent) {
+  async function startTurn({ conversationId, question, sourceScope, pool, attachments, provider, model }, sendEvent) {
     const conv = await conversationStore.require(conversationId);
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
     const { turn } = await conversationStore.appendTurn(conversationId, {
@@ -327,6 +395,7 @@ export function createTurnController(deps) {
     const run = runAnswer({
       conv, turn, answerId: answer.id,
       question, sourceScope: effectiveScope, pool: pool || conv.pool,
+      provider, model,
     }, sendEvent);
 
     return { turnId: turn.id, answerId: answer.id, done: run };
