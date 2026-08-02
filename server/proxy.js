@@ -42,6 +42,8 @@ import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // catalogs on import — ingest stays lazy behind ensurePriorsIngested().
 import * as priorsSource from "./priors-source.js";
 import { HolonicTask } from "./holonic-task.js";
+import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
+import { createTurnController } from "./turn-controller.js";
 
 // ── CLI args with validation ──
 
@@ -134,6 +136,20 @@ try {
   modelRouter = null;
 }
 
+// ── Conversations — the new conversational surface's durable state + turn coordinator ──
+
+const conversationStore = new ConversationStore();
+const turnController = createTurnController({
+  conversationStore,
+  groundQuery: engineGroundQuery,
+  target: TARGET,
+  numCtx: NUM_CTX,
+  modelRouter,
+  heuristicModel: selectModel,
+  latencyBudgetMs: LATENCY_BUDGET_MS,
+  isWarming: () => corpusWarmup.started && !corpusWarmup.ready,
+});
+
 // ── Retry helper ──
 
 async function withRetry(fn, { label = "operation", maxRetries = 2, baseMs = 500 } = {}) {
@@ -164,52 +180,6 @@ async function safeFetch(url, options = {}, timeoutMs = 30_000) {
   } finally {
     clearTimeout(timer);
   }
-}
-
-// ── EO Cube ──
-
-const OPERATORS = ["NUL", "SEG", "DEF", "SIG", "CON", "EVA", "INS", "SYN", "REC"];
-const TERRAINS = ["Void", "Entity", "Kind", "Field", "Link", "Network", "Atmosphere", "Lens", "Paradigm"];
-const STANCES = ["Clearing", "Dissecting", "Unraveling", "Tending", "Binding", "Tracing", "Cultivating", "Making", "Composing"];
-
-const DIAGONAL = {
-  NUL: [{ terrain: "Void", stance: "Clearing" }, { terrain: "Entity", stance: "Dissecting" }, { terrain: "Kind", stance: "Unraveling" }],
-  SEG: [{ terrain: "Field", stance: "Clearing" }, { terrain: "Link", stance: "Dissecting" }, { terrain: "Network", stance: "Unraveling" }],
-  DEF: [{ terrain: "Atmosphere", stance: "Clearing" }, { terrain: "Lens", stance: "Dissecting" }, { terrain: "Paradigm", stance: "Unraveling" }],
-  SIG: [{ terrain: "Void", stance: "Tending" }, { terrain: "Entity", stance: "Binding" }, { terrain: "Kind", stance: "Tracing" }],
-  CON: [{ terrain: "Field", stance: "Tending" }, { terrain: "Link", stance: "Binding" }, { terrain: "Network", stance: "Tracing" }],
-  EVA: [{ terrain: "Atmosphere", stance: "Tending" }, { terrain: "Lens", stance: "Binding" }, { terrain: "Paradigm", stance: "Tracing" }],
-  INS: [{ terrain: "Void", stance: "Cultivating" }, { terrain: "Entity", stance: "Making" }, { terrain: "Kind", stance: "Composing" }],
-  SYN: [{ terrain: "Field", stance: "Cultivating" }, { terrain: "Link", stance: "Making" }, { terrain: "Network", stance: "Composing" }],
-  REC: [{ terrain: "Atmosphere", stance: "Cultivating" }, { terrain: "Lens", stance: "Making" }, { terrain: "Paradigm", stance: "Composing" }],
-};
-
-function classifyCode(text) {
-  if (/^export\s|^module\.exports/.test(text)) return "DEF";
-  if (/import\s|require\(/.test(text)) return "SIG";
-  if (/function\s|const\s.*=\s*\(/.test(text)) return "INS";
-  if (/class\s/.test(text)) return "DEF";
-  if (/if\s*\(|switch\s*\(/.test(text)) return "EVA";
-  if (/\.\w+\(/.test(text)) return "CON";
-  if (/\/\/|\/\*/.test(text)) return "SEG";
-  return "NUL";
-}
-
-function classifyMessage(text) {
-  if (/what|how|why|explain|describe/i.test(text)) return "EVA";
-  if (/add|create|make|implement|write/i.test(text)) return "INS";
-  if (/fix|bug|error|issue/i.test(text)) return "SEG";
-  if (/connect|link|relate|depend/i.test(text)) return "CON";
-  if (/define|specify|declare/i.test(text)) return "DEF";
-  if (/remove|delete|clear/i.test(text)) return "NUL";
-  if (/learn|understand|pattern/i.test(text)) return "REC";
-  if (/synthesize|combine|merge/i.test(text)) return "SYN";
-  return "SIG";
-}
-
-function getCell(operator) {
-  const cells = DIAGONAL[operator] || DIAGONAL.NUL;
-  return cells[1] || cells[0];
 }
 
 // ── Content Index (structural codebase index) ──
@@ -259,23 +229,26 @@ class BoundedStore {
     return (h >>> 0).toString(16).padStart(8, "0");
   }
 
+  // Previously tagged every entry with an "EO cell" (operator/terrain/stance)
+  // guessed from a handful of keyword regexes (classifyMessage/classifyCode) and
+  // used it to boost search scores — a fabricated classification with no
+  // relationship to the engine's actual structural analysis (see terrain_report,
+  // which is mechanical and real). Removed rather than replaced: an EO label this
+  // store cannot honestly compute stays absent, not approximated by a new
+  // keyword classifier.
   ingest(text, type, meta = {}) {
     this.#evict();
-    const operator = type === "code" ? classifyCode(text) : classifyMessage(text);
     this.#entries.push({
       id: this.#hash(text + Date.now() + Math.random().toString(36).slice(2, 6)),
       text,
       type,
       meta,
-      cell: { operator, terrain: getCell(operator).terrain, stance: getCell(operator).stance },
       ts: Date.now(),
     });
   }
 
   search(query, topK = 5) {
     this.#evict();
-    const queryOperator = classifyMessage(query);
-    const qc = getCell(queryOperator);
     const words = (query || "").toLowerCase().split(/\s+/).filter(w => w.length > 1);
 
     return this.#entries.map(e => {
@@ -287,10 +260,6 @@ class BoundedStore {
           if (t === w) score += 1;
           else if (t.includes(w) || w.includes(t)) score += 0.5;
         }
-      }
-      if (e.cell) {
-        if (e.cell.terrain === qc.terrain) score += 3;
-        if (e.cell.stance === qc.stance) score += 2;
       }
       return { ...e, score };
     })
@@ -737,73 +706,9 @@ async function fetchAndSaveUrl(url) {
 // passages — a fabricated reference. Replace those with a visible gap marker
 // so the reader never sees a fake citation. Valid citations are left alone.
 
-function validateCitations(content, maxCitation) {
-  if (!content || maxCitation <= 0) return content;
-  return content.replace(/\[(\d+)\]/g, (match, numStr) => {
-    const num = parseInt(numStr, 10);
-    if (num >= 1 && num <= maxCitation) return match;
-    return `[⊘ no source ${numStr}]`;
-  });
-}
-
-// ── Mechanical fidelity check ──
-//
-// The grounding citations are the only text this server can vouch for — the
-// exact admitted bytes from the engine's span registry
-// (specs/mechanical-citation-surface.md). The model's own prose is
-// generation, always potentially unfaithful, and nothing previously checked
-// whether a quotation mark in that prose actually reproduced the source it
-// sat next to. Measured failure: asked for "verbatim" text, the model wrote
-// a fluent paragraph inventing plot specifics (a date, a place) not in any
-// retrieved passage, framed as a quotation, and numbered it [1] against a
-// real but unrelated citation — a fabrication indistinguishable from a real
-// quote by reading tone alone.
-//
-// This check is model-blind BY CONSTRUCTION, the same way validateCitations
-// above is: it runs after the model's answer is complete, compares against
-// citations[] the engine computed before the model ever ran, and its verdict
-// is never fed back into the prompt. The model cannot see or influence it,
-// and cannot satisfy it except by actually quoting the source — the
-// comparison is literal substring matching (after whitespace/quote-style
-// normalization), not a judgment call the model could talk its way past.
-const QUOTE_RE = /[“"]([^“”"]{20,}?)[”"]/g;
-
-function normalizeForFidelity(s) {
-  return String(s || "")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Every double-quoted run of 20+ chars in the answer is treated as a claimed
-// verbatim quote. Short quoted fragments (a name, a single word) are skipped —
-// too little text to mean "verbatim" rather than ordinary emphasis, and
-// short strings are near-guaranteed to appear as a substring somewhere by
-// chance, which would make "verified" meaningless.
-function verifyQuotedFidelity(content, citations) {
-  const quotes = [];
-  let m;
-  QUOTE_RE.lastIndex = 0;
-  while ((m = QUOTE_RE.exec(content || ""))) quotes.push(m[1]);
-  if (!quotes.length) return { quotesChecked: 0, verified: 0, unverified: [] };
-
-  const haystacks = citations.map((c) => ({
-    index: c.index,
-    source_id: c.source_id,
-    norm: normalizeForFidelity(c.text),
-  }));
-
-  const unverified = [];
-  let verified = 0;
-  for (const q of quotes) {
-    const normQ = normalizeForFidelity(q);
-    const hit = haystacks.find((c) => c.norm.includes(normQ));
-    if (hit) verified++;
-    else unverified.push({ quote: q.length > 300 ? q.slice(0, 300) + "…" : q });
-  }
-  return { quotesChecked: quotes.length, verified, unverified };
-}
+// Moved to citation-check.js so turn-controller.js (the new conversational
+// coordinator) can share these model-blind checks without importing proxy.js.
+import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
 
 // ── Context assembly ──
 
@@ -813,7 +718,6 @@ async function assemble(messages, sessionId = "default") {
   const latest = [...messages].reverse().find(m => m.role === "user");
   if (!latest) return messages;
   const query = latest.content || "";
-  const qc = getCell(classifyMessage(query));
 
   let ctx = [], t = 0;
   const sys = messages.find(m => m.role === "system");
@@ -911,7 +815,7 @@ async function assemble(messages, sessionId = "default") {
   const budgetForSearch = TOKEN_LIMIT - t;
   const results = store.search(query, 5);
   if (results.length) {
-    let c = "\n[Context: " + qc.terrain + "/" + qc.stance + "]\n" +
+    let c = "\n[Context: recalled from memory]\n" +
       results.map(r => r.type === "code"
         ? `--- ${r.meta.file || "?"} ---\n${r.text.slice(0, 500)}`
         : `[${r.type}]: ${r.text.slice(0, 300)}`
@@ -919,7 +823,7 @@ async function assemble(messages, sessionId = "default") {
 
     // Fold: if search results would hog the budget, truncate each harder
     if (tok(c) > budgetForSearch * 0.7) {
-      c = "\n[Context: " + qc.terrain + "/" + qc.stance + " — truncated for budget]\n" +
+      c = "\n[Context: recalled from memory — truncated for budget]\n" +
         results.map(r => r.type === "code"
           ? `--- ${r.meta.file || "?"} ---\n${r.text.slice(0, 200)}`
           : `[${r.type}]: ${r.text.slice(0, 120)}`
@@ -930,7 +834,7 @@ async function assemble(messages, sessionId = "default") {
   }
 
   ctx.push({ role: "user", content: query });
-  console.error(`[proxy] ${t} tokens, terrain=${qc.terrain}/${qc.stance}`);
+  console.error(`[proxy] ${t} tokens`);
   return ctx;
 }
 
@@ -3440,6 +3344,139 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: err.message }));
       }
     });
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Conversations — the new conversational surface. Each conversation is a
+  // durable record (server/conversation-store.js); server/turn-controller.js
+  // is the single coordinator for every turn asked against it.
+  // ══════════════════════════════════════════════════════════════
+  if (req.url === "/api/conversations" || req.url.startsWith("/api/conversations/") || req.url.startsWith("/api/conversations?")) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    // ["api","conversations", id?, "turns"|"restore"?, turnId?, "stop"|"regenerate"?]
+    const segments = url.pathname.split("/").filter(Boolean);
+
+    const readJsonBody = () => new Promise((resolve, reject) => {
+      let body = "", size = 0;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > MAX_BODY) { req.destroy(new Error("Request body too large")); reject(new Error("body too large")); return; }
+        body += c.toString("utf8");
+      });
+      req.on("end", () => {
+        if (!body.trim()) return resolve({});
+        try { resolve(JSON.parse(body)); } catch (err) { reject(err); }
+      });
+      req.on("error", reject);
+    });
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+    const notFound = (id) => sendJson(404, { error: `conversation not found: ${id}` });
+
+    (async () => {
+      try {
+        if (req.method === "GET" && segments.length === 2) {
+          return sendJson(200, { conversations: await conversationStore.list() });
+        }
+        if (req.method === "GET" && segments.length === 3 && segments[2] === "deleted") {
+          return sendJson(200, { conversations: await conversationStore.listDeleted() });
+        }
+        if (req.method === "POST" && segments.length === 2) {
+          const data = await readJsonBody();
+          const conv = await conversationStore.create({
+            title: data.title, pool: data.pool, sourceScope: data.sourceScope, spaceId: data.spaceId,
+          });
+          return sendJson(201, conv);
+        }
+        if (req.method === "GET" && segments.length === 3) {
+          const conv = await conversationStore.get(segments[2]);
+          if (!conv) return notFound(segments[2]);
+          return sendJson(200, conv);
+        }
+        if (req.method === "PATCH" && segments.length === 3) {
+          const data = await readJsonBody();
+          const conv = await conversationStore.update(segments[2], data);
+          return sendJson(200, conv);
+        }
+        if (req.method === "DELETE" && segments.length === 3) {
+          const summary = await conversationStore.remove(segments[2]);
+          return sendJson(200, summary);
+        }
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "restore") {
+          const conv = await conversationStore.restore(segments[2]);
+          return sendJson(200, conv);
+        }
+
+        // POST /api/conversations/:id/turns — a new user turn, streamed as SSE.
+        if (req.method === "POST" && segments.length === 4 && segments[3] === "turns") {
+          const conversationId = segments[2];
+          const data = await readJsonBody();
+          const exists = await conversationStore.get(conversationId);
+          if (!exists) return notFound(conversationId);
+          if (!data.question || !String(data.question).trim()) {
+            return sendJson(400, { error: "question is required" });
+          }
+
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream", "Cache-Control": "no-cache",
+            "Connection": "keep-alive", "X-Accel-Buffering": "no",
+          });
+          const sendEvent = (type, payload) => res.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+          try {
+            const { done } = await turnController.startTurn({
+              conversationId, question: data.question,
+              sourceScope: data.sourceScope, pool: data.pool, attachments: data.attachments || [],
+            }, sendEvent);
+            await done;
+          } catch (err) {
+            sendEvent("failed", { message: err.message });
+          } finally {
+            res.end();
+          }
+          return;
+        }
+
+        // POST /api/conversations/:id/turns/:turnId/stop|regenerate
+        if (req.method === "POST" && segments.length === 6 && segments[3] === "turns") {
+          const conversationId = segments[2];
+          const turnId = segments[4];
+          const action = segments[5];
+
+          if (action === "stop") {
+            const stopped = turnController.stopTurn(conversationId, turnId);
+            return sendJson(200, { stopped });
+          }
+
+          if (action === "regenerate") {
+            const conv = await conversationStore.get(conversationId);
+            if (!conv) return notFound(conversationId);
+            if (!conv.turns.some((t) => t.id === turnId)) {
+              return sendJson(404, { error: `turn not found: ${turnId}` });
+            }
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream", "Cache-Control": "no-cache",
+              "Connection": "keep-alive", "X-Accel-Buffering": "no",
+            });
+            const sendEvent = (type, payload) => res.write(`event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`);
+            try {
+              const { done } = await turnController.regenerateTurn({ conversationId, turnId }, sendEvent);
+              await done;
+            } catch (err) {
+              sendEvent("failed", { message: err.message });
+            } finally {
+              res.end();
+            }
+            return;
+          }
+        }
+
+        sendJson(404, { error: "no such conversations route" });
+      } catch (err) {
+        if (res.headersSent) { try { res.end(); } catch { /* already closing */ } return; }
+        const status = err instanceof ConversationNotFoundError ? 404 : 400;
+        sendJson(status, { error: err.message });
+      }
+    })();
     return;
   }
 

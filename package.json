@@ -10,6 +10,8 @@
     "probe:retrieval": "node scripts/probe-retrieval.mjs",
     "probe:order": "node scripts/probe-prompt-order.mjs",
     "test:affordances": "node scripts/test-affordances.mjs",
+    "test:conversation-store": "node scripts/test-conversation-store.mjs",
+    "test:turn-controller": "node scripts/test-turn-controller.mjs",
     "postinstall": "git submodule update --init --recursive || true"
   },
   "dependencies": {

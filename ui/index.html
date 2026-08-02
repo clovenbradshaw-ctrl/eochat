@@ -57,17 +57,28 @@
         <span style="font-size:9px; color:#A39D91;">▾</span>
       </button>
       <sc-if value="{{ spacesOpen }}">
-      <div style="position:absolute; top:36px; left:76px; width:240px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:6px; z-index:20; display:flex; flex-direction:column; gap:1px;">
-        <sc-for list="{{ spaces }}" as="sp">
-          <button type="button" onClick="{{ sp.select }}" style="display:flex; align-items:center; gap:8px; text-align:left; border:0; background: {{ sp.bg }}; border-radius:7px; padding:8px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#26241F;">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:10px;">{{ sp.marker }}</span>
-            <span style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ sp.name }}</span>
-          </button>
-        </sc-for>
-        <div style="height:1px; background:#EBE6DC; margin:5px 3px;"></div>
-        <button type="button" onClick="{{ addSpace }}" style="display:flex; align-items:center; gap:8px; border:0; background:none; border-radius:7px; padding:8px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#1F5A4C;">
-          <span style="font-size:13px;">+</span><span>New space</span>
+      <div style="position:absolute; top:36px; left:76px; width:260px; max-height:60vh; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:6px; z-index:20; display:flex; flex-direction:column; gap:1px;" class="eo-scrollbar">
+        <button type="button" onClick="{{ addSpace }}" style="display:flex; align-items:center; gap:8px; border:0; background:none; border-radius:7px; padding:8px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#1F5A4C; margin-bottom:4px;">
+          <span style="font-size:13px;">+</span><span>New chat</span>
         </button>
+        <div style="height:1px; background:#EBE6DC; margin:1px 3px 5px;"></div>
+        <sc-for list="{{ spaces }}" as="sp">
+          <sc-if value="{{ sp.renaming }}">
+            <div style="display:flex; align-items:center; gap:6px; padding:2px 9px;">
+              <input type="text" value="{{ sp.renameValue }}" onChange="{{ sp.onRenameChange }}" onBlur="{{ sp.commitRename }}" onKeyDown="{{ sp.commitRenameKey }}" ref="{{ sp.setRenameInput }}" style="flex:1; min-width:0; font-size:12.5px; color:#26241F; border:1px solid #1F5A4C; background:#FFFDFA; border-radius:6px; padding:5px 7px; outline:none; font-family:inherit;" />
+            </div>
+          </sc-if>
+          <sc-if value="{{ sp.notRenaming }}">
+          <div style="display:flex; align-items:center; gap:2px; border-radius:7px; background: {{ sp.bg }};">
+            <button type="button" onClick="{{ sp.select }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; border-radius:7px; padding:8px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#26241F;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:10px; flex:none;">{{ sp.marker }}</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ sp.name }}</span>
+            </button>
+            <button type="button" aria-label="Rename" onClick="{{ sp.startRename }}" style="border:0; background:none; color:#A39D91; cursor:pointer; padding:4px; display:flex; flex:none;"><i class="ph ph-pencil-simple" style="font-size:12px;"></i></button>
+            <button type="button" aria-label="Delete" onClick="{{ sp.delete }}" style="border:0; background:none; color:#A39D91; cursor:pointer; padding:4px 8px 4px 4px; display:flex; flex:none;"><i class="ph ph-trash" style="font-size:12px;"></i></button>
+          </div>
+          </sc-if>
+        </sc-for>
       </div>
       </sc-if>
     </div>
@@ -229,7 +240,7 @@
             <span style="font-size:13px; color:#A39D91;">No messages yet — attach sources and ask a question.</span>
           </sc-if>
 
-          <sc-if value="{{ streamingLoading }}">
+          <sc-if value="{{ showThinkingIndicator }}">
             <button type="button" onClick="{{ openThinkingModal }}" style="display:flex; flex-direction:column; gap:6px; border:0; background:none; cursor:pointer; text-align:left; padding:0; font-family:inherit; width:100%;">
               <div style="display:flex; align-items:center; gap:8px;">
                 <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">⊨</span>
@@ -265,7 +276,7 @@
               <sc-if value="{{ turn.retrieval }}">
                 <div style="display:flex; align-items:center; gap:8px;">
                   <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">↦</span>
-                  <span style="font-size:13px; color:#8C877C;">Retrieved a passage from {{ turn.retrieval.source }} — see Sources</span>
+                  <span style="font-size:13px; color:#8C877C;">{{ turn.retrieval.summary }}</span>
                 </div>
               </sc-if>
               <sc-if value="{{ turn.streaming }}">
@@ -277,6 +288,9 @@
               <sc-if value="{{ turn.a }}">
                 <div style="max-width:88%; display:flex; flex-direction:column; gap:8px;">
                   <span style="font-size:14px; color:#1B1A17; line-height:1.72; text-wrap:pretty;">{{ turn.a }}</span>
+                  <sc-if value="{{ turn.wasInterrupted }}">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A3592B;">⊘ stopped — partial answer</span>
+                  </sc-if>
                   <sc-if value="{{ turn.citations }}">
                     <div style="display:flex; flex-wrap:wrap; gap:6px;">
                       <sc-for list="{{ turn.citations }}" as="cit">
@@ -296,6 +310,9 @@
                       <button type="button" onClick="{{ turn.toggleRaw }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.rawColor }}; cursor:pointer; padding:0;"><i class="{{ turn.rawChevron }}"></i>raw</button>
                     </sc-if>
                     <button type="button" aria-label="Fork" onClick="{{ turn.fork }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-git-fork"></i>fork</button>
+                    <sc-if value="{{ turn.canRegenerate }}">
+                      <button type="button" aria-label="Regenerate" onClick="{{ turn.regenerate }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-arrow-clockwise"></i>regenerate</button>
+                    </sc-if>
                   </div>
 
                   <sc-if value="{{ turn.ungroundedNotice }}">
@@ -388,7 +405,12 @@
           <input type="file" multiple="{{ true }}" ref="{{ setFileInput }}" onChange="{{ onFilesSelected }}" style="display:none;" />
           <input type="text" placeholder="Ask across your sources" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
-          <button type="button" aria-label="Send" onClick="{{ send }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:{{ sendBg }}; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-arrow-right" style="font-size:14px;"></i></button>
+          <sc-if value="{{ streamingLoading }}">
+            <button type="button" aria-label="Stop generating" onClick="{{ stopGeneration }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:#26241F; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-stop" style="font-size:13px;"></i></button>
+          </sc-if>
+          <sc-if value="{{ !streamingLoading }}">
+            <button type="button" aria-label="Send" onClick="{{ send }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:{{ sendBg }}; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-arrow-right" style="font-size:14px;"></i></button>
+          </sc-if>
         </div>
         <sc-if value="{{ composerHint }}">
           <span style="font-size:11px; color: {{ composerHintColor }};">{{ composerHint }}</span>
@@ -845,6 +867,7 @@ class Component extends DCLogic {
     tab: 'chat', draft: '',
     webSearch: false,
     spacesOpen: false, activeSpaceId: 'default', leftCollapsed: false, selectedEntity: null,
+    renamingSpaceId: null, renameSpaceValue: '',
     webHistoryOpen: false,
     retrievedOpen: false,
     readerOpen: false, readerSourceName: null,
@@ -910,7 +933,7 @@ class Component extends DCLogic {
   componentDidMount() {
     this.tick = this.tick.bind(this);
     this.checkHealth();
-    this.loadSession();
+    this.loadConversations();
     this.fetchSources();
     this.fetchPriors();
     this.fetchRecycleBin();
@@ -1161,14 +1184,6 @@ class Component extends DCLogic {
     return (this.state._proxySources || []).filter(s => s.kind === 'corpus');
   }
 
-  async loadSession() {
-    let spaces = this._loadLocal('eochat.spaces');
-    if (!Array.isArray(spaces) || !spaces.length) {
-      spaces = [{ id: 'default', name: 'Reading Room', turns: [], retrievals: [], sources: [] }];
-    }
-    this.setState({ spaces });
-  }
-
   _loadLocal(key) {
     try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
   }
@@ -1342,172 +1357,352 @@ class Component extends DCLogic {
     }
   }
 
-  // `onGrounding` fires the moment the engine's retrieval lands, which is long
-  // before the model finishes prosifying it. Holding the passage table back
-  // until `done` made a ~400ms mechanical step look like part of a multi-second
-  // generation, and hid the fact that the model is only rewording what the
-  // engine already found.
-  async sendToProxy(q, onGrounding) {
-    const sysMsg ='You are a helpful reading companion. Answer only from the attached sources, with inline citations in the format [1], [2], etc. Always cite the specific source for each claim. If the sources do not contain enough information to answer, say so clearly.';
-    // REGRESSION this avoids: the query used for grounding search is this
-    // message's content verbatim (proxy.js handleToolStream reads
-    // lastUser.content). This method used to prepend "I have these sources
-    // available: [1] pg84.txt [2] en.wikipedia.org_wiki_Neil_Armstrong ..."
-    // ahead of the real question — redundant with groundSourceFilter() below,
-    // which already tells the server which sources are enabled through a
-    // real parameter, not prose. Embedding source NAMES in the search text
-    // is actively harmful for any URL-derived name that shares real words
-    // with its own content: asked "what does the creature demand of Victor
-    // on the glacier", the preamble's literal "en.wikipedia.org_wiki_Neil_
-    // Armstrong" token match against that page's own Neil-Armstrong-saturated
-    // text outscored the actual Frankenstein passage — a citation on an
-    // unrelated Wikipedia page, caused entirely by the source LIST leaking
-    // into the search query, not by anything wrong with retrieval itself.
-    const userMsg = q;
-    const res = await fetch(this.proxyUrl() + '/api/chat/tools', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: [{ role: 'system', content: sysMsg }, { role: 'user', content: userMsg }],
-        session: this.sessionId(),
-        webSearch: this.state.webSearch,
-        // Wide intake, narrow mouth.
-        //
-        // groundLimit is how widely the ENGINE sweeps. That is mechanical —
-        // ~400ms, no model — so looking at 16 candidates is nearly free.
-        // groundMaxUnits is how many survive the fold to reach the talker, and
-        // that is a working-memory bottleneck rather than a budget: the world
-        // has already been folded before anything gets said, so what arrives at
-        // the mouth is a handful, not the corpus.
-        //
-        // Measured in the other direction: at 8 units the system prompt reached
-        // 27,471 chars and the answer degenerated to the single token "[7]".
-        // Asking one prompt to hold everything retrieval found IS the failure.
-        groundBudget: 3000, groundMaxUnits: 5, groundLimit: 16, stream: true,
-        groundSource: this.groundSourceFilter(),
-      })
+  // ── Conversations — server-persisted, replacing the old client-only "spaces" ──
+  //
+  // A conversation is a durable record (server/conversation-store.js); every
+  // turn asked against it goes through server/turn-controller.js, which is the
+  // single place retrieval, the model call, and citation verification happen.
+  // This client never assembles a system prompt or resolves a citation itself
+  // anymore — it renders what the server already verified.
+
+  async loadConversations() {
+    // Source attachments aren't part of the server conversation record (see
+    // conversation-store.js) — only which sources were enabled when a turn was
+    // asked. The full descriptors (glyph, chunk count, enabled state) stay a
+    // client concern, recovered here from localStorage by conversation id so
+    // reattaching sources survives a reload.
+    const localSpaces = this._loadLocal('eochat.spaces') || [];
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/conversations');
+      if (!res.ok) throw new Error('proxy returned ' + res.status);
+      const { conversations } = await res.json();
+      if (!conversations.length) {
+        await this.newConversation({ silent: true });
+        return;
+      }
+      this.setState({
+        spaces: conversations.map(c => this._spaceFromSummary(c, localSpaces)),
+        activeSpaceId: conversations[0].id,
+      });
+      await this.switchConversation(conversations[0].id);
+    } catch (err) {
+      // Offline/unreachable proxy — fall back to whatever was local so the UI
+      // still renders; checkHealth()'s retry banner covers the rest.
+      this.setState({
+        spaces: localSpaces.length ? localSpaces : [{ id: 'local', name: 'Reading Room', turns: [], retrievals: [], sources: [] }],
+        activeSpaceId: (localSpaces[0] || {}).id || 'local',
+      });
+    }
+  }
+
+  // Preserves whatever local-only fields (sources, retrievals) an already-known
+  // space carries — the server record has no idea what sources are attached,
+  // that stays this client's concern (see roomSources()).
+  _spaceFromSummary(summary, existingSpaces) {
+    const existing = (existingSpaces || []).find(s => s.id === summary.id);
+    return {
+      id: summary.id, name: summary.title,
+      turns: existing ? existing.turns : [],
+      retrievals: existing ? existing.retrievals : [],
+      sources: existing ? existing.sources : [],
+      sourcesOff: existing ? existing.sourcesOff : {},
+      _loaded: existing ? existing._loaded : false,
+    };
+  }
+
+  async switchConversation(id) {
+    this.setState({ activeSpaceId: id, spacesOpen: false, tab: 'chat', selectedEntity: null });
+    const known = this.state.spaces.find(s => s.id === id);
+    if (known && known._loaded) return;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(id));
+      if (!res.ok) return;
+      const conv = await res.json();
+      const turns = this._conversationTurnsToClientTurns(conv.turns || []);
+      this.setState(s => ({
+        spaces: s.spaces.map(sp => sp.id === id ? { ...sp, name: conv.title, turns, _loaded: true } : sp),
+      }));
+    } catch (err) {
+      this.logAdd('⊘', `Could not load conversation — ${err.message}`, 'chat');
+    }
+  }
+
+  // Server turns/answers -> the shape turnVals() already knows how to render.
+  // The active answer variant is what shows; earlier variants (pre-regenerate)
+  // stay on the server record but are not displayed inline.
+  _conversationTurnsToClientTurns(serverTurns) {
+    return serverTurns.map(t => {
+      const answer = (t.answers || []).find(a => a.id === t.activeAnswerId) || t.answers[t.answers.length - 1] || null;
+      const citations = (answer && answer.citations || []).map(c => this._clientCitation(c, answer.grounding));
+      const resolved = citations.filter(c => c.resolved);
+      return {
+        id: t.id, q: t.question, attachments: t.attachments || [], hasAttachments: !!(t.attachments || []).length,
+        retrieval: answer && answer.grounding ? this._retrievalSummary(answer.grounding, resolved) : null,
+        prompt: '', a: answer ? answer.text : null,
+        citations: citations.length ? citations : null,
+        grounding: answer ? answer.grounding : null,
+        trace: answer ? this._answerTrace(answer) : [],
+        model: answer ? answer.model : null,
+        answerStatus: answer ? answer.status : null,
+        streaming: false,
+      };
     });
-    if (!res.ok) throw new Error('Proxy returned ' + res.status);
+  }
 
-    // /api/chat/tools emits named SSE events, not OpenAI-style token deltas:
-    //   grounding    → the engine's retrieved passages + real citation table
-    //   response     → full assistant text for a tool-loop round (replaces)
-    //   tool_call/tool_result → progress
-    //   done         → authoritative final content
-    //   error        → typed failure
-    // There is no incremental `content` event; treat one if it ever appears.
-    const pushLog = (glyph, text) => {
-      this.setState(s => ({ thinkingLog: s.thinkingLog.concat([{ glyph, text }]) }));
+  _clientCitation(c, grounding) {
+    const groundCit = (grounding && grounding.citations || []).find(gc => String(gc.index) === String(c.num));
+    return {
+      num: c.num, resolved: c.resolved,
+      source: c.resolved ? this._shortSource(c.sourceId) : '⊘ unresolved — no engine passage for [' + c.num + ']',
+      sourceId: c.sourceId, spanId: c.spanId, byteStart: c.byteStart, byteEnd: c.byteEnd, score: c.score,
+      quote: groundCit ? (groundCit.text || '').slice(0, 300) : '',
     };
+  }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '', answer = '', streamErr = null;
-    let grounding = null, model = null;
-    const trace = [];
-    this.setState({ streamingAnswer: '', streamingCitations: [], thinkingPhase: 'Identifying referents…', thinkingMeta: null, thinkingLog: [] });
-    pushLog('⊨', 'Identifying referents in source text…');
-
-    const flush = () => {
-      const parsed = this._resolveCitations(answer, grounding);
-      this.setState({ streamingAnswer: parsed.text, streamingCitations: parsed.citations });
+  // Collapses to the spec'd "N passages · M sources" once a turn is done —
+  // replaces the old "Retrieved a passage from X — see Sources" wording.
+  _retrievalSummary(grounding, resolved) {
+    if (!grounding || grounding.empty) return null;
+    const sourceN = new Set(resolved.map(c => c.sourceId)).size;
+    return {
+      source: [...new Set(resolved.map(c => c.source))].join(', '),
+      quote: resolved[0] ? resolved[0].quote : '',
+      summary: `${grounding.foldedCount || 0} passage${grounding.foldedCount === 1 ? '' : 's'} · ${sourceN} source${sourceN === 1 ? '' : 's'}`,
     };
+  }
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        if (!line.trim() || !line.startsWith('data: ')) continue;
-        let data;
-        try { data = JSON.parse(line.slice(6)); } catch { continue; }
-
-        if (data.type === 'source_added') {
-          // A web page the proxy ingested mid-turn. It is a real engine source
-          // now — but it arrived because a search pulled it in, not because the
-          // reader chose it, so it lands in web history rather than loose in
-          // the rail, where it can be inspected and switched off individually.
-          this.recordWebSource(data);
-          const sourceText = data.url ? ` from ${data.url}` : (data.query ? ` for "${data.query.slice(0, 60)}"` : '');
-          pushLog('●', `Ingested "${data.name}"${sourceText}`);
-          this.logAdd('●', `Ingested "${data.name}"${sourceText}`, 'sources');
-        }
-        if (data.type === 'gap') {
-          const msg = `Gap: ${data.reason || data.type}`;
-          pushLog('⊘', msg);
-          this.logAdd('⊘', msg, 'sources');
-        }
-        // A later `grounding` supersedes an earlier one: the proxy re-grounds
-        // after ingesting web pages, and the last table is what the model saw.
-        if (data.sourceCount !== undefined || data.citations) {
-          grounding = data;
-          if (onGrounding) onGrounding(data);
-          const foldedMeta = data.foldedCount !== undefined ? ` · ${data.foldedCount} folded` : '';
-          const metaStr = `${data.sourceCount} found${foldedMeta} · ${data.tokens || 0} tokens`;
-          this.setState({ thinkingPhase: 'Grounded passages', thinkingMeta: metaStr });
-          pushLog('⋈', data.empty
-            ? 'No source material in engine — answer will be ungrounded'
-            : `Grounded ${data.sourceCount} passage(s)${foldedMeta}, ${data.tokens || 0} tokens`);
-          this.logAdd('⋈', data.empty
-            ? 'No source material in engine — answer will be ungrounded'
-            : `Engine grounded ${data.sourceCount} passage(s)${foldedMeta}, ${data.tokens || 0} tokens`, 'sources');
-          (data.gaps || []).forEach(g => {
-            const gm = `Gap: ${g.reason || g.type || JSON.stringify(g)}`;
-            pushLog('⊘', gm);
-            this.logAdd('⊘', gm, 'sources');
-          });
-        }
-        if (data.model) model = data.model;
-        if (data.type === 'content' && data.content) { this.setState({ thinkingPhase: null, thinkingMeta: null }); answer += data.content; flush(); }
-        if (data.type === 'response' && data.content) { this.setState({ thinkingPhase: null, thinkingMeta: null }); answer = data.content; flush(); }
-        if (data.type === 'tool_calls') {
-          (data.calls || []).forEach(c => {
-            trace.push({ kind: 'call', name: c.name || '(unnamed)', detail: typeof c.args === 'string' ? c.args : JSON.stringify(c.args || {}) });
-            let args = '';
-            try { const parsed = typeof c.args === 'string' ? JSON.parse(c.args) : (c.args || {}); args = parsed.query || parsed.url || ''; } catch {}
-            const callDetail = args ? ` — ${args.slice(0, 100)}${args.length > 100 ? '…' : ''}` : '';
-            const text = `→ ${c.name}${callDetail}`;
-            pushLog('→', text);
-            this.logAdd('△', `Tool call: ${c.name}`, 'perception');
-            if (c.name === 'web_search') {
-              this.setState({ thinkingPhase: 'Searching the web…', thinkingMeta: null });
-            } else if (c.name === 'web_fetch') {
-              this.setState({ thinkingPhase: 'Fetching web page…', thinkingMeta: null });
-            } else if (c.name === 'verifold_search' || c.name === 'fold_spans' || c.name === 'fold') {
-              this.setState({ thinkingPhase: 'Folding cast…', thinkingMeta: null });
-              pushLog('⋈', 'Folding referent cast…');
-            } else if (c.name === 'verbatim_search' || c.name === 'search_spans' || c.name === 'search' || c.name === 'engine_search') {
-              this.setState({ thinkingPhase: 'Searching passages…', thinkingMeta: null });
-            }
-          });
-        }
-        if (data.type === 'tool_result') {
-          trace.push({ kind: 'result', name: data.name || '', detail: data.result || '' });
-          const resultText = typeof data.result === 'string' ? data.result : '';
-          const summary = resultText ? resultText.replace(/\n/g, ' ').slice(0, 80).trim() : '';
-          pushLog('←', `${data.name || ''}${summary ? ` — ${summary}${resultText.length > 80 ? '…' : ''}` : ''}`);
-          this.logAdd('△', `Tool result: ${data.name || ''}`, 'perception');
-          if (data.name === 'web_search') {
-            const matchCount = resultText.match(/\[(\d+)\]/g);
-            const n = matchCount ? matchCount.length : '?';
-            this.setState({ thinkingPhase: `Web search: ${n} result(s)`, thinkingMeta: null });
-          } else if (data.name === 'web_fetch') {
-            const chars = (resultText || '').length;
-            this.setState({ thinkingPhase: `Fetched ${chars.toLocaleString()} chars`, thinkingMeta: null });
-          } else if (data.name === 'verifold_search' || data.name === 'fold_spans' || data.name === 'fold') {
-            this.setState({ thinkingPhase: 'Folded cast', thinkingMeta: null });
-            pushLog('⋈', 'Folding complete');
-          }
-        }
-        if (data.type === 'error') streamErr = data.message || 'stream error';
-        if (data.content !== undefined && data.type === undefined) { this.setState({ thinkingPhase: null, thinkingMeta: null }); answer = data.content || answer; flush(); }
+  // A real, mechanical trace — retrieval + verification facts the server
+  // actually computed, never a keyword-guessed EO label.
+  _answerTrace(answer) {
+    const rows = [];
+    if (answer.grounding) {
+      const g = answer.grounding;
+      rows.push({ kind: 'ground', name: 'Retrieval', detail: g.empty
+        ? (g.warming ? 'Corpus still warming — no evidence yet.' : 'No matching passage found.')
+        : `${g.sourceCount} found, ${g.foldedCount} folded, ${g.tokens} tokens (budget ${g.budget})${g.dropped ? `, ${g.dropped} dropped` : ''}` });
+      if (g.priorWidening && g.priorWidening.length) {
+        rows.push({ kind: 'prior', name: 'Prior widening', detail: g.priorWidening.map(w => w.surface || w.sourceId).join(', ') });
       }
     }
-    if (streamErr) throw new Error(streamErr);
-    const parsed = this._resolveCitations(answer, grounding);
-    return { answer, citations: parsed.citations, grounding, trace, model };
+    (answer.gaps || []).forEach(g => rows.push({ kind: 'gap', name: 'Gap', detail: g.reason || g.type }));
+    if (answer.model) rows.push({ kind: 'model', name: 'Model', detail: answer.model });
+    return rows;
+  }
+
+  async newConversation(opts = {}) {
+    this.setState({ spacesOpen: false });
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/conversations', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: opts.title || 'New conversation' }),
+      });
+      const conv = await res.json();
+      const space = { id: conv.id, name: conv.title, turns: [], retrievals: [], sources: [], sourcesOff: {}, _loaded: true };
+      this.setState(s => ({ spaces: s.spaces.concat([space]), activeSpaceId: conv.id, tab: 'chat', selectedEntity: null }));
+      if (!opts.silent) this.logAdd('●', `Conversation "${conv.title}" created`, 'chat');
+    } catch (err) {
+      this.logAdd('⊘', `Could not create conversation — ${err.message}`, 'chat');
+    }
+  }
+
+  renameConversation(id, title) {
+    const trimmed = (title || '').trim();
+    if (!trimmed) return;
+    this.setState(s => ({ spaces: s.spaces.map(sp => sp.id === id ? { ...sp, name: trimmed } : sp) }));
+    fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(id), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: trimmed }),
+    }).catch(() => {});
+  }
+
+  async deleteConversation(id) {
+    const remaining = this.state.spaces.filter(s => s.id !== id);
+    this.setState(s => {
+      const nextActive = s.activeSpaceId === id ? (remaining[0] ? remaining[0].id : null) : s.activeSpaceId;
+      return { spaces: remaining, activeSpaceId: nextActive };
+    });
+    if (!remaining.length) await this.newConversation({ silent: true });
+    fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {});
+    this.logAdd('⊘', 'Conversation deleted', 'chat');
+  }
+
+  // Maps a typed SSE event from turn-controller.js onto the section-6 status
+  // vocabulary. Collapses to a plain summary the instant the turn completes —
+  // nothing here narrates model routing, which stays in the trace/diagnostics
+  // surface instead of the primary chat.
+  _phaseForEvent(type, data) {
+    if (type === 'retrieval_started') return { phase: 'Reading your sources…', meta: null };
+    if (type === 'witnesses_selected') {
+      return {
+        phase: data.empty ? (data.warming ? 'Corpus still loading…' : 'No matching passages — answering from general knowledge…') : 'Finding supporting passages…',
+        meta: data.empty ? null : `${data.sourceCount} found · ${data.foldedCount} folded`,
+      };
+    }
+    if (type === 'writing_started') return { phase: `Writing from ${data.passageCount} passage${data.passageCount === 1 ? '' : 's'}…`, meta: null };
+    if (type === 'citation_verified' || type === 'gap') return { phase: 'Checking citations…', meta: null };
+    return null;
+  }
+
+  async askConversation(question) {
+    const conversationId = this.state.activeSpaceId;
+    const localId = 'pending-' + Date.now();
+    this.updateActiveSpace(sp => ({
+      ...sp,
+      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: null, citations: null, streaming: false }]),
+    }));
+    let liveId = localId;
+    const patchTurn = (patch) => this.updateActiveSpace(sp => ({
+      ...sp, turns: sp.turns.map(t => (t.id === liveId ? { ...t, ...patch } : t)),
+    }));
+    const renameTurn = (newId) => this.updateActiveSpace(sp => ({
+      ...sp, turns: sp.turns.map(t => (t.id === liveId ? { ...t, id: newId } : t)),
+    }));
+
+    this.setState({ streamingLoading: true, thinkingPhase: 'Reading your sources…', thinkingMeta: null, thinkingLog: [] });
+    this.logAdd('⊨', `Asked: "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}"`, 'chat');
+
+    let grounding = null;
+    let citations = [];
+    let currentTurnId = null;
+
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, sourceScope: this.groundSourceFilter(), webSearch: this.state.webSearch }),
+      });
+      if (!res.ok) throw new Error('Proxy returned ' + res.status);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+        for (const block of events) {
+          const lines = block.split('\n');
+          const typeLine = lines.find(l => l.startsWith('event: '));
+          const dataLine = lines.find(l => l.startsWith('data: '));
+          if (!typeLine || !dataLine) continue;
+          const type = typeLine.slice(7).trim();
+          let data;
+          try { data = JSON.parse(dataLine.slice(6)); } catch { continue; }
+
+          if (type === 'accepted') {
+            currentTurnId = data.turnId;
+            renameTurn(data.turnId);
+            liveId = data.turnId;
+            this.setState({ streamingTurnId: data.turnId });
+          }
+          if (type === 'witnesses_selected') {
+            grounding = data;
+            patchTurn({ grounding: data });
+            (data.gaps || []).forEach(g => this.logAdd('⊘', `Gap: ${g.reason || g.type}`, 'sources'));
+          }
+          if (type === 'answer_delta') {
+            // The prose itself is now visible in the turn's own bubble — the
+            // top-of-chat "thinking" indicator has nothing left to say.
+            this.setState({ thinkingPhase: null, thinkingMeta: null });
+            patchTurn({ a: data.text });
+          }
+          if (type === 'citation_verified') {
+            citations = citations.filter(c => c.num !== data.num).concat([this._clientCitation(data, grounding)]);
+            patchTurn({ citations: citations.slice() });
+          }
+          if (type === 'gap') {
+            this.logAdd('⊘', `Gap: ${data.reason || data.type}`, 'sources');
+          }
+          if (type === 'failed') {
+            throw new Error(data.message || 'turn failed');
+          }
+          if (type === 'completed') {
+            const resolved = citations.filter(c => c.resolved);
+            const retrieval = grounding ? this._retrievalSummary(grounding, resolved) : null;
+            patchTurn({
+              a: data.text, citations: citations.length ? citations.slice() : null,
+              model: data.model, retrieval, answerStatus: data.status,
+              trace: this._answerTrace({ grounding, gaps: data.gaps, model: data.model }),
+            });
+            if (retrieval) {
+              this.updateActiveSpace(sp => ({
+                ...sp, retrievals: (sp.retrievals || []).filter(r => r.source !== retrieval.source).concat([retrieval]),
+              }));
+              this.logAdd('⋈', `${retrieval.summary}`, 'sources');
+            }
+            this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null, thinkingLog: [] });
+          }
+
+          const phase = this._phaseForEvent(type, data);
+          if (phase) this.setState({ thinkingPhase: phase.phase, thinkingMeta: phase.meta });
+        }
+      }
+    } catch (err) {
+      this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
+      patchTurn({ a: '(Proxy unavailable — ' + err.message + ')', citations: [], retrieval: null });
+      this.logAdd('○', `Chat failed — ${err.message}`, 'chat');
+    }
+  }
+
+  // Stop leaves the partial answer already visible in place — the server
+  // persists it as an "interrupted" turn, never as an error.
+  stopGeneration() {
+    const conversationId = this.state.activeSpaceId;
+    const turnId = this.state.streamingTurnId;
+    if (!turnId) return;
+    fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns/' + encodeURIComponent(turnId) + '/stop', { method: 'POST' }).catch(() => {});
+  }
+
+  // Regenerate keeps the user's question in place and asks for a new answer
+  // variant — the server records both; the client shows only the new one.
+  async regenerateAnswer(turnId) {
+    const conversationId = this.state.activeSpaceId;
+    const patchTurn = (patch) => this.updateActiveSpace(sp => ({
+      ...sp, turns: sp.turns.map(t => (t.id === turnId ? { ...t, ...patch } : t)),
+    }));
+    this.setState({ streamingLoading: true, streamingTurnId: turnId, thinkingPhase: 'Reading your sources…', thinkingMeta: null });
+    let grounding = null, citations = [];
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns/' + encodeURIComponent(turnId) + '/regenerate', { method: 'POST' });
+      if (!res.ok) throw new Error('Proxy returned ' + res.status);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+        for (const block of events) {
+          const lines = block.split('\n');
+          const typeLine = lines.find(l => l.startsWith('event: '));
+          const dataLine = lines.find(l => l.startsWith('data: '));
+          if (!typeLine || !dataLine) continue;
+          const type = typeLine.slice(7).trim();
+          let data;
+          try { data = JSON.parse(dataLine.slice(6)); } catch { continue; }
+          if (type === 'witnesses_selected') { grounding = data; patchTurn({ grounding: data }); }
+          if (type === 'answer_delta') { this.setState({ thinkingPhase: null, thinkingMeta: null }); patchTurn({ a: data.text }); }
+          if (type === 'citation_verified') {
+            citations = citations.filter(c => c.num !== data.num).concat([this._clientCitation(data, grounding)]);
+            patchTurn({ citations: citations.slice() });
+          }
+          if (type === 'failed') throw new Error(data.message || 'regenerate failed');
+          if (type === 'completed') {
+            const resolved = citations.filter(c => c.resolved);
+            const retrieval = grounding ? this._retrievalSummary(grounding, resolved) : null;
+            patchTurn({ a: data.text, citations: citations.length ? citations.slice() : null, model: data.model, retrieval, answerStatus: data.status });
+            this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
+          }
+          const phase = this._phaseForEvent(type, data);
+          if (phase) this.setState({ thinkingPhase: phase.phase, thinkingMeta: phase.meta });
+        }
+      }
+    } catch (err) {
+      this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
+      this.logAdd('○', `Regenerate failed — ${err.message}`, 'chat');
+    }
   }
 
   // Engine source ids look like "source:/abs/path/pg2600.txt:chunk-1179".
@@ -1519,29 +1714,6 @@ class Component extends DCLogic {
     const file = (m ? m[1] : String(id)).replace(/^.*[/\\]/, '') || String(id);
     const chunk = m && m[2] ? m[2].slice(1) : '';
     return chunk ? `${file} · ${chunk}` : file;
-  }
-
-  // Map each [n] in the answer to a real engine passage. A bracket with no
-  // matching grounding entry is reported as an unresolved gap — never
-  // back-filled with an invented "Source n" label.
-  _resolveCitations(text, grounding) {
-    const table = {};
-    (grounding && grounding.citations || []).forEach(c => { table[String(c.index)] = c; });
-    const seen = new Set();
-    const citations = [];
-    let match;
-    const re = /\[(\d+)\]/g;
-    while ((match = re.exec(text)) !== null) {
-      const num = match[1];
-      if (seen.has(num)) continue;
-      seen.add(num);
-      const c = table[num];
-      citations.push(c
-        ? { num, source: this._shortSource(c.source_id), sourceId: c.source_id,
-            spanId: c.span_id, byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score, quote: (c.text || '').slice(0, 300), resolved: true }
-        : { num, source: '⊘ unresolved — no engine passage for [' + num + ']', resolved: false });
-    }
-    return { text, citations };
   }
 
   onComposeTask(e) { this.setState({ composeTask: e.target.value }); }
@@ -1655,56 +1827,8 @@ class Component extends DCLogic {
   async send() {
     const q = this.state.draft.trim();
     if (!q && !this.state.draftAttachments.length) return;
-    const attachments = this.state.draftAttachments;
-    const id = 'turn-' + Date.now();
-    this.logAdd('⊨', `Asked: "${q.slice(0, 44)}${q.length > 44 ? '…' : ''}"`, 'chat');
-    this.setState({ draft: '', draftAttachments: [], streamingLoading: true, streamingAnswer: null, streamingCitations: null, streamingTurnId: id });
-    this.updateActiveSpace(sp => ({
-      ...sp,
-      turns: sp.turns.concat([{ id, q, attachments, hasAttachments: !!attachments.length, retrieval: null, prompt: '', a: null, citations: null, streaming: false }])
-    }));
-
-    const patchTurn = (patch) => this.updateActiveSpace(sp => ({
-      ...sp, turns: sp.turns.map(t => (t.id === id ? { ...t, ...patch } : t))
-    }));
-
-    try {
-      // Retrieval is mechanical and already finished; show it now. The turn
-      // renders its passage table while the model is still writing, so the
-      // prose visibly arrives second, over evidence the reader already has.
-      const result = await this.sendToProxy(q, (g) => patchTurn({
-        grounding: g,
-        prompt: g.systemContext || null,
-      }));
-      // Provenance shows the engine's own passage text, not a slice of the
-      // model's answer — the answer is what we are trying to check.
-      const resolved = result.citations.filter(c => c.resolved);
-      const retrieval = resolved.length
-        ? { source: [...new Set(resolved.map(c => c.source))].join(', '), quote: resolved[0].quote || '' }
-        : null;
-      this.setState({ streamingLoading: false, streamingAnswer: null, streamingCitations: null, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null, thinkingLog: [], thinkingModalOpen: false });
-      patchTurn({
-        retrieval, a: result.answer, citations: result.citations,
-        grounding: result.grounding, trace: result.trace, model: result.model,
-        // The prompt the proxy actually injected, when it reports one.
-        prompt: (result.grounding && result.grounding.systemContext) || null
-      });
-      if (retrieval) {
-        // Dedupe by source, same discipline as recordWebSource: re-citing a
-        // source already in the list doesn't grow it, it refreshes which
-        // quote is shown and moves it to the front (newest first, same
-        // convention webHistoryRows renders with).
-        this.updateActiveSpace(sp => ({
-          ...sp,
-          retrievals: (sp.retrievals || []).filter(r => r.source !== retrieval.source).concat([retrieval]),
-        }));
-        this.logAdd('⋈', `Quoted passage retrieved`, 'sources');
-      }
-    } catch (err) {
-      this.setState({ streamingLoading: false, streamingAnswer: null, streamingCitations: null, streamingTurnId: null });
-      patchTurn({ a: '(Proxy unavailable — ' + err.message + ')', citations: [], retrieval: null });
-      this.logAdd('○', `Chat failed — ${err.message}`, 'chat');
-    }
+    this.setState({ draft: '', draftAttachments: [] });
+    await this.askConversation(q);
   }
 
   addSource() {
@@ -2014,31 +2138,34 @@ class Component extends DCLogic {
     put('(Content not available from proxy)');
   }
 
-  addSpace() {
-    // Close the switcher behind the dialog; the create path re-asserts it so
-    // the new space still lands active on the chat tab.
-    this.setState({ spacesOpen: false });
-    this.openModal({
-      title: 'New space',
-      label: 'Space name',
-      placeholder: 'Reading Room',
-      submitLabel: 'Create',
-      onSubmit: (name) => {
-        const id = 'sp-' + Date.now();
-        this.setSpaces(spaces => spaces.concat([{ id, name, turns: [], retrievals: [], sources: [] }]), { activeSpaceId: id, spacesOpen: false, tab: 'chat', selectedEntity: null });
-        this.logAdd('●', `Space "${name}" created`, 'spaces');
-      }
-    });
-  }
+  addSpace() { this.newConversation(); }
 
-  forkSpace(upToTurnIndex) {
+  // Forking needs a REAL conversation server-side — a client-only copy would
+  // 404 the moment a question was asked against it (turn-controller.js only
+  // knows conversations conversation-store.js has a record for). The copied
+  // turns show above the fork point for context; new questions build fresh
+  // history from the fork's own (empty) server record onward.
+  async forkSpace(upToTurnIndex) {
     const active = this.activeSpace();
     const turnsCopy = active.turns.slice(0, upToTurnIndex + 1);
     const retrievedCount = turnsCopy.filter(t => t.retrieval).length;
-    const id = 'sp-' + Date.now();
     const name = active.name + ' (fork)';
-    this.setSpaces(spaces => spaces.concat([{ id, name, turns: turnsCopy, retrievals: (active.retrievals || []).slice(0, retrievedCount), sources: active.sources.slice() }]), { activeSpaceId: id, tab: 'chat', selectedEntity: null });
-    this.logAdd('△', `Forked "${active.name}" into "${name}" at turn ${upToTurnIndex + 1}`, 'spaces');
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/conversations', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: name }),
+      });
+      const conv = await res.json();
+      const space = {
+        id: conv.id, name: conv.title, turns: turnsCopy,
+        retrievals: (active.retrievals || []).slice(0, retrievedCount),
+        sources: active.sources.slice(), sourcesOff: { ...(active.sourcesOff || {}) }, _loaded: true,
+      };
+      this.setState(s => ({ spaces: s.spaces.concat([space]), activeSpaceId: conv.id, tab: 'chat', selectedEntity: null }));
+      this.logAdd('△', `Forked "${active.name}" into "${name}" at turn ${upToTurnIndex + 1}`, 'spaces');
+    } catch (err) {
+      this.logAdd('⊘', `Fork failed — ${err.message}`, 'spaces');
+    }
   }
 
   onFilesSelected(e) {
@@ -2410,6 +2537,11 @@ class Component extends DCLogic {
       copy: () => navigator.clipboard.writeText(`Q: ${turn.q}${turn.a ? `\n\nA: ${turn.a}` : ''}${resolved.length ? '\n\n' + resolved.map(c => `[${c.num}] ${c.source}${c.byteStart !== undefined ? ` bytes ${c.byteStart}–${c.byteEnd}` : ''}\n"${c.quote}"`).join('\n\n') : ''}`),
       copyJson: () => navigator.clipboard.writeText(JSON.stringify({ question: turn.q, answer: turn.a, model: turn.model, citations: cits, grounding: turn.grounding, trace: turn.trace, prompt: turn.prompt }, null, 2)),
       fork: () => this.forkSpace(i),
+      // Not while this exact turn is still streaming — regenerating something
+      // that hasn't finished isn't a real action, it's a race with itself.
+      canRegenerate: !!turn.a && !(this.state.streamingLoading && this.state.streamingTurnId === turn.id),
+      regenerate: () => this.regenerateAnswer(turn.id),
+      wasInterrupted: turn.answerStatus === 'interrupted',
 
       // A bracket is a door. Openable only when the cited source is actually
       // bonded to this room — an unopenable citation looks different rather
@@ -2454,10 +2586,10 @@ class Component extends DCLogic {
       traceChevron: chevron(panels.trace),
       traceColor: panels.trace ? '#1F5A4C' : '#8C877C',
       traceLabel: `trace (${trace.length})`,
-      traceHeading: turn.model ? `tool loop · ${turn.model}` : 'tool loop',
+      traceHeading: turn.model ? `retrieval + verification · ${turn.model}` : 'retrieval + verification',
       traceRows: trace.map(t => ({
-        glyph: t.kind === 'call' ? '→' : '←',
-        color: t.kind === 'call' ? '#1F5A4C' : '#A39D91',
+        glyph: t.kind === 'call' ? '→' : (t.kind === 'gap' ? '⊘' : (t.kind === 'ground' ? '⋈' : '←')),
+        color: t.kind === 'call' ? '#1F5A4C' : (t.kind === 'gap' ? '#A3592B' : (t.kind === 'ground' ? '#1F5A4C' : '#A39D91')),
         name: t.name,
         detail: (t.detail || '').slice(0, 600)
       })),
@@ -2511,9 +2643,21 @@ class Component extends DCLogic {
       remove: () => this.setState(s => ({ draftAttachments: s.draftAttachments.filter(x => x.id !== att.id) }))
     }));
     const spaces = S.spaces.map(sp => ({
-      name: sp.name, marker: sp.id === S.activeSpaceId ? '●' : '○',
+      id: sp.id, name: sp.name, marker: sp.id === S.activeSpaceId ? '●' : '○',
       bg: sp.id === S.activeSpaceId ? '#F2EFE8' : 'transparent',
-      select: () => this.setState({ activeSpaceId: sp.id, spacesOpen: false, tab: 'chat', selectedEntity: null })
+      select: () => this.switchConversation(sp.id),
+      renaming: S.renamingSpaceId === sp.id,
+      notRenaming: S.renamingSpaceId !== sp.id,
+      renameValue: S.renameSpaceValue,
+      startRename: (e) => { e.stopPropagation(); this.setState({ renamingSpaceId: sp.id, renameSpaceValue: sp.name }); },
+      onRenameChange: (e) => this.setState({ renameSpaceValue: e.target.value }),
+      commitRename: () => { this.renameConversation(sp.id, S.renameSpaceValue); this.setState({ renamingSpaceId: null }); },
+      commitRenameKey: (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); this.renameConversation(sp.id, S.renameSpaceValue); this.setState({ renamingSpaceId: null }); }
+        else if (e.key === 'Escape') { e.preventDefault(); this.setState({ renamingSpaceId: null }); }
+      },
+      setRenameInput: (el) => { if (el) requestAnimationFrame(() => el.focus()); },
+      delete: (e) => { e.stopPropagation(); this.deleteConversation(sp.id); },
     }));
     const previewByType = { pdf: 'A text document — bonded to this room and citable.', video: 'Structure found by segmenting raw container bytes — no frame decoded.', audio: 'Transcribed locally by an on-device model.', spreadsheet: 'A spreadsheet — parsed into rows and columns, bonded to this room and citable.', link: 'A web source bonded and citable.', binary: 'Preview not available — stored as an opaque binary.' };
     const roomSources = this.roomSources();
@@ -2841,7 +2985,12 @@ class Component extends DCLogic {
       composerHintColor: enabledSourceCount === 0 && roomSources.length ? '#A3592B' : '#A39D91',
       turns: active.turns.map((turn, i) => this.turnVals(turn, i)),
       streamingAnswer: S.streamingAnswer, streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
-      thinkingPhase: S.thinkingPhase || `Reading across ${enabledSourceCount} source${enabledSourceCount === 1 ? '' : 's'}`,
+      thinkingPhase: S.thinkingPhase,
+      // Once the answer's own prose starts arriving, thinkingPhase is cleared —
+      // the top-of-chat indicator has nothing left to say, so it disappears
+      // rather than falling back to stale placeholder text.
+      showThinkingIndicator: S.streamingLoading && !!S.thinkingPhase,
+      stopGeneration: () => this.stopGeneration(),
       thinkingMeta: S.thinkingMeta,
       thinkingModalOpen: S.thinkingModalOpen,
       openThinkingModal: () => this.openThinkingModal(),
