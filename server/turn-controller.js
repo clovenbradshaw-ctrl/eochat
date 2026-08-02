@@ -52,10 +52,71 @@ function formatOutput(text) {
   return t.trim();
 }
 
-const HISTORY_TURNS = 6;
+export const HISTORY_TURNS = 6;
+
+// No caller — client or otherwise — has ever set a system message for this
+// surface (the UI sends only { question, sourceScope, pool, attachments }).
+// Without this, every turn's only "system" instruction was the grounding
+// prompt below, which talks about citations and source material, not about
+// who is answering or how to handle a harmful ask. Kept short: this rides on
+// every turn a small local model sees, and prompt weight it can't spare is
+// prompt weight it drops first.
+const DEFAULT_PERSONA_PROMPT =
+  "You are a warm, direct conversational assistant. Speak naturally and get " +
+  "to the point rather than hedging or over-explaining. If a request is " +
+  "genuinely harmful — violence, serious illegality, or someone's safety or " +
+  "privacy at risk — decline briefly and help with the legitimate need behind " +
+  "it if there is one, without a lecture. Otherwise, just help.";
+const DEFAULT_PERSONA_MESSAGE = { role: "system", content: DEFAULT_PERSONA_PROMPT };
 
 function newAnswerEventKey(conversationId, turnId) {
   return `${conversationId}:${turnId}`;
+}
+
+// Same mechanical (no model call) keyword extraction DiscourseStore uses in
+// proxy.js for its own fold — kept as an independent copy rather than a
+// shared import so this module still depends on nothing in proxy.js.
+const TOPIC_STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of",
+  "with", "by", "from", "as", "is", "was", "are", "were", "be", "been", "has",
+  "had", "have", "do", "does", "did", "will", "would", "could", "should",
+  "may", "might", "can", "that", "this", "it", "its", "i", "you", "we", "they",
+  "he", "she", "me", "my", "your", "our", "their", "his", "her", "him", "not",
+  "no", "so", "if", "then", "just", "about", "like", "what", "when", "where",
+  "how", "which", "who",
+]);
+
+function extractTopics(text, limit = 12) {
+  const freq = {};
+  for (const w of text.toLowerCase().split(/\s+/)) {
+    const clean = w.replace(/[^a-z0-9]/g, "");
+    if (clean.length > 3 && !TOPIC_STOPWORDS.has(clean)) freq[clean] = (freq[clean] || 0) + 1;
+  }
+  return Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([w]) => w);
+}
+
+// Turns older than the recent window are folded into one mechanical summary
+// system message instead of being silently dropped — the same shape as
+// DiscourseStore's priorSummary fold in proxy.js, applied here so THIS
+// surface (the one the UI actually talks to) doesn't just forget everything
+// past HISTORY_TURNS back with no trace at all.
+function foldOlderTurns(turns) {
+  const dialogue = turns.map((t) => {
+    const active = (t.answers || []).find((a) => a.id === t.activeAnswerId);
+    const answerText = active && active.status === "completed" ? (active.text || "") : "";
+    return `User: ${(t.question || "").slice(0, 300)}\nAssistant: ${answerText.slice(0, 300)}`;
+  }).join("\n");
+  const allText = turns.map((t) => {
+    const active = (t.answers || []).find((a) => a.id === t.activeAnswerId);
+    return `${t.question || ""} ${active?.text || ""}`;
+  }).join(" ");
+  const content = [
+    `[Earlier in this conversation — ${turns.length} exchange(s), compressed]`,
+    `Topics discussed: ${extractTopics(allText).join(", ")}`,
+    "",
+    dialogue.slice(0, 2000),
+  ].join("\n");
+  return { role: "system", content };
 }
 
 // Every [n] the answer actually cites, matched against the engine's real
@@ -175,8 +236,10 @@ export function createTurnController(deps) {
   // conversation doesn't grow the prompt without limit.
   function buildHistoryMessages(conv, beforeTurnId) {
     const turns = (conv.turns || []).filter((t) => t.id !== beforeTurnId);
+    const older = turns.slice(0, -HISTORY_TURNS);
     const recent = turns.slice(-HISTORY_TURNS);
     const out = [];
+    if (older.length > 0) out.push(foldOlderTurns(older));
     for (const t of recent) {
       out.push({ role: "user", content: t.question });
       const active = (t.answers || []).find((a) => a.id === t.activeAnswerId);
@@ -506,6 +569,66 @@ export function createTurnController(deps) {
         completedAt: new Date().toISOString(),
       });
 
+<<<<<<< HEAD
+=======
+      // The one citation table this whole answer is checked against — index,
+      // byte range, and verbatim text together, so bracket resolution and
+      // quote-fidelity checking can never drift apart into two different ideas
+      // of what citation [n] is.
+      const lastCitations = (groundResult.citations || []).map((c, i) => ({
+        index: i + 1, source_id: c.source_id, span_id: c.span_id,
+        byte_start: c.byte_start, byte_end: c.byte_end, score: c.score, text: c.text,
+      }));
+
+      const history = buildHistoryMessages(conv, turn.id);
+      const messages = [DEFAULT_PERSONA_MESSAGE, systemMsg, ...history, { role: "user", content: question }];
+
+      let sawStart = false;
+      const { text: rawText, model } = await callModelStreaming(messages, {
+        signal: controller.signal,
+        onDelta: (delta, text) => {
+          // Captured on the controller itself so a stop mid-stream can persist
+          // exactly what the reader already saw, not an empty answer.
+          controller._partialText = text;
+          if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
+          sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text });
+        },
+      });
+
+      // Resolve brackets against the RAW text first — validateCitations below
+      // rewrites an unresolved [9] into "[⊘ no source 9]", which no longer
+      // looks like a citation at all and would make the very gap it exists to
+      // report invisible to bracket resolution.
+      const { citations: brackets, unresolvedNums } = resolveCitationBrackets(rawText, lastCitations);
+      const finalText = maxCitation > 0 ? validateCitations(rawText, maxCitation) : rawText;
+      const fidelity = verifyQuotedFidelity(finalText, lastCitations);
+
+      for (const c of brackets) {
+        sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
+      }
+      const gaps = [];
+      if (unresolvedNums.length) {
+        gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no engine passage matches this bracket.` });
+      }
+      for (const u of fidelity.unverified) {
+        gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited passage." });
+      }
+      for (const g of groundResult.gaps || []) gaps.push(g);
+      if (!groundResult.context) {
+        gaps.push({
+          type: warming ? "corpus_warming" : "no_evidence_matched",
+          reason: warming
+            ? "The document index was still loading when this was asked."
+            : "No passage in your sources matches this question — answered from general knowledge, uncited.",
+        });
+      }
+      for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
+
+      await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+        text: finalText, model, citations: brackets, gaps,
+        fidelity, status: "completed", completedAt: new Date().toISOString(),
+      });
+>>>>>>> e113e05 (Default persona/safety layer, fold history instead of dropping it, reconcile L1d)
       sendEvent("completed", {
         turnId: turn.id, answerId, status: "completed", text: surfText,
         mode: "surf", model: null,

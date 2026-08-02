@@ -10,7 +10,7 @@ import path from "node:path";
 import os from "node:os";
 import assert from "node:assert/strict";
 import { ConversationStore } from "../server/conversation-store.js";
-import { createTurnController } from "../server/turn-controller.js";
+import { createTurnController, HISTORY_TURNS } from "../server/turn-controller.js";
 
 function encode(obj) { return new TextEncoder().encode(JSON.stringify(obj) + "\n"); }
 
@@ -199,6 +199,7 @@ async function testRegenerateCreatesVariant(dir) {
   console.log("  ok: regenerate retains the user turn and adds a new assistant variant");
 }
 
+<<<<<<< HEAD
 async function testVerbatimSnippets(dir) {
   const { controller, conversationStore } = await withController(
     dir,
@@ -240,6 +241,77 @@ async function testUnresolvedCitationProducesNoSnippet(dir) {
 
   assert.equal(events.filter(e => e.type === "verbatim_snippet").length, 0, "an unresolved bracket must never produce a snippet card");
   console.log("  ok: an unresolved citation produces no verbatim snippet");
+=======
+// A fetch mock that, in addition to streaming canned deltas, records the
+// `messages` array each call was actually invoked with — so a test can
+// inspect what the model saw on turn N of a long-running conversation,
+// not just what got persisted.
+function makeRecordingFetchMock(replyText, sentMessages) {
+  return async (url, opts) => {
+    sentMessages.push(JSON.parse(opts.body).messages);
+    return makeFetchMock([{ message: { content: replyText } }, { done: true }])(url, opts);
+  };
+}
+
+// Ungrounded (ordinary conversational, ["everything ranks the same" logic
+// doesn't matter here — GROUNDED_RESULT is reused purely so the mock has a
+// consistent shape]) ~30-turn thread — well past HISTORY_TURNS (6) — run
+// with no real LLM, checking two things a multi-hundred-turn run on a small
+// local model would otherwise have to discover the hard way: (1) the
+// messages sent to the model stay bounded (recent turns are capped, not
+// accumulated without limit) instead of growing every turn, and (2) turns
+// older than the recent window are folded into a summary rather than simply
+// vanishing with no trace. Runs against DiscourseStore's real fold shape
+// (turn-controller.js's foldOlderTurns), not a re-derivation of it.
+async function testLongThreadFoldsAndBoundsContext(dir) {
+  const sentMessages = [];
+  const conversationStore = new ConversationStore({ dir });
+  const groundQuery = () => ({ ...GROUNDED_RESULT, context: null, citations: [], retrieved: [], total: 0, folded: 0 });
+  const controller = createTurnController({
+    conversationStore, groundQuery,
+    target: "http://mock-ollama", numCtx: 8192, modelRouter: null,
+    heuristicModel: () => "mock-model:latest", latencyBudgetMs: 8000, isWarming: () => false,
+  });
+
+  const conv = await conversationStore.create({ title: "Long chat" });
+  const TURN_COUNT = 30;
+  for (let i = 0; i < TURN_COUNT; i++) {
+    globalThis.fetch = makeRecordingFetchMock(`Reply about topic${i} number ${i}.`, sentMessages);
+    const { sendEvent } = collectEvents();
+    const { done } = await controller.startTurn(
+      { conversationId: conv.id, question: `Tell me about topic${i}, item ${i}.` },
+      sendEvent,
+    );
+    await done;
+  }
+
+  assert.equal(sentMessages.length, TURN_COUNT);
+
+  // Once the conversation is past the fold threshold, the message-array
+  // shape stops growing with conversation length: persona + grounding +
+  // one fold summary + a fixed HISTORY_TURNS window + current question is
+  // the same size whether this is turn 10 or turn 300 — the recent window
+  // is what's fixed-size, not the whole history.
+  const justPastFold = sentMessages[HISTORY_TURNS + 1].length;  // first turn with a fold summary present
+  const wayPastFold = sentMessages[TURN_COUNT - 1].length;      // many more turns later
+  assert.equal(wayPastFold, justPastFold, `message count must stay bounded once folding is active, not keep growing with conversation length (turn ${HISTORY_TURNS + 2}: ${justPastFold}, turn ${TURN_COUNT}: ${wayPastFold})`);
+
+  const lastCallMessages = sentMessages[TURN_COUNT - 1];
+  assert.equal(lastCallMessages[0].role, "system");
+  assert.match(lastCallMessages[0].content, /warm, direct conversational assistant/, "default persona must be injected by default");
+
+  const foldMsg = lastCallMessages.find((m) => m.role === "system" && /Earlier in this conversation/.test(m.content));
+  assert.ok(foldMsg, "turns older than the recent window must be folded into a summary, not silently dropped");
+  assert.match(foldMsg.content, /Topics discussed:/);
+  // Something from an early, now-folded turn must still be traceable in the
+  // summary — folding must compress, not erase.
+  assert.match(foldMsg.content, /topic0/, "content from a folded-away early turn must survive into the summary");
+
+  const userTurnsInPrompt = lastCallMessages.filter((m) => m.role === "user").length;
+  assert.ok(userTurnsInPrompt <= HISTORY_TURNS + 1, `raw user turns in the prompt must stay capped at HISTORY_TURNS+current, got ${userTurnsInPrompt}`);
+
+  console.log(`  ok: ${TURN_COUNT}-turn thread stays bounded (${justPastFold} msgs once folding starts, still ${wayPastFold} at turn ${TURN_COUNT}), older turns folded not dropped, persona present throughout`);
+>>>>>>> e113e05 (Default persona/safety layer, fold history instead of dropping it, reconcile L1d)
 }
 
 async function main() {
@@ -250,8 +322,12 @@ async function main() {
     await testUnresolvedCitationGap(dir);
     await testStopInterrupts(dir);
     await testRegenerateCreatesVariant(dir);
+<<<<<<< HEAD
     await testVerbatimSnippets(dir);
     await testUnresolvedCitationProducesNoSnippet(dir);
+=======
+    await testLongThreadFoldsAndBoundsContext(dir);
+>>>>>>> e113e05 (Default persona/safety layer, fold history instead of dropping it, reconcile L1d)
     console.log("ALL TURN-CONTROLLER TESTS PASSED");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
