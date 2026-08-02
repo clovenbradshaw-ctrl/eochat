@@ -13,12 +13,13 @@
 // stays crisp — every answer is driven only by the pages THIS turn needed.
 
 import path from "node:path";
-import { createInstructionGate } from "../server/instruction-gate.js";
+import { createInstructionGate, countTokens } from "../server/instruction-gate.js";
 
 const OLLAMA = process.env.OLLAMA || "http://localhost:11434";
 const MODEL = process.env.MODEL || "llama3.2:latest";
 const NUM_CTX = Number(process.env.NUM_CTX || 8192);
 const BUDGET = Number(process.env.BUDGET || 3600);
+const OUTPUT_RESERVE = 350; // num_predict — the answer itself must fit too
 
 const gate = createInstructionGate({
   dir: path.join(process.cwd(), "instruction-set-support"),
@@ -101,6 +102,15 @@ for (const [i, turn] of CONVO.entries()) {
     ...history,
     { role: "user", content: turn.q },
   ];
+  // R5 — fit the model that exists. The whole prompt (gate block + history +
+  // question + output reserve) must fit the deployed window, or the top is
+  // silently truncated and the reader's session drifts.
+  const promptTokens = countTokens(JSON.stringify(messages));
+  const fits = promptTokens + OUTPUT_RESERVE <= NUM_CTX;
+  console.log(`[fit] prompt ${promptTokens} + reserve ${OUTPUT_RESERVE} vs window ${NUM_CTX}: ${fits ? "fits" : "OVER — instructions would be truncated"}`);
+  if (r.stats.gap) {
+    console.log(`[gap] no fold matched this turn — gate marker names the absence; ${r.stats.rejectedByBudget} relevant fold(s) rejected by budget`);
+  }
   const text = await chat(messages);
   history.push({ role: "user", content: turn.q }, { role: "assistant", content: text });
 

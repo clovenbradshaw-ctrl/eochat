@@ -240,16 +240,21 @@
           </div>
           <sc-if value="{{ chatsOpen }}">
             <sc-for list="{{ spaces }}" as="sp">
+              <sc-if value="{{ sp.renaming }}">
+                <div style="display:flex; align-items:center; gap:2px; margin-left:30px; padding:1px 0;">
+                  <input type="text" aria-label="Chat name" value="{{ sp.renameValue }}" onChange="{{ sp.onRenameChange }}" onBlur="{{ sp.commitRename }}" onKeyDown="{{ sp.commitRenameKey }}" ref="{{ sp.setRenameInput }}" style="flex:1; min-width:0; font-size:12.5px; color:#26241F; border:1px solid #1F5A4C; background:#FFFDFA; border-radius:7px; padding:5px 8px; outline:none; font-family:inherit;" />
+                </div>
+              </sc-if>
+              <sc-if value="{{ sp.notRenaming }}">
               <div style="display:flex; align-items:center; gap:2px; border-radius:7px; background: {{ sp.bg }}; margin-left:30px;">
-                <button type="button" onClick="{{ sp.select }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; border-radius:7px; padding:6px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#26241F;">
+                <button type="button" onClick="{{ sp.select }}" onDoubleClick="{{ sp.startRename }}" title="{{ sp.name }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; border-radius:7px; padding:6px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#26241F;">
                   <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:10px; flex:none;">{{ sp.marker }}</span>
                   <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ sp.name }}</span>
                 </button>
-                <sc-if value="{{ sp.notRenaming }}">
-                <button type="button" aria-label="Rename" onClick="{{ sp.startRename }}" style="border:0; background:none; color:#A39D91; cursor:pointer; padding:4px; display:flex; flex:none;"><i class="ph ph-pencil-simple" style="font-size:12px;"></i></button>
+                <button type="button" aria-label="Rename chat" onClick="{{ sp.startRename }}" style="border:0; background:none; color:#A39D91; cursor:pointer; padding:4px; display:flex; flex:none;"><i class="ph ph-pencil-simple" style="font-size:12px;"></i></button>
                 <button type="button" aria-label="Delete" onClick="{{ sp.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:4px 8px 4px 4px; display:flex; flex:none; opacity:0.4;"><i class="ph ph-trash" style="font-size:12px;"></i></button>
-                </sc-if>
               </div>
+              </sc-if>
             </sc-for>
           </sc-if>
         </div>
@@ -1198,31 +1203,132 @@
         </sc-if>
 
         <sc-if value="{{ showEntityIndex }}">
-        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Entities</span>
+        <div style="display:flex; align-items:baseline; gap:8px;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Explorer</span>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#BDB6A9;">{{ ladderRungName }}</span>
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:2px 8px;">
+          <sc-for list="{{ entityRungRows }}" as="rung">
+            <button type="button" onClick="{{ rung.select }}" title="{{ rung.title }}" style="border:0; background:none; padding:2px 0; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.04em; text-transform:uppercase; color:{{ rung.color }}; font-weight:{{ rung.weight }}; opacity:{{ rung.opacity }};">{{ rung.name }}{{ rung.marker }}</button>
+          </sc-for>
+        </div>
+        <sc-if value="{{ entityGroupPathRows.length }}">
+          <div style="display:flex; flex-wrap:wrap; gap:4px;">
+            <sc-for list="{{ entityGroupPathRows }}" as="gp">
+              <span style="display:flex; align-items:center; gap:4px; font-size:9.5px; font-family:'IBM Plex Mono', monospace; color:#5A786E; background:#E7EFEB; border:1px solid #D3E2DB; border-radius:5px; padding:1px 4px 1px 6px;">{{ gp.label }}
+                <button type="button" onClick="{{ gp.clear }}" title="clear filter" style="border:0; background:none; color:#5A786E; font-size:11px; line-height:1; cursor:pointer; padding:0;">×</button>
+              </span>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ ladderNote }}">
+          <span style="font-size:10.5px; color:#A39D91; line-height:1.5; margin-top:-4px;">{{ ladderNote }}</span>
+        </sc-if>
+
+        <sc-if value="{{ entityListShowing }}">
         <div style="display:flex; flex-direction:column; gap:2px;">
           <sc-for list="{{ entityRows }}" as="ent">
-            <button type="button" onClick="{{ ent.select }}" style="display:flex; align-items:center; gap:9px; border:0; background:none; padding:6px 4px; cursor:pointer; font-family:inherit; text-align:left; border-radius:6px;">
+            <button type="button" onClick="{{ ent.select }}" style="display:flex; align-items:center; gap:8px; border:0; background:none; padding:6px 4px; cursor:pointer; font-family:inherit; text-align:left; border-radius:6px; width:100%;">
+              <sc-if value="{{ ent.dotColor }}">
+                <span title="{{ ent.dotTitle }}" style="width:7px; height:7px; border-radius:50%; background:{{ ent.dotColor }}; flex:none;"></span>
+              </sc-if>
               <span style="font-size:12.5px; color:#26241F; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ent.name }}</span>
               <span style="width: {{ ent.barWidth }}; height:3px; border-radius:2px; background: {{ ent.color }}; flex:none;"></span>
             </button>
           </sc-for>
         </div>
-
-        <sc-if value="{{ hasWithheld }}">
-        <div style="display:flex; flex-direction:column; gap:6px; padding-top:10px; margin-top:6px; border-top:1px solid #EBE6DC;">
-          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Withheld</span>
-          <span style="font-size:11px; color:#A39D91; line-height:1.5;">{{ withheldSummary }}</span>
-          <div style="display:flex; flex-wrap:wrap; gap:4px;">
-            <sc-for list="{{ withheldRows }}" as="w">
-              <span title="{{ w.reason }}" style="font-size:11px; color:#8A857A; border:1px dashed #E0DACE; border-radius:5px; padding:2px 6px;">{{ w.name }}</span>
-            </sc-for>
-          </div>
+        </sc-if>
+        <sc-if value="{{ ladderIsFilter }}">
+        <div style="display:flex; flex-direction:column; gap:2px;">
+          <sc-for list="{{ entityLadderRows }}" as="grp">
+            <button type="button" onClick="{{ grp.select }}" title="narrow the cast to this" style="display:flex; align-items:center; gap:9px; border:0; background:none; padding:6px 4px; cursor:pointer; font-family:inherit; text-align:left; border-radius:6px; width:100%;">
+              <span style="font-size:12.5px; color:#26241F; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ grp.name }}</span>
+              <span style="font-size:10px; font-family:'IBM Plex Mono', monospace; color:#8A857A; flex:none;">{{ grp.meta }}</span>
+              <span style="width: {{ grp.barWidth }}; height:3px; border-radius:2px; background: {{ grp.color }}; flex:none;"></span>
+            </button>
+          </sc-for>
         </div>
+        <sc-if value="{{ ladderGroupsEmpty }}">
+          <span style="font-size:11.5px; color:#A39D91; line-height:1.6; border:1px dashed #E0DACE; border-radius:7px; padding:9px 11px;">Nothing to group at {{ ladderRungName }} for this cast. Clear a filter above, or climb to a rung that reads a different field.</span>
+        </sc-if>
         </sc-if>
 
-        <div style="margin-top:auto; padding-top:12px; border-top:1px solid #EBE6DC; display:flex; flex-direction:column; gap:3px;">
+        <sc-if value="{{ voidShowing }}">
+          <sc-if value="{{ hasVoidCandidates }}">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Named, not individuated · {{ voidCandidateNote }}</span>
+            <div style="display:flex; flex-direction:column; gap:1px;">
+              <sc-for list="{{ voidCandidateRows }}" as="w">
+                <div title="{{ w.reason }}" style="display:flex; align-items:baseline; gap:8px; padding:4px 2px;">
+                  <span style="font-size:12px; color:{{ w.color }}; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ w.name }}</span>
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91; flex:none;">{{ w.meta }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ hasVoidGaps }}">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91; padding-top:8px; border-top:1px solid #EBE6DC;">What the fold could not read</span>
+            <div style="display:flex; flex-direction:column; gap:7px;">
+              <sc-for list="{{ voidGapRows }}" as="g">
+                <div style="display:flex; flex-direction:column; gap:2px; border-left:2px solid {{ g.color }}; padding:1px 0 1px 8px;">
+                  <div style="display:flex; align-items:baseline; gap:6px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:{{ g.color }}; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ g.field }}</span>
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91; flex:none;">{{ g.where }} · {{ g.tier }}</span>
+                  </div>
+                  <span style="font-size:11px; color:#6E6A60; line-height:1.55;">{{ g.reason }}{{ g.more }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ voidEmpty }}">
+            <span style="font-size:11.5px; color:#A39D91; line-height:1.6;">Nothing withheld and no gaps reported. Either every candidate was individuated, or no document is folded yet.</span>
+          </sc-if>
+        </sc-if>
+
+        <sc-if value="{{ atmosphereShowing }}">
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <sc-for list="{{ atmosphereRows }}" as="a">
+              <button type="button" onClick="{{ a.open }}" title="{{ a.full }}" style="display:flex; flex-direction:column; gap:3px; border:1px solid #EBE6DC; background:#FFFDFA; border-radius:8px; padding:9px 11px; cursor:pointer; font-family:inherit; text-align:left;">
+                <div style="display:flex; align-items:center; gap:7px;">
+                  <span style="width:8px; height:8px; border-radius:50%; background:{{ a.dot }}; flex:none;"></span>
+                  <span style="font-size:12.5px; color:#26241F; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ a.name }}</span>
+                </div>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#8A857A;">{{ a.read }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#8A857A;">{{ a.coverage }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#8A857A;">{{ a.cast }}</span>
+                <span style="font-size:10.5px; color:#5A786E; line-height:1.5;">{{ a.lens }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#BDB6A9;">{{ a.version }}</span>
+              </button>
+            </sc-for>
+          </div>
+          <span style="font-size:11px; color:#A39D91; line-height:1.55;">{{ atmosphereNote }}</span>
+        </sc-if>
+
+        <sc-if value="{{ paradigmShowing }}">
+          <div style="display:flex; flex-direction:column; gap:1px;">
+            <sc-for list="{{ paradigmRows }}" as="p">
+              <div style="display:flex; align-items:baseline; gap:8px; padding:5px 2px;">
+                <span style="font-size:12.5px; color:{{ p.color }}; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ p.name }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91; flex:none;">{{ p.meta }}{{ p.note }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <span style="font-size:11px; color:#A39D91; line-height:1.6; padding-top:8px; border-top:1px solid #EBE6DC;">{{ paradigmNote }}</span>
+        </sc-if>
+
+        <div style="margin-top:auto; padding-top:12px; border-top:1px solid #EBE6DC; display:flex; flex-direction:column; gap:8px;">
           <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#6E6A60;">{{ entityCountLabel }}</span>
-          <span style="font-size:11px; color:#A39D91;">folded from your enabled sources · click a name for its profile</span>
+          <div style="display:flex; flex-direction:column; gap:2px;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Legend</span>
+            <sc-for list="{{ entitySourceRows }}" as="es">
+              <button type="button" onClick="{{ es.open }}" title="{{ es.full }}" style="display:flex; align-items:center; gap:8px; border:0; background:none; padding:2px 0; cursor:pointer; font-family:inherit; text-align:left; border-radius:4px;">
+                <span style="width:8px; height:8px; border-radius:50%; background:{{ es.dot }}; flex:none;"></span>
+                <span style="font-size:11px; color:{{ es.nameColor }}; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ es.short }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91; flex:none;">{{ es.foldLabel }}</span>
+              </button>
+            </sc-for>
+            <span style="font-size:10.5px; color:#A39D91; line-height:1.5;">{{ entitySourcesSummary }} · {{ entityChatLabel }}</span>
+          </div>
+          <span style="font-size:11px; color:#A39D91;">{{ explorerHint }}</span>
         </div>
         </sc-if>
       </sc-if>
@@ -1386,6 +1492,62 @@ const isStructuralName = (name) => {
   return STRUCTURAL_HEADINGS.has(s.toLowerCase());
 };
 
+// The Explorer's climb — the engine's terrain grid (CUBE.md: domain × grain),
+// read as a drill-up from the unformed ground to the worldview.
+//
+//                    Ground        Figure     Pattern
+//   Existence        Void          Entity     Kind
+//   Structure        Field         Link       Network
+//   Interpretation   Atmosphere    Lens       Paradigm
+//
+// The ladder is that grid in reading order. Void used to be missing, which is
+// why the panel had nowhere to put the withheld cast except a footer: the
+// unindividuated ground of existence is a terrain, not an appendix.
+//
+// EVERY RUNG READS A REAL FOLD FIELD OR SAYS IT CANNOT. The previous version
+// collapsed Atmosphere, Lens and Paradigm into a single invented group labelled
+// "the whole world", and made Field and Network the same grouping (the source
+// document) so that descending through both narrowed nothing. A rung that
+// pretends to partition is worse than a rung that reports its gap, because the
+// reader cannot tell the difference from the outside.
+//
+// Two kinds of rung, and they behave differently on click:
+//   FILTER rungs (Kind, Field, Link, Network, Lens) partition the cast; picking
+//     a group narrows it and descends one rung.
+//   VIEW rungs (Void, Atmosphere, Paradigm) have no per-entity field to
+//     partition on. They show their own material — the withheld and the gaps,
+//     the reading conditions, the individuation vocabulary — and do not filter.
+//     Saying so is the honest alternative to inventing a group of one.
+// Entity is the floor: the flat cast, where a click opens a profile.
+const RUNG_LADDER = ['Void', 'Entity', 'Kind', 'Field', 'Link', 'Network', 'Atmosphere', 'Lens', 'Paradigm'];
+const RUNG_FILTERS = new Set(['Kind', 'Field', 'Link', 'Network', 'Lens']);
+const RUNG_BLURB = {
+  Void: 'existence · ground — named but not individuated, and what the fold could not read',
+  Entity: 'existence · figure — the beings the fold shows, with evidence',
+  Kind: 'existence · pattern — the individuation type each being was given',
+  Field: 'structure · ground — the divisions of the document a being occurs in',
+  Link: 'structure · figure — two beings present in the same frame',
+  Network: 'structure · pattern — clusters formed by each being\u2019s strongest tie',
+  Atmosphere: 'interpretation · ground — what conditions this reading without being read',
+  Lens: 'interpretation · figure — which witness or engine vouched for a name',
+  Paradigm: 'interpretation · pattern — the vocabulary of kinds this reading can use',
+};
+
+// The individuation vocabulary, mirrored from @eoreader/engine/referents
+// INDIVIDUATION_TYPES. The fold does not ship the list, so it is duplicated
+// here; the Paradigm rung renders any type present in the cast that is NOT in
+// this list as well, so drift shows up as a visible extra row instead of a
+// silently dropped kind.
+const INDIVIDUATION_VOCABULARY = ['field', 'emanon', 'protogon', 'holon', 'apparatus'];
+
+// Above this the pairwise co-presence scan is not run. 400 beings is 79,800
+// pairs; beyond that the panel would stall the frame it renders in, and a
+// stalled panel is L1 dead air. The cap is reported, never silently applied.
+const LINK_PAIR_CAP = 400;
+// How many Link rows are listed. The tie list is long by nature — every pair
+// that ever shared a frame — so it is cut, and L3 requires the cut be stated.
+const LINK_ROW_CAP = 60;
+
 // Where rooms — and with them the sources rail — persist between visits.
 //
 // Versioned because the rail reads from two places: the engine's corpus pool
@@ -1411,6 +1573,7 @@ class Component extends DCLogic {
     // without those two facts being confused with each other.
     localModel: false, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
     spacesOpen: false, activeSpaceId: 'default', chatMode: 'chat', leftCollapsed: false, selectedEntity: null, activeTurnId: null,
+    entityRung: 'Entity', entityPath: [], entityRungHelp: false,
     projectsOpen: true,
     sourcesOpen: true,
     chatsOpen: false,
@@ -2032,12 +2195,54 @@ class Component extends DCLogic {
   // so an alias links to the same referent as its canonical name without this
   // file knowing they are related.
   castOfEnabledSources() {
+    // Memoised on the exact inputs, by identity. The cast is read several times
+    // per render — the panel, the orbit, and once per renderEntityText call, of
+    // which a scrolled reader makes one per section — and it now carries a
+    // frame-presence key per being per frame. Rebuilding that on every call
+    // turned a cheap projection into the frame budget. `folds[name]` is replaced
+    // wholesale by fetchFold's setState, so reference equality is an exact test
+    // for "nothing that feeds the cast has changed", not an approximation.
+    const activeSources = this.roomSources().filter(s => s.enabled !== false);
+    const cacheNames = activeSources.map(s => s.name);
+    const cacheFolds = activeSources.map(s => this.state.folds[s.name]);
+    const cached = this._castCache;
+    if (cached
+      && cached.names.length === cacheNames.length
+      && cached.names.every((n, i) => n === cacheNames[i])
+      && cached.folds.every((f, i) => f === cacheFolds[i])) return cached.value;
+
     const byId = {};
     const withheld = [];
     const gaps = [];
+    // Per-document reading conditions — the Atmosphere rung's material, and the
+    // scale every other number on the panel is read against. Collected here
+    // rather than re-derived in render so there is one account of what was read.
+    const docs = [];
+    // Section labels by `source\u0000index`, so a Field group can name itself
+    // ("Chapter 5") instead of showing an opaque index.
+    const sectionLabels = {};
     this.roomSources().filter(s => s.enabled !== false).forEach(s => {
       const fold = this.state.folds[s.name];
       if (!fold || fold.error) return;
+      const sections = (fold.divisions && fold.divisions.derivations && fold.divisions.derivations[0] && fold.divisions.derivations[0].sections) || [];
+      sections.forEach(sec => { sectionLabels[s.name + '\u0000' + sec.index] = sec; });
+      docs.push({
+        name: s.name,
+        medium: (fold.source && fold.source.medium) || null,
+        words: (fold.source && fold.source.words) ?? null,
+        frames: (fold.source && fold.source.frames_total) ?? (fold.source && fold.source.chunks) ?? null,
+        sections: sections.length,
+        survivors: fold.survivors ?? (fold.referents || []).length,
+        sightings: fold.sightings ?? null,
+        withheldTotal: fold.withheld_total ?? (fold.withheld || []).length,
+        coverage: fold.coverage || null,
+        prior: fold.prior || null,
+        foldVersion: fold.fold_version || null,
+        // A fold cached before frames_present existed has no presence data. That
+        // is a real state of this panel, not an empty graph, and Link/Network
+        // must say "refold to see ties" rather than "no ties exist".
+        hasPresence: (fold.referents || []).some(r => Array.isArray(r.frames_present)),
+      });
       (fold.referents || []).forEach(r => {
         // Structure, not entities: section numbers and headings are layout, and
         // the entity panel must not read them as beings. The fold already drops
@@ -2064,14 +2269,264 @@ class Component extends DCLogic {
           // the Creature. If the engine did not supply the safe set, match the
           // display name only rather than guessing which forms travel.
           surfaces: [...new Set((prev ? prev.surfaces : []).concat(r.globalSurfaces || [], [r.name]))].filter(Boolean),
-          source: s.name
+          // The same referent can recur in several folded documents; keep every
+          // source it came from, not just the last, so the panel can say where
+          // it lives. A single-document cast needs no chip at all.
+          sources: [...new Set((prev ? prev.sources : []).concat([s.name]))],
+          source: s.name,
+          // WHERE this being occurs, from the fold's exhaustive presence scan
+          // (engine-ground.js framePresenceFor). Frame indices are per-document,
+          // so they are namespaced by source: a frame 12 in one book and a frame
+          // 12 in another are not the same place, and un-namespaced indices
+          // would manufacture co-presence between beings in unrelated documents.
+          frameKeys: (prev ? prev.frameKeys : []).concat((r.frames_present || []).map(i => s.name + '\u0000' + i)),
+          // Which of the document's divisions the being occurs in, same scan.
+          sectionKeys: (prev ? prev.sectionKeys : []).concat((r.sections_present || []).map(i => s.name + '\u0000' + i)),
+          // Who vouched for this name — the Lens rung's partition. A prior-typed
+          // referent is credited to the prior that typed it BY NAME, because
+          // "witness-typed" without saying which witness is not provenance.
+          lens: ((r.provenance && r.provenance.tier) === 'model')
+            ? 'prior\u0000' + ((fold.prior && fold.prior.snapshot) || 'unnamed prior')
+            : 'engine'
         };
       });
       (fold.withheld || []).forEach(w => withheld.push({ ...w, source: s.name }));
       (fold.gaps || []).forEach(g => gaps.push({ ...g, source: s.name }));
     });
     const entities = Object.values(byId).sort((a, b) => b.mentions - a.mentions);
-    return { entities, withheld, gaps };
+    const value = { entities, withheld, gaps, docs, sectionLabels };
+    this._castCache = { names: cacheNames, folds: cacheFolds, value };
+    return value;
+  }
+
+  // Co-presence: the only tie between two beings this fold measures.
+  //
+  // An edge exists because both names occur in the SAME FRAME of the same
+  // document — not because they are both frequent, not because they are the
+  // same kind, not because a model said they are related. The weight is the
+  // number of frames they share. Nothing here reads meaning into a tie; it
+  // reports that the text put them in one place N times.
+  //
+  // Memoised, because it is O(entities²) and render runs on every keystroke.
+  // Keyed on the cast object itself: castOfEnabledSources returns the identical
+  // object while its inputs are unchanged, so this is an exact test with no
+  // fingerprint to keep in sync.
+  explorerGraph() {
+    const cast = this.castOfEnabledSources();
+    if (this._explorerCache && this._explorerCache.cast === cast) return this._explorerCache.value;
+
+    const entities = cast.entities;
+    const withPresence = entities.filter(e => e.frameKeys && e.frameKeys.length);
+    let links = [];
+    let capped = null;
+    if (entities.length > LINK_PAIR_CAP) {
+      capped = `${entities.length} beings exceeds the ${LINK_PAIR_CAP}-being cap for the pairwise co-presence scan — Link and Network are not computed. Narrow the cast at Kind, Field or Lens first.`;
+    } else {
+      const sets = withPresence.map(e => ({ e, set: new Set(e.frameKeys) }));
+      for (let i = 0; i < sets.length; i++) {
+        for (let j = i + 1; j < sets.length; j++) {
+          const a = sets[i], b = sets[j];
+          // Walk the smaller set — the cost of a pair is min(|a|,|b|), not |a|.
+          const [small, large] = a.set.size <= b.set.size ? [a.set, b.set] : [b.set, a.set];
+          let shared = 0;
+          for (const f of small) if (large.has(f)) shared++;
+          if (shared) links.push({ a: a.e, b: b.e, shared });
+        }
+      }
+      // Strongest first, then alphabetical, so the list is stable across
+      // renders — a list that reshuffles under equal weights is unreadable.
+      links.sort((x, y) => y.shared - x.shared || x.a.label.localeCompare(y.a.label) || x.b.label.localeCompare(y.b.label));
+    }
+
+    // NETWORK — clusters, with no threshold to choose.
+    //
+    // Components of the full co-presence graph are useless on a novel: everyone
+    // shares a frame with everyone eventually, so the whole cast is one blob.
+    // Picking a minimum weight to cut at would be a parameter nobody can
+    // justify, silently deciding the answer. Instead each being keeps exactly
+    // ONE edge — its strongest tie — and the components of that forest are the
+    // clusters. That construction has no free parameter, is deterministic, and
+    // means something sayable: these beings are each other's closest company.
+    const strongest = new Map();
+    for (const l of links) {
+      if (!strongest.has(l.a.id)) strongest.set(l.a.id, l);
+      if (!strongest.has(l.b.id)) strongest.set(l.b.id, l);
+    }
+    const parent = new Map();
+    const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+    entities.forEach(e => parent.set(e.id, e.id));
+    for (const l of strongest.values()) {
+      const ra = find(l.a.id), rb = find(l.b.id);
+      if (ra !== rb) parent.set(ra, rb);
+    }
+    const byRoot = new Map();
+    for (const e of entities) {
+      if (!e.frameKeys || !e.frameKeys.length) continue;
+      if (!strongest.has(e.id)) continue; // no tie at all — reported separately
+      const root = find(e.id);
+      if (!byRoot.has(root)) byRoot.set(root, []);
+      byRoot.get(root).push(e);
+    }
+    const components = [...byRoot.values()]
+      .map(members => {
+        members.sort((a, b) => b.mentions - a.mentions);
+        return { id: 'cmp\u0000' + members.map(m => m.id).sort().join(','), members };
+      })
+      .sort((a, b) => b.members.length - a.members.length || b.members[0].mentions - a.members[0].mentions);
+    const untied = entities.filter(e => e.frameKeys && e.frameKeys.length && !strongest.has(e.id));
+    const unscanned = entities.filter(e => !e.frameKeys || !e.frameKeys.length);
+
+    const value = { links, components, untied, unscanned, capped };
+    this._explorerCache = { cast, value };
+    return value;
+  }
+
+  // Apply the group selections drilled down through on the way here. Each entry
+  // in the path was picked at a rung ABOVE the current one; every pick narrows
+  // the cast, and the rungs below inherit that narrowing. Never invents a
+  // classification — each predicate reads a field the fold actually shipped.
+  //
+  // Membership is not always exclusive and is not forced to be. A being occurs
+  // in many divisions and belongs to many clusters-of-two; Kind and Lens
+  // partition, Field / Link / Network select. Coercing the latter into a
+  // partition (by keeping only the first) is what made the old Field rung
+  // group by `sources[0]` and lose every other document a name lived in.
+  entityPathFilter(entities, path) {
+    let out = entities;
+    for (const g of path || []) {
+      if (g.rung === 'Kind') {
+        out = out.filter(e => (g.id === '__untyped') ? !e.type : e.type === g.id);
+      } else if (g.rung === 'Field') {
+        out = g.id === '__unplaced'
+          ? out.filter(e => !(e.sectionKeys || []).length)
+          : out.filter(e => (e.sectionKeys || []).includes(g.id));
+      } else if (g.rung === 'Lens') {
+        out = out.filter(e => (e.lens || 'engine') === g.id);
+      } else if (g.rung === 'Link' || g.rung === 'Network') {
+        // Both carry their membership explicitly: a Link holds exactly two
+        // beings, a Network component holds the ids it was built from. Nothing
+        // is recomputed at filter time, so the filter cannot disagree with the
+        // row that was clicked.
+        const members = new Set(g.members || []);
+        out = out.filter(e => members.has(e.id));
+      }
+      // Void, Entity, Atmosphere and Paradigm never enter the path: they are
+      // view rungs (RUNG_FILTERS) and do not claim to partition anything.
+    }
+    return out;
+  }
+
+  // The groups a filter rung shows over a set of entities.
+  //
+  //   Kind    — `individuation_type`, the engine's kinds of being.
+  //   Field   — `sections_present`, the document divisions a being occurs in,
+  //             in reading order. Not the source document: that was the old
+  //             Field, and it was identical to the old Network.
+  //   Link    — pairs sharing a frame, strongest tie first, from explorerGraph.
+  //   Network — components of the strongest-tie forest, from explorerGraph.
+  //   Lens    — which witness prior, or the engine, vouched for the name.
+  //
+  // Every group carries `members` where membership is not a simple predicate,
+  // so entityPathFilter never has to re-derive it.
+  entityGroupsFor(rung, entities, ctx) {
+    // No group is ever unlabelled. A row whose name renders blank is not a
+    // cosmetic defect: it is a filter the reader cannot identify, cannot decide
+    // about, and cannot undo from the breadcrumb, and it looks identical to a
+    // rendering bug. Every label derived from a name outside our control — a
+    // file path, a URL, a division heading — goes through this, so an empty
+    // basename degrades to a stated identity instead of to nothing.
+    const named = (label, fallback) => {
+      const s = String(label == null ? '' : label).trim();
+      return s || fallback;
+    };
+    const bump = (map, key, rawLabel, e, extra) => {
+      const label = named(rawLabel, 'unnamed group');
+      if (!map.has(key)) map.set(key, { id: key, label, count: 0, size: 0, members: [], ...(extra || {}) });
+      const g = map.get(key);
+      g.count += 1; g.size += e.mentions || 0; g.members.push(e.id);
+      return g;
+    };
+    const counts = new Map();
+
+    if (rung === 'Kind') {
+      for (const e of entities) {
+        const key = e.type || '__untyped';
+        bump(counts, key, key === '__untyped' ? 'untyped' : key, e);
+      }
+      return [...counts.values()].sort((a, b) => b.count - a.count);
+    }
+
+    if (rung === 'Lens') {
+      for (const e of entities) {
+        const key = e.lens || 'engine';
+        const label = key === 'engine'
+          ? 'engine-discovered'
+          : 'witness-typed · ' + key.split('\u0000')[1];
+        bump(counts, key, label, e);
+      }
+      return [...counts.values()].sort((a, b) => b.count - a.count);
+    }
+
+    if (rung === 'Field') {
+      const labels = (ctx && ctx.sectionLabels) || {};
+      const multiDoc = (ctx && ctx.docCount) > 1;
+      for (const e of entities) {
+        const keys = e.sectionKeys || [];
+        if (!keys.length) { bump(counts, '__unplaced', 'not placed in any division', e); continue; }
+        for (const key of keys) {
+          const sec = labels[key];
+          const srcName = key.split('\u0000')[0];
+          const idx = Number(key.split('\u0000')[1]);
+          // Both halves of the label are names we did not choose — a filename
+          // and a heading the novelty curve cut — so both have a fallback. A
+          // source whose basename is empty (a URL ending in "/", a path with a
+          // trailing separator) names itself by its raw form rather than
+          // contributing nothing and leaving the row looking broken.
+          const docPart = multiDoc
+            ? named(this._baseName(srcName).replace(/\.(txt|md|pdf|html?)$/i, ''), named(srcName, 'unnamed source')) + ' · '
+            : '';
+          const label = docPart + named(sec && sec.label, `division ${idx + 1}`);
+          bump(counts, key, label, e, { order: sec ? sec.index : idx, bytes: sec ? sec.length : null });
+        }
+      }
+      // Reading order, not size. Where a being appears in a book is a sequence,
+      // and sorting the chapters by population destroys the only ordering the
+      // divisions actually have.
+      return [...counts.values()].sort((a, b) => (a.id === '__unplaced') - (b.id === '__unplaced') || (a.order || 0) - (b.order || 0));
+    }
+
+    if (rung === 'Link') {
+      const live = new Set(entities.map(e => e.id));
+      const graph = this.explorerGraph();
+      return graph.links
+        .filter(l => live.has(l.a.id) && live.has(l.b.id))
+        .map(l => ({
+          id: 'lnk\u0000' + l.a.id + '\u0000' + l.b.id,
+          label: `${named(l.a.label, l.a.id)} + ${named(l.b.label, l.b.id)}`,
+          count: 2,
+          size: l.shared,
+          members: [l.a.id, l.b.id],
+          shared: l.shared,
+        }));
+    }
+
+    if (rung === 'Network') {
+      const live = new Set(entities.map(e => e.id));
+      const graph = this.explorerGraph();
+      return graph.components
+        .map(c => c.members.filter(m => live.has(m.id)))
+        .filter(members => members.length > 1)
+        .map(members => ({
+          id: 'cmp\u0000' + members.map(m => m.id).sort().join(','),
+          label: named(members[0].label, members[0].id) + (members.length > 1 ? ` + ${members.length - 1} other${members.length === 2 ? '' : 's'}` : ''),
+          count: members.length,
+          size: members.reduce((n, m) => n + (m.mentions || 0), 0),
+          members: members.map(m => m.id),
+        }))
+        .sort((a, b) => b.count - a.count || b.size - a.size);
+    }
+
+    return [];
   }
 
   // Longest-surface-first alternation over the fold's surfaces, so "Victor
@@ -2195,12 +2650,20 @@ class Component extends DCLogic {
 
   async fetchOutline(name) {
     if (this.state.outlines[name]) return;
+    const get = (payload) => fetch(this.proxyUrl() + '/api/verbatim/outline', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), signal: AbortSignal.timeout(30000)
+    }).then(r => r.json());
     try {
-      const res = await fetch(this.proxyUrl() + '/api/verbatim/outline', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: name }), signal: AbortSignal.timeout(30000)
-      });
-      const data = await res.json();
+      let data = await get({ source: name });
+      // Content-ingested uploads have no file on the proxy host, so the engine
+      // outline comes back as an ENOENT. Fall back to the session attachment's
+      // text — the exact string the reader is slicing — so uploaded documents
+      // still get a structure list (code-unit offsets, same coordinate space).
+      if (data.error || data.gap) {
+        const att = await get({ name: this._baseName(name), session: this.sessionId() });
+        if (att && !att.error) data = att;
+      }
       this.setState(s => ({ outlines: { ...s.outlines, [name]: data } }));
       if (data.error || data.gap) this.logAdd('⊘', `Outline for "${name}" — ${data.error || data.gap}`, 'perception');
       else this.logAdd('◱', `Outline "${name}": ${(data.headings || []).length} heading(s)`, 'perception');
@@ -2392,13 +2855,35 @@ class Component extends DCLogic {
     }
   }
 
+  // Closes the inline rename editor and persists whatever was typed.
+  // Guarded on renamingSpaceId so a blur that follows an Enter/Escape is a no-op.
+  commitSpaceRename(id) {
+    if (this.state.renamingSpaceId !== id) return;
+    const value = this.state.renameSpaceValue;
+    this.setState({ renamingSpaceId: null, renameSpaceValue: '' });
+    this.renameConversation(id, value);
+  }
+
+  cancelSpaceRename() {
+    this.setState({ renamingSpaceId: null, renameSpaceValue: '' });
+  }
+
   renameConversation(id, title) {
     const trimmed = (title || '').trim();
-    if (!trimmed) return;
-    this.setState(s => ({ spaces: s.spaces.map(sp => sp.id === id ? { ...sp, name: trimmed } : sp) }));
+    const current = this.state.spaces.find(sp => sp.id === id);
+    if (!trimmed || !current || current.name === trimmed) return;
+    // Optimistic — setSpaces also re-saves the localStorage mirror.
+    this.setSpaces(spaces => spaces.map(sp => sp.id === id ? { ...sp, name: trimmed } : sp));
     fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(id), {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: trimmed }),
-    }).catch(() => {});
+    }).then(res => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      this.logAdd('○', `Chat renamed to "${trimmed}"`, 'chat');
+    }).catch(err => {
+      // Roll back so the sidebar never shows a name the server rejected.
+      this.setSpaces(spaces => spaces.map(sp => sp.id === id ? { ...sp, name: current.name } : sp));
+      this.logAdd('⊘', `Could not rename chat — ${err.message}`, 'chat');
+    });
   }
 
   async deleteConversation(id) {
@@ -4027,12 +4512,18 @@ class Component extends DCLogic {
       renameValue: S.renameSpaceValue,
       startRename: (e) => { e.stopPropagation(); this.setState({ renamingSpaceId: sp.id, renameSpaceValue: sp.name }); },
       onRenameChange: (e) => this.setState({ renameSpaceValue: e.target.value }),
-      commitRename: () => { this.renameConversation(sp.id, S.renameSpaceValue); this.setState({ renamingSpaceId: null }); },
+      commitRename: () => this.commitSpaceRename(sp.id),
       commitRenameKey: (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); this.renameConversation(sp.id, S.renameSpaceValue); this.setState({ renamingSpaceId: null }); }
-        else if (e.key === 'Escape') { e.preventDefault(); this.setState({ renamingSpaceId: null }); }
+        if (e.key === 'Enter') { e.preventDefault(); this.commitSpaceRename(sp.id); }
+        else if (e.key === 'Escape') { e.preventDefault(); this.cancelSpaceRename(); }
       },
-      setRenameInput: (el) => { if (el) requestAnimationFrame(() => el.focus()); },
+      // Ref callbacks are re-created each render, so React calls this on every
+      // keystroke — the dataset flag keeps focus/select to the first mount only.
+      setRenameInput: (el) => {
+        if (!el || el.dataset.eoRenameFocused) return;
+        el.dataset.eoRenameFocused = '1';
+        requestAnimationFrame(() => { el.focus(); el.select(); });
+      },
       delete: (e) => { e.stopPropagation(); this.deleteConversation(sp.id); },
     }));
     const previewByType = { pdf: 'A PDF — text extracted via PDF.js, bonded to this room and citable.', video: 'Structure found by segmenting raw container bytes — no frame decoded.', audio: 'Transcribed locally by an on-device model.', spreadsheet: 'A spreadsheet — parsed into rows and columns, bonded to this room and citable.', link: 'A web source bonded and citable.', binary: 'Preview not available — stored as an opaque binary.' };
@@ -4092,34 +4583,281 @@ class Component extends DCLogic {
     });
     const anyWebOn = this.webSources().some(w => w.enabled !== false);
 
-    const { entities: castEntities, withheld: castWithheld, gaps: castGaps } = this.castOfEnabledSources();
+    const { entities: castEntities, withheld: castWithheld, gaps: castGaps, docs: castDocs, sectionLabels: castSectionLabels } = this.castOfEnabledSources();
+    const { untied: explorerUntied, capped: explorerCapped } = this.explorerGraph();
     const maxCount = castEntities.length ? (castEntities[0].mentions || 1) : 1;
     const entityColors = ['#1F5A4C', '#3D7A6A', '#5FA08E', '#8CBBB0', '#B5D3CA', '#D5E3DE', '#EBE6DC'];
-    const entityRows = castEntities.map((e, i) => ({
-      name: e.label,
-      mentions: e.mentions,
+    const shortName = (n) => this._baseName(n).replace(/\.(txt|md|pdf|html?)$/i, '');
+    // Provenance by colour: each active document gets a stable palette colour,
+    // the entity rows carry a dot in their source's colour, and the footer
+    // legend maps colour to document. Single-document casts have nothing to
+    // disambiguate, so the dots are omitted and only the legend runs.
+    const enabledRoomRows = roomSources.filter(s => s.enabled !== false);
+    const SOURCE_PALETTE = ['#1F5A4C', '#7A4A8F', '#8A6D3B', '#B4472C', '#2E6E9E', '#8C4A62', '#4A6E2E', '#6E2E5E'];
+    const activeSourceNames = [...new Set(enabledRoomRows.map(s => s.name))];
+    const sourceColorMap = new Map(activeSourceNames.map((n, i) => [n, SOURCE_PALETTE[i % SOURCE_PALETTE.length]]));
+    const entityRowFor = (e, i) => {
+      const srcs = e.sources || (e.source ? [e.source] : []);
+      return {
+        name: e.label,
+        mentions: e.mentions,
+        color: entityColors[i % entityColors.length],
+        barWidth: Math.max(4, Math.round(((e.mentions || 0) / maxCount) * 28)) + 'px',
+        dotColor: enabledSourceCount > 1 && srcs[0] ? (sourceColorMap.get(srcs[0]) || null) : null,
+        dotTitle: srcs.length > 1 ? `${shortName(srcs[0])} +${srcs.length - 1} more` : shortName(srcs[0] || ''),
+        select: () => this.setState({ selectedEntity: e.id })
+      };
+    };
+    // ── The Explorer's ladder ────────────────────────────────────────────────
+    //
+    // Nine terrains (RUNG_LADDER), each reading a field the fold actually
+    // shipped. Filter rungs partition or select over the cast and descend one
+    // rung on click; view rungs show their own material and do not filter.
+    const ladderPath = S.entityPath || [];
+    const ladderRung = RUNG_LADDER.includes(S.entityRung) ? S.entityRung : 'Entity';
+    const ladderRungIdx = RUNG_LADDER.indexOf(ladderRung);
+    const ladderFiltered = this.entityPathFilter(castEntities, ladderPath);
+    const entityRungRows = RUNG_LADDER.map((r, i) => {
+      const current = i === ladderRungIdx;
+      return {
+        name: r,
+        current,
+        color: current ? '#1F5A4C' : (RUNG_FILTERS.has(r) ? '#8A857A' : '#BDB6A9'),
+        weight: current ? '700' : '400',
+        // Rungs above the current one are where you came from and are lit;
+        // rungs below are where you can still go. Both are reachable, so
+        // neither is dimmed to the point of looking disabled.
+        opacity: current ? '1' : '0.72',
+        marker: current ? ' ▾' : '',
+        title: RUNG_BLURB[r] || r,
+        select: () => this.setState(s => ({
+          entityRung: r,
+          // Moving to rung i keeps the filters picked ABOVE it — those are the
+          // choices made on the way down and they still hold — and drops the
+          // ones picked at or below it, which were choices this move undoes.
+          //
+          // This was inverted (`< i`), which kept the filters you were
+          // discarding and discarded the ones you were keeping: climbing back
+          // up the ladder silently rewrote the breadcrumb into a set of filters
+          // nobody had chosen. That is most of why the cast went empty.
+          entityPath: (s.entityPath || []).filter(g => RUNG_LADDER.indexOf(g.rung) > i)
+        }))
+      };
+    });
+    const entityGroupPathRows = ladderPath.map(g => ({
+      label: `${g.rung}: ${g.label}`,
+      clear: () => this.setState(s => ({ entityPath: (s.entityPath || []).filter(x => x !== g) }))
+    }));
+    // Descend past any view rung between here and Entity: a view rung has no
+    // filter to contribute, so stopping on one after a pick would look like the
+    // pick did nothing. Shared with the footer hint, so what the hint promises
+    // and what the click does cannot drift apart.
+    const rungBelow = (rung) => {
+      let next = RUNG_LADDER.indexOf(rung) - 1;
+      while (next > 1 && !RUNG_FILTERS.has(RUNG_LADDER[next])) next--;
+      return RUNG_LADDER[Math.max(1, next)];
+    };
+    const selectEntityGroup = (g) => this.setState(s => ({
+      entityPath: (s.entityPath || []).concat([{ rung: s.entityRung, id: g.id, label: g.label, members: g.members }]),
+      entityRung: rungBelow(s.entityRung)
+    }));
+    const entityListShowing = ladderRung === 'Entity';
+    const ladderIsFilter = RUNG_FILTERS.has(ladderRung);
+    const ladderGroups = ladderIsFilter
+      ? this.entityGroupsFor(ladderRung, ladderFiltered, { sectionLabels: castSectionLabels, docCount: castDocs.length })
+      : [];
+    // Link lists ties, not populations, so its rows read in the tie's own units
+    // (shared frames) rather than pretending to be a group of two.
+    const ladderTop = ladderGroups.length
+      ? Math.max(1, ...ladderGroups.map(g => (ladderRung === 'Link' ? g.shared : g.count)))
+      : 1;
+    const entityLadderRows = (ladderRung === 'Link' ? ladderGroups.slice(0, LINK_ROW_CAP) : ladderGroups).map((g, i) => ({
+      name: g.label,
+      meta: ladderRung === 'Link'
+        ? `${g.shared} shared frame${g.shared === 1 ? '' : 's'}`
+        : ladderRung === 'Field'
+          ? `${g.count} being${g.count === 1 ? '' : 's'} here`
+          : ladderRung === 'Network'
+            ? `${g.count} beings · ${g.size} mention${g.size === 1 ? '' : 's'}`
+            : `${g.count} being${g.count === 1 ? '' : 's'} · ${g.size} mention${g.size === 1 ? '' : 's'}`,
+      barWidth: Math.max(6, Math.round(((ladderRung === 'Link' ? g.shared : g.count) / ladderTop) * 28)) + 'px',
       color: entityColors[i % entityColors.length],
-      barWidth: Math.max(4, Math.round(((e.mentions || 0) / maxCount) * 28)) + 'px',
-      select: () => this.setState({ selectedEntity: e.id })
+      select: () => selectEntityGroup(g)
     }));
-    // Candidates the text proposed and no prior typed. Shown, not hidden: an
-    // absent name here would read as "not in the book", when what it means is
-    // "no witness-tier prior asserts it". That distinction is the whole tier
-    // boundary, and burying it is how a gap turns into a silent wrong answer.
-    const withheldRows = castWithheld.slice(0, 40).map(w => ({
-      name: w.name,
-      reason: w.withheld_because || 'no per-text prior asserts this referent'
-    }));
-    const withheldCount = castWithheld.length;
-    // The summary used to state one reason for all of them ("no per-text prior
-    // asserts an individuation type"). With engine-tier discovery admitting
-    // untyped candidates that is no longer why anything is withheld, and a
-    // fixed reason line would be wrong on every row. Each row already carries
-    // the fold's own `withheld_because`; the summary counts and defers to it.
-    const withheldSummary = withheldCount
-      ? `${withheldCount} candidate${withheldCount === 1 ? '' : 's'} the fold could not show — hover for why`
-      : '';
+    // Every rung says what it is reading, in the fold's own terms, and says it
+    // even — especially — when the answer is nothing. A rung that renders an
+    // empty list with no explanation is indistinguishable from a broken one.
+    const ladderNote = (() => {
+      if (!ladderIsFilter) return '';
+      if (ladderRung === 'Kind') {
+        const kinds = new Set(ladderFiltered.map(e => e.type || 'untyped'));
+        return kinds.size <= 1
+          ? `every being here carries the same individuation type — the Ground→Figure gate that would separate them is not wired to a document (see Void)`
+          : `individuation type, as the fold typed it`;
+      }
+      if (ladderRung === 'Field') {
+        const placed = ladderFiltered.filter(e => (e.sectionKeys || []).length).length;
+        if (!castDocs.some(d => d.sections)) return 'no document here has divisions — nothing to place a being in';
+        return `divisions in reading order · a being occurs in several, so these counts overlap · ${placed} of ${ladderFiltered.length} placed`;
+      }
+      if (ladderRung === 'Link') {
+        if (explorerCapped) return explorerCapped;
+        if (!castDocs.length) return 'no documents active';
+        if (!castDocs.some(d => d.hasPresence)) return 'this fold predates frame presence — remove and re-add the document to see ties';
+        const total = ladderGroups.length;
+        return total > LINK_ROW_CAP
+          ? `${LINK_ROW_CAP} of ${total} ties shown, strongest first · a tie is co-presence in one frame, nothing more`
+          : `${total} tie${total === 1 ? '' : 's'} · a tie is co-presence in one frame, nothing more`;
+      }
+      if (ladderRung === 'Network') {
+        if (explorerCapped) return explorerCapped;
+        const loose = explorerUntied.length;
+        return `clusters formed by each being's strongest tie — no threshold chosen${loose ? ` · ${loose} being${loose === 1 ? ' shares' : 's share'} no frame with anyone` : ''}`;
+      }
+      if (ladderRung === 'Lens') return 'who vouched for the name — a witness prior by identity, or the engine';
+      return '';
+    })();
+    // What the panel is actually reading from — the disclosure at the foot of
+    // the rail. Documents are listed with their fold status; the chat line says
+    // plainly that conversation turns are not folded into entities.
+    const entitySourceRows = enabledRoomRows.map(s => {
+      const fold = this.state.folds[s.name];
+      const folded = !!(fold && !fold.error);
+      return {
+        short: shortName(s.name),
+        full: s.name,
+        folded,
+        // Legend colour — the same palette the entity dots use, so the footer
+        // reads as the key for the rail above it.
+        dot: sourceColorMap.get(s.name) || (folded ? '#1F5A4C' : '#D8D2C6'),
+        nameColor: folded ? '#26241F' : '#8A857A',
+        foldLabel: folded ? 'folded' : 'pending',
+        open: () => this.openReader(s.name),
+      };
+    });
+    const foldedCount = entitySourceRows.filter(r => r.folded).length;
+    const entitySourcesSummary = entitySourceRows.length
+      ? (foldedCount === entitySourceRows.length
+          ? `${entitySourceRows.length} document${entitySourceRows.length === 1 ? '' : 's'} folded`
+          : `${foldedCount} of ${entitySourceRows.length} document${entitySourceRows.length === 1 ? '' : 's'} folded`)
+      : 'no documents active';
+    // The cast is documents only — turns are not folded into entities, so the
+    // panel says so instead of silently implying they were.
+    const entityChatIncluded = false;
+    const entityChatLabel = entityChatIncluded ? 'chat included' : 'chat not included';
+    // Candidates the text proposed and no prior typed, and the fold's typed
+    // gaps. Shown, not hidden: an absent name would read as "not in the book",
+    // when what it means is "no witness-tier prior asserts it". That distinction
+    // is the whole tier boundary, and burying it is how a gap turns into a
+    // silent wrong answer. Both now render at the Void rung below, which is the
+    // terrain they belong to — Existence · Ground.
     const castGapRows = castGaps.map(g => ({ reason: (g.reason || String(g)), source: g.source || '' }));
+
+    const entityRows = entityListShowing ? ladderFiltered.map(entityRowFor) : null;
+
+    // ── VOID · existence · ground ───────────────────────────────────────────
+    // What the fold named but could not individuate, and what it could not read
+    // at all. This used to live in a footer strip under the entity list, where
+    // it read as a footnote to the cast. It is not a footnote: an unindividuated
+    // candidate and a typed gap are the ground the cast was cut out of, and L2e
+    // makes absence a finding that has to be inspectable in its own right.
+    const voidCandidateRows = castWithheld.slice(0, 60).map(w => ({
+      name: w.name,
+      meta: `${w.mentions || 0} mention${w.mentions === 1 ? '' : 's'}${w.from_prior ? ' · named by a prior' : ''}`,
+      reason: w.withheld_because || 'no per-text prior asserts this referent',
+      // A prior naming a being the text cannot show is a fixable disagreement
+      // between witness knowledge and this edition; a candidate the text merely
+      // proposed is routine. They are coloured apart because only one is a bug.
+      color: w.from_prior ? '#A3592B' : '#8A857A',
+    }));
+    const voidCandidateNote = castWithheld.length > 60
+      ? `60 of ${castWithheld.length} shown, prior-named first`
+      : `${castWithheld.length} candidate${castWithheld.length === 1 ? '' : 's'}`;
+    // Gaps are grouped by the field they are about, so nine engine gaps about
+    // one unwired organ read as one finding instead of nine complaints.
+    const voidGapRows = (() => {
+      const byField = new Map();
+      for (const g of castGaps) {
+        const field = g.field || 'unattributed';
+        if (!byField.has(field)) byField.set(field, { field, tier: g.tier || 'unknown', reasons: [], sources: new Set() });
+        const row = byField.get(field);
+        row.reasons.push(g.reason || String(g));
+        if (g.source) row.sources.add(shortName(g.source));
+      }
+      return [...byField.values()].map(r => ({
+        field: r.field,
+        tier: r.tier,
+        reason: r.reasons[0],
+        more: r.reasons.length > 1 ? ` · +${r.reasons.length - 1} more like this` : '',
+        where: r.sources.size ? [...r.sources].join(', ') : '',
+        color: r.tier === 'model' ? '#A3592B' : r.tier === 'host' ? '#7A4A8F' : '#5A786E',
+      }));
+    })();
+    const voidEmpty = !voidCandidateRows.length && !voidGapRows.length;
+
+    // ── ATMOSPHERE · interpretation · ground ────────────────────────────────
+    // What conditions this reading without itself being read. Not a group over
+    // the cast — there is no per-being atmosphere field and inventing one was
+    // the old bug — but the measured conditions the cast came out of, per
+    // document, so every number elsewhere in the panel has a denominator.
+    const atmosphereRows = castDocs.map(d => {
+      const cov = d.coverage || {};
+      return {
+        name: shortName(d.name),
+        full: d.name,
+        dot: sourceColorMap.get(d.name) || '#1F5A4C',
+        read: [
+          d.words != null ? `${d.words.toLocaleString()} words` : null,
+          d.frames != null ? `${d.frames} frames` : null,
+          d.sections ? `${d.sections} divisions` : 'no divisions',
+        ].filter(Boolean).join(' · '),
+        // Coverage is stated as measured or as unmeasured. "100%" when nothing
+        // was measured is the failure this whole projection exists to avoid.
+        coverage: cov.folded_pct != null
+          ? `${cov.folded_pct}% of the file folded`
+          : (cov.folded_bytes != null ? `${cov.folded_bytes.toLocaleString()} bytes folded, share of file not measurable` : 'coverage not measured'),
+        cast: `${d.survivors} shown${d.withheldTotal ? ` · ${d.withheldTotal} withheld` : ''}${d.sightings != null ? ` · ${d.sightings} sightings` : ''}`,
+        lens: d.prior && d.prior.snapshot
+          ? `prior ${d.prior.snapshot} · ${d.prior.referents_asserted} referent(s) asserted`
+          : 'no per-text prior — engine discovery only',
+        version: d.foldVersion || 'fold version not reported',
+        open: () => this.openReader(d.name),
+      };
+    });
+    // The chat is not folded. Saying so here, where the reader is looking at
+    // what conditioned the reading, is the only place the omission is legible.
+    const atmosphereNote = castDocs.length
+      ? 'conversation turns are not folded — nothing in this panel comes from the chat'
+      : 'no folded document is active — the Explorer has nothing to read';
+
+    // ── PARADIGM · interpretation · pattern ─────────────────────────────────
+    // The vocabulary of kinds this reading is permitted to use, and how much of
+    // it the reading could actually reach. A kind with zero members is the
+    // interesting row: it is not absent from the text, it is unreachable,
+    // because the gate that would assign it is not wired to a document.
+    const paradigmRows = (() => {
+      const present = new Map();
+      for (const e of ladderFiltered) {
+        const t = e.type || '__untyped';
+        present.set(t, (present.get(t) || 0) + 1);
+      }
+      const vocab = [...new Set([...INDIVIDUATION_VOCABULARY, ...present.keys()])].filter(t => t !== '__untyped');
+      const rows = vocab.map(t => ({
+        name: t,
+        count: present.get(t) || 0,
+        used: !!present.get(t),
+        meta: present.get(t) ? `${present.get(t)} being${present.get(t) === 1 ? '' : 's'}` : 'unreached',
+        note: INDIVIDUATION_VOCABULARY.includes(t) ? '' : ' · not in the engine\u2019s vocabulary — this reading has drifted',
+        color: present.get(t) ? '#1F5A4C' : '#BDB6A9',
+      })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+      const untyped = present.get('__untyped') || 0;
+      if (untyped) rows.push({ name: 'untyped', count: untyped, used: true, meta: `${untyped} being${untyped === 1 ? '' : 's'}`, note: ' · the fold assigned no kind', color: '#A3592B' });
+      return rows;
+    })();
+    const paradigmReached = paradigmRows.filter(r => r.used).length;
+    const paradigmNote = `${paradigmReached} of ${paradigmRows.length} kinds reached. The Ground→Figure gate (referents/individuation.js) is not wired to a document, so engine-discovered beings land on the honest floor — emanon — rather than being sorted. That is a gap, not a finding about the text.`;
+
+    const ladderViewShowing = !entityListShowing && !ladderIsFilter;
 
     const { orbitBodies, orbitEdges } = this.computeOrbit();
     // Disabling a source deletes bodies. A focus pointing at one of them left
@@ -4797,7 +5535,13 @@ class Component extends DCLogic {
       readerSectionPrev: () => this.setState(s => ({ readerSectionIndex: Math.max(0, s.readerSectionIndex - 1) })),
       readerSectionNext: () => this.setState(s => ({ readerSectionIndex: Math.min(readerSections.length - 1, s.readerSectionIndex + 1) })),
       entityRows,
-      withheldRows, withheldSummary, hasWithheld: !!withheldRows.length,
+      entityRungRows, entityGroupPathRows, entityLadderRows, entityListShowing,
+      ladderRungName: ladderRung, ladderNote, ladderIsFilter, ladderViewShowing,
+      ladderGroupsEmpty: ladderIsFilter && !entityLadderRows.length,
+      voidShowing: ladderRung === 'Void', voidCandidateRows, voidCandidateNote, voidGapRows, voidEmpty,
+      hasVoidCandidates: !!voidCandidateRows.length, hasVoidGaps: !!voidGapRows.length,
+      atmosphereShowing: ladderRung === 'Atmosphere', atmosphereRows, atmosphereNote,
+      paradigmShowing: ladderRung === 'Paradigm', paradigmRows, paradigmNote,
       castGapRows,
       hasSelectedEntity: !!S.selectedEntity, showEntityIndex: !S.selectedEntity,
       selectedEntityName: selectedCastEntity ? selectedCastEntity.label : '',
@@ -4808,7 +5552,18 @@ class Component extends DCLogic {
       selectedEntityNoRelations: !!S.selectedEntity && selectedEntityRelations.length === 0,
       selectedEntityNoAnchors: !!S.selectedEntity && selectedEntityAnchors.length === 0,
       clearSelectedEntity: () => this.setState({ selectedEntity: null }),
-      entityCountLabel: `${castEntities.length} entit${castEntities.length === 1 ? 'y' : 'ies'}`,
+      // A filtered count with no total is a number the reader cannot check.
+      entityCountLabel: ladderFiltered.length === castEntities.length
+        ? `${castEntities.length} being${castEntities.length === 1 ? '' : 's'}`
+        : `${ladderFiltered.length} of ${castEntities.length} beings`,
+      entitySourceRows, entitySourcesSummary, entityChatLabel,
+      // What a click does here, which is not the same on every rung. A single
+      // fixed hint ("click a name for its profile") was wrong on seven of nine.
+      explorerHint: entityListShowing ? 'click a name for its profile'
+        : ladderIsFilter ? `click to narrow the cast — that descends to ${rungBelow(ladderRung)}`
+        : ladderRung === 'Atmosphere' ? 'click a document to open it in the reader'
+        : ladderRung === 'Void' ? 'these are not in the cast — nothing here can be cited'
+        : 'this rung reads the reading, not the text',
       // Surf passage panel for a selected turn
       surfPassageRows: (() => {
         const activeTurn = (S.activeTurnId ? (active.turns || []).find(t => t.id === S.activeTurnId) : null) || null;

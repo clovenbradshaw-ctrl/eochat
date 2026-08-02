@@ -25,7 +25,7 @@ import { REPO_ROOT } from "./paths.js";
 
 export const INSTRUCTION_DIR = path.join(REPO_ROOT, "instruction-set");
 
-export const DEFAULT_INSTRUCTION_BUDGET = 2600;
+export const DEFAULT_INSTRUCTION_BUDGET = 2800;
 
 // Same character-per-token estimate the rest of the server uses (proxy.js
 // `tok`): a rough ceiling, good enough to budget against. Consistent by

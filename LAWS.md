@@ -5,6 +5,10 @@ priors, app, legacy. These decide *how this app must behave* once placement is
 settled. They bind the host: clock, I/O, routing, UX. They can never license a
 change to engine reading.
 
+Instructions are governed separately: [INSTRUCTION-LAW.md](INSTRUCTION-LAW.md)
+is the universal law for instruction sets and the surf-and-fold gate, enforced
+by `node scripts/check-instruction-laws.mjs`.
+
 A law is not a preference. It states a failure it forbids, and it names the
 measurement that catches the failure. A principle you cannot fail is a slogan.
 Each law below ends with the check that enforces it, run by
@@ -243,10 +247,17 @@ writing the check first; a law without one is a slogan.
 - **Typed gap over silent wrong answer.** Missing evidence produces a named,
   inspectable gap, never a plausible number. Already the rule for coref priors
   and holonic citations; not yet mechanically verified across all surfaces.
+  Enforced for instruction sets as R2 (INSTRUCTION-LAW.md).
 - **Two facts that differ must not read alike.** "Still loading" and "your
   sources do not say this" are different, and an interface that renders them
   identically is lying by collapse. The `corpusWarmup` flag exists for exactly
-  this distinction.
+  this distinction. Enforced for instruction sets as R8 (INSTRUCTION-LAW.md).
+- **Content against the instructions is not given out.** A forbidden request is
+  refused, and the refusal is mechanically verified — a small model, shown the
+  escalation fold, invented a manager's name rather than refuse. Enforced for
+  instruction sets as R9: every served answer is reviewed against the folds
+  that were in force, and a flagged answer is corrected (bounded) or ships
+  flagged, never hidden (INSTRUCTION-LAW.md).
 - **One name per thing.** `/api/ingest` returns `sourceId`; `/api/sources`
   calls the same value `path`. Every caller must know both, and a reader
   following an id between surfaces finds it renamed.

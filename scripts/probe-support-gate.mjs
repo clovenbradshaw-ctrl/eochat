@@ -16,12 +16,13 @@
 // show what happens when instructions don't fit.
 
 import path from "node:path";
-import { createInstructionGate } from "../server/instruction-gate.js";
+import { createInstructionGate, countTokens } from "../server/instruction-gate.js";
 
 const OLLAMA = process.env.OLLAMA || "http://localhost:11434";
 const MODEL = process.env.MODEL || "gemma2:2b";
 const NUM_CTX = Number(process.env.NUM_CTX || 8192);
 const BUDGET = Number(process.env.BUDGET || 3600);
+const OUTPUT_RESERVE = 500; // num_predict — the answer itself must fit too
 
 const SUPPORT_DIR = path.join(process.cwd(), "instruction-set-support");
 const gate = createInstructionGate({ dir: SUPPORT_DIR, budgetTokens: BUDGET });
@@ -97,6 +98,9 @@ for (const [i, p] of PROBES.entries()) {
   console.log(`expected folds surfaced: ${missing.length === 0 ? "yes" : `NO — missing ${missing.join(", ")}`}`);
 
   const messages = [{ role: "system", content: r.systemMessage }, { role: "user", content: p.q }];
+  const promptTokens = countTokens(JSON.stringify(messages));
+  const fits = promptTokens + OUTPUT_RESERVE <= NUM_CTX;
+  console.log(`[fit] prompt ${promptTokens} + reserve ${OUTPUT_RESERVE} vs window ${NUM_CTX}: ${fits ? "fits" : "OVER — instructions would be truncated"}`);
   const { text, promptEval } = await chat({ messages });
   if (i === 0) {
     console.log("\nmechanical block preview (what the model actually received, first 900 chars):");
@@ -115,9 +119,11 @@ const messages = [
 try {
   const { text, promptEval } = await chat({ messages, numPredict: 500 });
   const est = gate.totalTokens();
+  const dropped = est > promptEval;
   console.log(`full manual: ${est} tokens (gate estimate) into a ${NUM_CTX}-token window — cannot fit whole`);
   console.log(`prompt_eval_count ${promptEval} → Ollama kept only the most recent ${promptEval} tokens;`);
-  console.log(`the manual's START — the identity/persona folds — was ${est > promptEval ? `silently dropped (~${est - promptEval} tokens by estimate)` : "kept"}`);
+  console.log(`the manual's START — the identity/persona folds — was ${dropped ? `silently dropped (~${est - promptEval} tokens by estimate)` : "kept"}`);
+  console.log(`[R5 verdict] ${dropped ? "VIOLATION — instructions were truncated by the window (ungated baseline)" : "ok — full manual actually fit"}`);
   console.log(`\n— ungated answer (persona/identity missing from context) —\n${text.slice(0, 600)}`);
 } catch (err) {
   console.log(`ungated call failed: ${err.message}`);

@@ -22,5 +22,10 @@ subject. Their absence is a decision, not an oversight.
 A fold relevant to the reader's situation was surfaced. A fold you cannot see
 was deliberately kept out to fit the window.
 
+On a turn where no fold matched at all, the gate says so in its own section.
+That absence is a genuine gap — the instruction set has no page for this
+situation — not a hidden page. Act only on the active folds and say plainly
+when you have no instruction covering the matter.
+
 Never tell the reader about the gating mechanism unless they ask. It is
 internal. Your behavior is simply the behavior of the active folds.

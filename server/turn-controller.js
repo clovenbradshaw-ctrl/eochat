@@ -19,6 +19,7 @@ import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
 import { createInstructionGate, countTokens as gateCountTokens } from "./instruction-gate.js";
+import { reviewOutput, buildCorrectionSystemContent } from "./output-review.js";
 
 // Mechanical post-processing: read the model's own output and format it for
 // display — no model call, no learned system, just regexes and rules.
@@ -204,6 +205,7 @@ export function createTurnController(deps) {
       blockTokens: gateCountTokens(r.systemMessage),
       budget: r.stats.budget,
       overflow: r.stats.overflow,
+      stats: { gap: r.stats.gap, rejectedByBudget: r.stats.rejectedByBudget },
       systemMessage: r.systemMessage,
     };
   }
@@ -333,6 +335,111 @@ export function createTurnController(deps) {
     return result;
   }
 
+  // Non-streaming model call, used only by the output-review correction pass.
+  // Same provider routing as callModelStreaming; the correction is short
+  // (num_predict 1500) and low-temperature.
+  async function callModelNonStreaming(messages, { provider, modelOverride }) {
+    const key = _getAnthropicKey();
+    const useAnthropic = provider === "anthropic" && key;
+    let model;
+    if (useAnthropic) {
+      model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
+    } else if (modelOverride) {
+      model = modelOverride;
+    } else if (modelRouter) {
+      ({ model } = modelRouter.pick(messages));
+    } else {
+      model = heuristicModel(messages);
+    }
+    if (useAnthropic) {
+      const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
+      const body = {
+        model, max_tokens: 1500,
+        messages: messages.filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content })),
+      };
+      if (systemMessages) body.system = systemMessages;
+      const resp = await fetch(ANTHROPIC_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
+      const j = await resp.json();
+      return (j.content?.map((c) => c.text).join("") || "").trim();
+    }
+    const resp = await fetch(`${target}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model, messages, stream: false,
+        options: { temperature: 0.4, num_predict: 1500, num_ctx: numCtx },
+      }),
+    });
+    if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
+    const j = await resp.json();
+    return (j.message?.content || "").trim();
+  }
+
+  // Finalize the model's raw output AND review it against the instruction
+  // folds that were in force (grounding). When the mechanical review flags the
+  // answer, a bounded correction loop (≤2) re-asks the model to fix ONLY the
+  // flagged violations, then re-reviews. The text that ships is the reviewed
+  // one; the review itself is emitted as `review_report` and persisted.
+  //
+  // Order matters: citations/brackets/fidelity are resolved on the final text,
+  // whether that text is the original or a correction.
+  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, sendEvent, turnId, answerId, provider, modelOverride }) {
+    let text = rawText;
+    let display = formatOutput(text);
+    let brackets = resolveCitationBrackets(text, lastCitations).citations;
+    let finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
+
+    let corrected = false, iterations = 0;
+    let review = null;
+    if (gate) {
+      review = reviewOutput({
+        question, answer: finalText,
+        gate: { activeIds: gate.activeIds, folds: instructionGate.folds, stats: gate.stats || {} },
+        groundText,
+      });
+      while (review.verdict === "FLAGGED" && iterations < 2) {
+        const correction = buildCorrectionSystemContent(review.flags, gate.activeIds);
+        let next;
+        try {
+          next = await callModelNonStreaming([
+            { role: "system", content: gate.systemMessage },
+            { role: "system", content: correction },
+            { role: "user", content: question },
+          ], { provider, modelOverride });
+        } catch {
+          break; // keep the flagged text; the report will show correction was not achieved
+        }
+        if (!next) break;
+        text = next;
+        corrected = true;
+        iterations++;
+        display = formatOutput(text);
+        brackets = resolveCitationBrackets(text, lastCitations).citations;
+        finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
+        review = reviewOutput({
+          question, answer: finalText,
+          gate: { activeIds: gate.activeIds, folds: instructionGate.folds, stats: gate.stats || {} },
+          groundText,
+        });
+      }
+    }
+
+    const fidelity = verifyQuotedFidelity(finalText, lastCitations);
+    const snippets = buildVerbatimSnippets(brackets, lastCitations);
+    const reviewReport = gate
+      ? { verdict: review.verdict, flags: review.flags, corrected, iterations }
+      : null;
+    if (reviewReport) {
+      sendEvent("review_report", { turnId, answerId, ...reviewReport });
+    }
+    return { finalText, brackets, fidelity, snippets, review: reviewReport };
+  }
+
   // ── Surf mode: wide retrieval with no model generation ──
   // Returns the evidence surf itself as the answer, formatted as a structured
   // report. No synthesis, no citations — just the raw passages the engine found.
@@ -415,7 +522,7 @@ export function createTurnController(deps) {
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           status: "failed", completedAt: new Date().toISOString(), error: err.message,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message });
+        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
@@ -501,7 +608,7 @@ export function createTurnController(deps) {
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           status: "failed", completedAt: new Date().toISOString(), error: err.message,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message });
+        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
@@ -580,22 +687,23 @@ export function createTurnController(deps) {
           },
         });
 
-        const displayText = formatOutput(rawText);
-        const { citations: brackets, unresolvedNums } = resolveCitationBrackets(rawText, lastCitations);
-        const finalText = maxCitation > 0 ? validateCitations(displayText, maxCitation) : displayText;
-        const fidelity = verifyQuotedFidelity(finalText, lastCitations);
+        const groundText = webResults.map((r) => `${r.title}\n${r.text || r.snippet || ""}`).join("\n\n");
+        const { finalText, brackets, fidelity, snippets, review } = await finalizeAndReview({
+          rawText, lastCitations, maxCitation, question,
+          gate: gateInfo, groundText, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
+        });
 
         for (const c of brackets) {
           sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
         }
 
-        const snippets = buildVerbatimSnippets(brackets, lastCitations);
         for (const s of snippets) {
           sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
         }
 
         const gaps = [];
-        if (unresolvedNums.length) {
+        if (brackets.some((b) => !b.resolved)) {
+          const unresolvedNums = brackets.filter((b) => !b.resolved).map((b) => b.num);
           gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no web source matches this bracket.` });
         }
         for (const u of fidelity.unverified) {
@@ -609,9 +717,11 @@ export function createTurnController(deps) {
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           text: finalText, model, citations: brackets, gaps, snippets,
           fidelity, webSearch: true, status: "completed", completedAt: new Date().toISOString(),
+          review,
           instructionGate: gateInfo ? {
             activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
             blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
+            gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
           } : null,
         });
         sendEvent("completed", {
@@ -681,22 +791,23 @@ export function createTurnController(deps) {
           },
         });
 
-        const displayText = formatOutput(rawText);
-        const { citations: brackets, unresolvedNums } = resolveCitationBrackets(rawText, lastCitations);
-        const finalText = maxCitation > 0 ? validateCitations(displayText, maxCitation) : displayText;
-        const fidelity = verifyQuotedFidelity(finalText, lastCitations);
+        const groundText = (groundResult.citations || []).map((c) => c.text).join("\n\n");
+        const { finalText, brackets, fidelity, snippets, review } = await finalizeAndReview({
+          rawText, lastCitations, maxCitation, question,
+          gate: gateInfo, groundText, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
+        });
 
         for (const c of brackets) {
           sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
         }
 
-        const snippets = buildVerbatimSnippets(brackets, lastCitations);
         for (const s of snippets) {
           sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
         }
 
         const gaps = [];
-        if (unresolvedNums.length) {
+        if (brackets.some((b) => !b.resolved)) {
+          const unresolvedNums = brackets.filter((b) => !b.resolved).map((b) => b.num);
           gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no engine passage matches this bracket.` });
         }
         for (const u of fidelity.unverified) {
@@ -715,15 +826,16 @@ export function createTurnController(deps) {
 
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           text: finalText, model, citations: brackets, gaps, snippets,
-          fidelity, status: "completed", completedAt: new Date().toISOString(),
+          fidelity, review, status: "completed", completedAt: new Date().toISOString(),
           instructionGate: gateInfo ? {
             activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
             blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
+            gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
           } : null,
         });
         sendEvent("completed", {
           turnId: turn.id, answerId, status: "completed", text: finalText,
-          citations: brackets, gaps, snippets, model,
+          citations: brackets, gaps, snippets, model, review,
           summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
         });
       }
@@ -738,7 +850,7 @@ export function createTurnController(deps) {
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           status: "failed", completedAt: new Date().toISOString(), error: err.message,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message });
+        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);

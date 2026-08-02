@@ -16,7 +16,9 @@
     "check:laws": "node scripts/check-laws.mjs",
     "postinstall": "git submodule update --init --recursive || true",
     "probe:support-gate": "node scripts/probe-support-gate.mjs",
-    "probe:support-conversation": "node scripts/probe-support-conversation.mjs"
+    "probe:support-conversation": "node scripts/probe-support-conversation.mjs",
+    "probe:instruction-review": "node scripts/probe-instruction-review.mjs",
+    "check:instructions": "node scripts/check-instruction-laws.mjs"
   },
   "dependencies": {
     "@eoreader/engine": "file:../eoreader6/packages/engine",
