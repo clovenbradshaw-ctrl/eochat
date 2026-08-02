@@ -93,29 +93,33 @@ them nothing either time.
 
 ### Known violations (open)
 
-- **L1c — ingest reports no progress.** `POST /api/ingest`
-  ([proxy.js](server/proxy.js)) is a single blocking request/response. Under
-  contention that is a 39-second void. Fix: stream ingest the way chat already
-  streams SSE — the transport exists in this file.
-- **L1d — under load the app cannot even acknowledge.** Idle, a chat turn's
-  first SSE event arrives in 244 ms. Immediately after a run of large ingests,
-  both chat probes emitted *nothing* for 120 s and hit the check's timeout —
-  while Ollama answered `/api/tags` in 0.12 s with its models resident, so the
-  upstream was healthy throughout.
-
-  The acknowledgement is not late, it is *unreachable*: synchronous engine work
-  holds the event loop, so the server cannot flush an SSE header until the
-  ingest finishes. This is the deepest form of L1 violation, because no amount
-  of care at the call site fixes it — the process has no moment in which to
-  speak. Fix: move engine work off the request path, or yield often enough that
-  the acknowledgement can be written before the work begins (L1a exists to make
-  this ordering explicit).
+None currently open under L1 — see below.
 
 ### Fixed under this law
 
 - `/api/verbatim/context` accepted only `id` while the docs published
   `span_id`, so the second hop of every documented audit path returned 400.
   Now accepts both, as `/read` already did.
+- **L1c — ingest reported no progress.** `POST /api/ingest` was a single
+  blocking request/response — a 39-second void under contention. Fixed by
+  adding a `stream: true` SSE path (same transport chat already used):
+  `started` on receipt, a 300ms `progress` heartbeat while admission is
+  in flight, `done`/`error` on settlement. Re-measured
+  (`node scripts/check-laws.mjs`): a 90 KB ingest that took 17985 ms emitted
+  `started, progress, done` across the run, not just the two ends.
+- **L1d — under load the app could not even acknowledge.** Root cause
+  (measured, see `server/ingest-worker.js`): `admitChunked()` is one
+  synchronous pass with no yield points, so while it ran nothing else on the
+  process could be acknowledged — no SSE header for a concurrent chat turn
+  could flush. Fixed by moving admission off the main thread into a worker
+  (`server/ingest-worker.js` / `ingest-worker-client.js`): the worker runs the
+  engine's real `admitChunked`/`ingestFile` unmodified in its own V8 isolate,
+  then hands the resulting spans/documents/provenance back over
+  `postMessage` for `engine-ground.js` to splice into the live session.
+  Re-measured under the same shape as the original finding — 3 concurrent
+  90 KB ingests fired and left unawaited, then both chat probes raced them —
+  and the acknowledgement survived: `tools_available` arrived in 26–39 ms
+  under load, against a 1000 ms budget, versus the original 120 s timeout.
 
 See also the thinking surface: async work shows live inline feedback and is
 never gated behind a click. That is L1 applied to one surface; this is the
