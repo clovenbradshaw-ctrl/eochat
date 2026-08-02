@@ -9,11 +9,14 @@
     "ui": "python3 -m http.server 8899 --directory ui",
     "probe:retrieval": "node scripts/probe-retrieval.mjs",
     "probe:order": "node scripts/probe-prompt-order.mjs",
+    "probe:instruction-gate": "node scripts/probe-instruction-gate.mjs",
     "test:affordances": "node scripts/test-affordances.mjs",
     "test:conversation-store": "node scripts/test-conversation-store.mjs",
     "test:turn-controller": "node scripts/test-turn-controller.mjs",
     "check:laws": "node scripts/check-laws.mjs",
-    "postinstall": "git submodule update --init --recursive || true"
+    "postinstall": "git submodule update --init --recursive || true",
+    "probe:support-gate": "node scripts/probe-support-gate.mjs",
+    "probe:support-conversation": "node scripts/probe-support-conversation.mjs"
   },
   "dependencies": {
     "@eoreader/engine": "file:../eoreader6/packages/engine",

@@ -17,6 +17,39 @@
 
 import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
+import { HolonicTask } from "./holonic-task.js";
+import { createInstructionGate, countTokens as gateCountTokens } from "./instruction-gate.js";
+
+// Mechanical post-processing: read the model's own output and format it for
+// display — no model call, no learned system, just regexes and rules.
+// Handles sentence-boundary spacing, paragraph breaks before numbered lists,
+// and whitespace cleanup.
+function formatOutput(text) {
+  if (!text) return text;
+  let t = text;
+
+  // Fix missing space after sentence-ending punctuation when the next
+  // character is a capital letter, opening quote, opening bracket, or
+  // opening paren (but NOT inside a citation bracket like [1] or a
+  // decimal like 3.14 — ".\d" is left alone).
+  t = t.replace(/([.!?])([A-Z"'(])/g, '$1 $2');
+
+  // Ensure a paragraph break before numbered list items — these are
+  // patterns like " 1. ", " 2. ", " 3. " that commonly follow a colon
+  // or sentence end without a line break.
+  t = t.replace(/([.:])\s*(\d+)\.\s+/g, '$1\n\n$2. ');
+
+  // Ensure each subsequent numbered item gets its own line.
+  t = t.replace(/\n(\d+)\.\s/g, '\n\n$1. ');
+
+  // Fix missing space after ellipsis when followed by text.
+  t = t.replace(/\.\.\.([A-Za-z])/g, '... $1');
+
+  // Collapse runs of 3+ newlines down to exactly 2 (paragraph separator).
+  t = t.replace(/\n{3,}/g, '\n\n');
+
+  return t.trim();
+}
 
 const HISTORY_TURNS = 6;
 
@@ -66,13 +99,22 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
  * @param {(messages: object[]) => string} deps.heuristicModel - cold-start model choice, latency/shape based (not EO/keyword classification)
  * @param {number} deps.latencyBudgetMs
  * @param {() => boolean} deps.isWarming - true while the corpus is still ingesting at boot
+ * @param {(query: string, opts?: object) => Promise<Array<{rank:number,title:string,url:string,snippet:string,text:string}>>} deps.webSearchFn - performs web search + fetch, returns structured results
  */
 export function createTurnController(deps) {
   const {
     conversationStore, groundQuery, target, anthropicKey, anthropicModel,
     numCtx,
-    modelRouter, heuristicModel, latencyBudgetMs, isWarming,
+    modelRouter, heuristicModel, latencyBudgetMs, isWarming, webSearchFn,
   } = deps;
+
+  const _getAnthropicKey = () => typeof anthropicKey === 'function' ? anthropicKey() : anthropicKey;
+
+  // The instruction gate: surfaces the relevant instruction folds verbatim each
+  // turn, folds the rest to a fingerprint index, and injects the resulting
+  // block as an extra system message. A missing corpus yields an empty gate
+  // (no-op); a corpus parse error throws at boot, on purpose.
+  const instructionGate = createInstructionGate();
 
   // One in-flight generation per (conversation, turn) at a time — stop/regenerate
   // both need to find it by that key alone, before they know an answerId.
@@ -107,6 +149,26 @@ export function createTurnController(deps) {
     return { message: { role: "system", content }, maxCitation: groundResult.citations.length, warming: false };
   }
 
+  function buildWebSystemMessage(webResults) {
+    if (!webResults || webResults.length === 0) {
+      return {
+        message: { role: "system", content: "Answer the reader's question from your own knowledge. Do NOT use bracketed citations like [1] — there are no sources to cite." },
+        maxCitation: 0, warming: false,
+      };
+    }
+    const parts = webResults.map((r, i) => {
+      const body = (r.text || r.snippet || "").trim();
+      return `[${i + 1}] ${r.title}\n    URL: ${r.url}\n${body ? `\n${body}` : ""}`;
+    });
+    const content =
+      `Answer the reader's question using the web search results below. When you draw on specific information, ` +
+      `cite the source number like [1], [2], etc. Do NOT invent facts beyond what the material contains. ` +
+      `If it does not contain the answer, say so plainly.\n\n` +
+      `--- Web Search Results (${webResults.length} sources) ---\n\n` +
+      parts.join("\n\n");
+    return { message: { role: "system", content }, maxCitation: webResults.length, warming: false };
+  }
+
   // Recent completed turns from THIS conversation, as real message history —
   // not reconstructed from a keyword memory search. Bounded so a long-running
   // conversation doesn't grow the prompt without limit.
@@ -122,6 +184,40 @@ export function createTurnController(deps) {
       }
     }
     return out;
+  }
+
+  // The user turns this gate should judge relevance against — the same bounded
+  // history the model sees, user messages only.
+  function recentUserQuestions(conv, beforeTurnId) {
+    return (conv.turns || []).filter((t) => t.id !== beforeTurnId).slice(-HISTORY_TURNS).map((t) => t.question);
+  }
+
+  // Gate one turn's instruction context. Returns null when there is no corpus
+  // (an empty gate is a no-op, never a crash), otherwise the report for SSE +
+  // persistence plus the system message to prepend to the model call.
+  function gateInstructionBlock({ question, conv, turnId }) {
+    if (!instructionGate.folds.length) return null;
+    const r = instructionGate.gate({ question, history: recentUserQuestions(conv, turnId) });
+    return {
+      activeIds: r.activeIds,
+      foldedIds: r.foldedIds,
+      blockTokens: gateCountTokens(r.systemMessage),
+      budget: r.stats.budget,
+      overflow: r.stats.overflow,
+      systemMessage: r.systemMessage,
+    };
+  }
+
+  function emitGateReport(sendEvent, turnId, answerId, g) {
+    if (!g) return;
+    sendEvent("gate_report", {
+      turnId, answerId,
+      activeIds: g.activeIds,
+      foldedIds: g.foldedIds,
+      blockTokens: g.blockTokens,
+      budget: g.budget,
+      overflow: g.overflow,
+    });
   }
 
   async function callOllamaStreaming(model, messages, { signal, onDelta }) {
@@ -174,7 +270,7 @@ export function createTurnController(deps) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": anthropicKey,
+        "x-api-key": _getAnthropicKey(),
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
@@ -211,7 +307,8 @@ export function createTurnController(deps) {
 
   async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride }) {
     let model, routerCtx;
-    const useAnthropic = provider === "anthropic" && anthropicKey;
+    const key = _getAnthropicKey();
+    const useAnthropic = provider === "anthropic" && key;
     if (useAnthropic) {
       model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
       routerCtx = null;
@@ -236,134 +333,402 @@ export function createTurnController(deps) {
     return result;
   }
 
-  // The core pipeline shared by a fresh turn and a regenerate — both already
-  // have a turnId/answerId and a question by the time this runs.
-  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride }, sendEvent) {
+  // ── Surf mode: wide retrieval with no model generation ──
+  // Returns the evidence surf itself as the answer, formatted as a structured
+  // report. No synthesis, no citations — just the raw passages the engine found.
+  async function runSurfAnswer({ conv, turn, answerId, question, sourceScope, pool }, sendEvent) {
     const key = newAnswerEventKey(conv.id, turn.id);
     const controller = new AbortController();
     activeControllers.set(key, controller);
 
     try {
-      sendEvent("retrieval_started", { turnId: turn.id, answerId });
+      sendEvent("retrieval_started", { turnId: turn.id, answerId, mode: "surf" });
 
+      // Extra-wide retrieval — surf mode maximizes evidence surface area
       const groundResult = groundQuery(question, {
-        budget: 3000, maxUnits: 5, limit: 16,
+        budget: 6000, maxUnits: 20, limit: 50,
         source: sourceScope, pool: pool || "corpus",
       });
-      const { message: systemMsg, maxCitation, warming } = buildGroundedSystemMessage(groundResult);
+
+      const retrieved = groundResult.retrieved || [];
+      const citations = groundResult.citations || [];
 
       sendEvent("witnesses_selected", {
         turnId: turn.id, answerId,
+        mode: "surf",
         empty: !groundResult.context,
-        warming,
         sourceCount: groundResult.total || 0,
         foldedCount: groundResult.folded || 0,
         tokens: groundResult.tokens,
         budget: groundResult.budget,
         dropped: groundResult.dropped,
-        retrieved: groundResult.retrieved || [],
-        citations: (groundResult.citations || []).map((c, i) => ({
-          index: i + 1, span_id: c.span_id, source_id: c.source_id,
-          byte_start: c.byte_start, byte_end: c.byte_end,
-          score: Math.round((c.score || 0) * 100) / 100, text: c.text,
-        })),
-        gaps: groundResult.gaps || [],
-        // Priors widen retrieval but are metadata about HOW retrieval was
-        // steered, never themselves offered as a citation — kept in its own
-        // field so a client cannot accidentally render it as evidence.
+        retrievedCount: retrieved.length,
+        citationCount: citations.length,
         priorWidening: groundResult.priorWidening || null,
       });
 
+      // Format the surf as a structured evidence report
+      const lines = [];
+      lines.push(`◈ SURF MODE — ${question}`);
+      lines.push(`   ${citations.length} passages across ${groundResult.total || 0} sources\n`);
+
+      for (let i = 0; i < citations.length; i++) {
+        const c = citations[i];
+        lines.push(`[${i + 1}] source: ${c.source_id}`);
+        lines.push(`    span: ${c.span_id}  bytes ${c.byte_start}–${c.byte_end}  score: ${(c.score || 0).toFixed(2)}`);
+        lines.push(`    ${(c.text || "").trim()}`);
+        lines.push("");
+      }
+
+      if (citations.length === 0) {
+        lines.push("(No matching passages found.)");
+      }
+
+      const surfText = lines.join("\n");
+
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-        grounding: {
+        text: surfText, model: null, status: "completed",
+        mode: "surf", grounding: {
           sourceCount: groundResult.total || 0,
           foldedCount: groundResult.folded || 0,
           tokens: groundResult.tokens,
           budget: groundResult.budget,
           dropped: groundResult.dropped,
           empty: !groundResult.context,
-          warming,
-          priorWidening: groundResult.priorWidening || null,
         },
+        completedAt: new Date().toISOString(),
       });
 
-      // The one citation table this whole answer is checked against — index,
-      // byte range, and verbatim text together, so bracket resolution and
-      // quote-fidelity checking can never drift apart into two different ideas
-      // of what citation [n] is.
-      const lastCitations = (groundResult.citations || []).map((c, i) => ({
-        index: i + 1, source_id: c.source_id, span_id: c.span_id,
-        byte_start: c.byte_start, byte_end: c.byte_end, score: c.score, text: c.text,
-      }));
-
-      const history = buildHistoryMessages(conv, turn.id);
-      const messages = [systemMsg, ...history, { role: "user", content: question }];
-
-      let sawStart = false;
-      const { text: rawText, model } = await callModelStreaming(messages, {
-        signal: controller.signal, provider, modelOverride,
-        onDelta: (delta, text) => {
-          // Captured on the controller itself so a stop mid-stream can persist
-          // exactly what the reader already saw, not an empty answer.
-          controller._partialText = text;
-          if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
-          sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text });
-        },
-      });
-
-      // Resolve brackets against the RAW text first — validateCitations below
-      // rewrites an unresolved [9] into "[⊘ no source 9]", which no longer
-      // looks like a citation at all and would make the very gap it exists to
-      // report invisible to bracket resolution.
-      const { citations: brackets, unresolvedNums } = resolveCitationBrackets(rawText, lastCitations);
-      const finalText = maxCitation > 0 ? validateCitations(rawText, maxCitation) : rawText;
-      const fidelity = verifyQuotedFidelity(finalText, lastCitations);
-
-      for (const c of brackets) {
-        sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
-      }
-
-      // The verbatim excerpt for every citation this answer actually used —
-      // sliced straight from lastCitations, never re-typed by the model.
-      // Sent as its own event, right alongside citation_verified, so a
-      // reader sees the summary's proof arrive with the citation, not on a
-      // separate click.
-      const snippets = buildVerbatimSnippets(brackets, lastCitations);
-      for (const s of snippets) {
-        sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
-      }
-
-      const gaps = [];
-      if (unresolvedNums.length) {
-        gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no engine passage matches this bracket.` });
-      }
-      for (const u of fidelity.unverified) {
-        gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited passage." });
-      }
-      for (const g of groundResult.gaps || []) gaps.push(g);
-      if (!groundResult.context) {
-        gaps.push({
-          type: warming ? "corpus_warming" : "no_evidence_matched",
-          reason: warming
-            ? "The document index was still loading when this was asked."
-            : "No passage in your sources matches this question — answered from general knowledge, uncited.",
-        });
-      }
-      for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
-
-      await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-        text: finalText, model, citations: brackets, gaps, snippets,
-        fidelity, status: "completed", completedAt: new Date().toISOString(),
-      });
       sendEvent("completed", {
-        turnId: turn.id, answerId, status: "completed", text: finalText,
-        citations: brackets, gaps, snippets, model,
-        summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
+        turnId: turn.id, answerId, status: "completed", text: surfText,
+        mode: "surf", model: null,
+        summary: `${citations.length} passages · ${new Set(citations.map((c) => c.source_id)).size} sources`,
       });
     } catch (err) {
       if (err.name === "AbortError") {
-        // Whatever streamed before the stop is a valid, honest partial turn —
-        // not an error. Persist and report it as interrupted, not failed.
+        const partial = "(surf interrupted)";
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          text: partial, status: "interrupted", completedAt: new Date().toISOString(),
+        }).catch(() => {});
+        sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
+      } else {
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+        }).catch(() => {});
+        sendEvent("failed", { turnId: turn.id, answerId, message: err.message });
+      }
+    } finally {
+      activeControllers.delete(key);
+    }
+  }
+
+  // ── Think mode: holonic task decomposition ──
+  // The question becomes the task for a full holonic decomposition pipeline:
+  // plan → research → execute (with grounding correction loops) → cite → assemble.
+  async function runThinkAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride }, sendEvent) {
+    const key = newAnswerEventKey(conv.id, turn.id);
+    const controller = new AbortController();
+    activeControllers.set(key, controller);
+
+    try {
+      sendEvent("retrieval_started", { turnId: turn.id, answerId, mode: "think" });
+
+      // Build an engine adapter so the holonic task can search the same corpus
+      const engineAdapter = {
+        search: (query, opts = {}) => {
+          const result = groundQuery(query, {
+            budget: opts.budget || 3000,
+            maxUnits: opts.maxUnits || 5,
+            limit: opts.limit || 16,
+            source: sourceScope,
+            pool: pool || "corpus",
+          });
+          return (result.citations || []).map((c) => ({
+            text: c.text,
+            source: c.source_id,
+            score: c.score || 0,
+            span_id: c.span_id,
+            byte_start: c.byte_start,
+            byte_end: c.byte_end,
+          }));
+        },
+      };
+
+      const task = new HolonicTask({
+        task: question,
+        model: modelOverride || "phi4-mini:latest",
+        engine: engineAdapter,
+        ollamaUrl: target,
+      });
+
+      // Pipe holonic progress events through to the SSE stream
+      const result = await task.run({
+        onProgress: (phase, msg, data = {}) => {
+          sendEvent(`holonic_${phase}`, { turnId: turn.id, answerId, msg, ...data });
+        },
+      });
+
+      const thinkText = result.output;
+
+      await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+        text: thinkText, model: task.model, status: "completed",
+        mode: "think",
+        trace: result.results.map((r) => ({
+          id: r.id, label: r.label,
+          groundingScore: r.groundingScore,
+          surplusScore: r.surplusScore,
+          citations: r.citations,
+          iterations: r.iterations,
+        })),
+        completedAt: new Date().toISOString(),
+      });
+
+      sendEvent("completed", {
+        turnId: turn.id, answerId, status: "completed", text: thinkText,
+        mode: "think", model: task.model,
+        sections: result.results.length,
+        mechanicalCitations: result.results.reduce((a, r) => a + r.citations.length, 0),
+        gaps: result.gaps.length,
+      });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        const partial = "(think interrupted)";
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          text: partial, status: "interrupted", completedAt: new Date().toISOString(),
+        }).catch(() => {});
+        sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
+      } else {
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+        }).catch(() => {});
+        sendEvent("failed", { turnId: turn.id, answerId, message: err.message });
+      }
+    } finally {
+      activeControllers.delete(key);
+    }
+  }
+
+  // The core pipeline shared by a fresh turn and a regenerate — both already
+  // have a turnId/answerId and a question by the time this runs.
+  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, mode, webSearch }, sendEvent) {
+    // Dispatch to mode-specific handler
+    if (mode === "surf") {
+      return runSurfAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride }, sendEvent);
+    }
+    if (mode === "think") {
+      return runThinkAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride }, sendEvent);
+    }
+
+    const key = newAnswerEventKey(conv.id, turn.id);
+    const controller = new AbortController();
+    activeControllers.set(key, controller);
+
+    try {
+      sendEvent("retrieval_started", { turnId: turn.id, answerId, webSearch: !!webSearch });
+
+      if (webSearch && webSearchFn) {
+        // ── Web search path: retrieved carries web results, no engine grounding ──
+        const webResults = await webSearchFn(question, { numResults: 5, maxFetchChars: 5000 });
+        const { message: systemMsg, maxCitation } = buildWebSystemMessage(webResults);
+
+        const retrieved = webResults.map((r) => ({
+          rank: r.rank,
+          title: r.title,
+          url: r.url,
+          snippet: r.snippet,
+          text: r.text,
+          source: "web",
+        }));
+
+        sendEvent("witnesses_selected", {
+          turnId: turn.id, answerId,
+          empty: webResults.length === 0,
+          warming: false,
+          sourceCount: webResults.length,
+          foldedCount: webResults.length,
+          retrieved,
+          citations: [],
+          gaps: [],
+          priorWidening: null,
+        });
+
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          grounding: {
+            sourceCount: webResults.length,
+            foldedCount: webResults.length,
+            tokens: 0, budget: 0, dropped: 0,
+            empty: webResults.length === 0,
+            warming: false,
+          },
+        });
+
+        const lastCitations = [];
+        const history = buildHistoryMessages(conv, turn.id);
+        const messages = [systemMsg, ...history, { role: "user", content: question }];
+
+        const gateInfo = gateInstructionBlock({ question, conv, turnId: turn.id });
+        emitGateReport(sendEvent, turn.id, answerId, gateInfo);
+        if (gateInfo) messages.unshift({ role: "system", content: gateInfo.systemMessage });
+
+        let sawStart = false;
+        const { text: rawText, model } = await callModelStreaming(messages, {
+          signal: controller.signal, provider, modelOverride,
+          onDelta: (delta, text) => {
+            if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length }); }
+            controller._partialText = formatOutput(text);
+            sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
+          },
+        });
+
+        const displayText = formatOutput(rawText);
+        const { citations: brackets, unresolvedNums } = resolveCitationBrackets(rawText, lastCitations);
+        const finalText = maxCitation > 0 ? validateCitations(displayText, maxCitation) : displayText;
+        const fidelity = verifyQuotedFidelity(finalText, lastCitations);
+
+        for (const c of brackets) {
+          sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
+        }
+
+        const snippets = buildVerbatimSnippets(brackets, lastCitations);
+        for (const s of snippets) {
+          sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
+        }
+
+        const gaps = [];
+        if (unresolvedNums.length) {
+          gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no web source matches this bracket.` });
+        }
+        for (const u of fidelity.unverified) {
+          gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited source." });
+        }
+        if (webResults.length === 0) {
+          gaps.push({ type: "no_web_results", reason: "No web search results matched this question — answered from general knowledge, uncited." });
+        }
+        for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
+
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          text: finalText, model, citations: brackets, gaps, snippets,
+          fidelity, webSearch: true, status: "completed", completedAt: new Date().toISOString(),
+          instructionGate: gateInfo ? {
+            activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
+            blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
+          } : null,
+        });
+        sendEvent("completed", {
+          turnId: turn.id, answerId, status: "completed", text: finalText,
+          citations: brackets, gaps, snippets, model, webSearch: true,
+          summary: `${webResults.length} web sources`,
+        });
+      } else {
+        // ── Engine grounding path: retrieved is empty (reserved for web results) ──
+        const groundResult = groundQuery(question, {
+          budget: 3000, maxUnits: 5, limit: 16,
+          source: sourceScope, pool: pool || "corpus",
+        });
+        const { message: systemMsg, maxCitation, warming } = buildGroundedSystemMessage(groundResult);
+
+        sendEvent("witnesses_selected", {
+          turnId: turn.id, answerId,
+          empty: !groundResult.context,
+          warming,
+          sourceCount: groundResult.total || 0,
+          foldedCount: groundResult.folded || 0,
+          tokens: groundResult.tokens,
+          budget: groundResult.budget,
+          dropped: groundResult.dropped,
+          retrieved: [],
+          citations: (groundResult.citations || []).map((c, i) => ({
+            index: i + 1, span_id: c.span_id, source_id: c.source_id,
+            byte_start: c.byte_start, byte_end: c.byte_end,
+            score: Math.round((c.score || 0) * 100) / 100, text: c.text,
+          })),
+          gaps: groundResult.gaps || [],
+          priorWidening: groundResult.priorWidening || null,
+        });
+
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          grounding: {
+            sourceCount: groundResult.total || 0,
+            foldedCount: groundResult.folded || 0,
+            tokens: groundResult.tokens,
+            budget: groundResult.budget,
+            dropped: groundResult.dropped,
+            empty: !groundResult.context,
+            warming,
+            priorWidening: groundResult.priorWidening || null,
+          },
+        });
+
+        const lastCitations = (groundResult.citations || []).map((c, i) => ({
+          index: i + 1, source_id: c.source_id, span_id: c.span_id,
+          byte_start: c.byte_start, byte_end: c.byte_end, score: c.score, text: c.text,
+        }));
+
+        const history = buildHistoryMessages(conv, turn.id);
+        const messages = [systemMsg, ...history, { role: "user", content: question }];
+
+        const gateInfo = gateInstructionBlock({ question, conv, turnId: turn.id });
+        emitGateReport(sendEvent, turn.id, answerId, gateInfo);
+        if (gateInfo) messages.unshift({ role: "system", content: gateInfo.systemMessage });
+
+        let sawStart = false;
+        const { text: rawText, model } = await callModelStreaming(messages, {
+          signal: controller.signal, provider, modelOverride,
+          onDelta: (delta, text) => {
+            if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
+            controller._partialText = formatOutput(text);
+            sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
+          },
+        });
+
+        const displayText = formatOutput(rawText);
+        const { citations: brackets, unresolvedNums } = resolveCitationBrackets(rawText, lastCitations);
+        const finalText = maxCitation > 0 ? validateCitations(displayText, maxCitation) : displayText;
+        const fidelity = verifyQuotedFidelity(finalText, lastCitations);
+
+        for (const c of brackets) {
+          sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
+        }
+
+        const snippets = buildVerbatimSnippets(brackets, lastCitations);
+        for (const s of snippets) {
+          sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
+        }
+
+        const gaps = [];
+        if (unresolvedNums.length) {
+          gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no engine passage matches this bracket.` });
+        }
+        for (const u of fidelity.unverified) {
+          gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited passage." });
+        }
+        for (const g of groundResult.gaps || []) gaps.push(g);
+        if (!groundResult.context) {
+          gaps.push({
+            type: warming ? "corpus_warming" : "no_evidence_matched",
+            reason: warming
+              ? "The document index was still loading when this was asked."
+              : "No passage in your sources matches this question — answered from general knowledge, uncited.",
+          });
+        }
+        for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
+
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          text: finalText, model, citations: brackets, gaps, snippets,
+          fidelity, status: "completed", completedAt: new Date().toISOString(),
+          instructionGate: gateInfo ? {
+            activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
+            blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
+          } : null,
+        });
+        sendEvent("completed", {
+          turnId: turn.id, answerId, status: "completed", text: finalText,
+          citations: brackets, gaps, snippets, model,
+          summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
+        });
+      }
+    } catch (err) {
+      if (err.name === "AbortError") {
         const partial = controller._partialText || "";
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           text: partial, status: "interrupted", completedAt: new Date().toISOString(),
@@ -380,9 +745,11 @@ export function createTurnController(deps) {
     }
   }
 
-  async function startTurn({ conversationId, question, sourceScope, pool, attachments, provider, model }, sendEvent) {
+  async function startTurn({ conversationId, question, sourceScope, pool, attachments, provider, model, mode, webSearch }, sendEvent) {
     const conv = await conversationStore.require(conversationId);
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
+    const effectiveMode = mode || conv.mode || "chat";
+    const effectiveWebSearch = webSearch !== undefined ? webSearch : (conv.webSearch || false);
     const { turn } = await conversationStore.appendTurn(conversationId, {
       question, sourceScope: effectiveScope, attachments,
     });
@@ -390,12 +757,13 @@ export function createTurnController(deps) {
     sendEvent("accepted", {
       turnId: turn.id, answerId: answer.id, question,
       sourceScope: effectiveScope, pool: pool || conv.pool || "corpus",
+      mode: effectiveMode, webSearch: effectiveWebSearch,
     });
 
     const run = runAnswer({
       conv, turn, answerId: answer.id,
       question, sourceScope: effectiveScope, pool: pool || conv.pool,
-      provider, model,
+      provider, model, mode: effectiveMode, webSearch: effectiveWebSearch,
     }, sendEvent);
 
     return { turnId: turn.id, answerId: answer.id, done: run };
@@ -409,11 +777,13 @@ export function createTurnController(deps) {
     sendEvent("accepted", {
       turnId, answerId: answer.id, question: turn.question,
       sourceScope: turn.sourceScope, pool: conv.pool || "corpus",
+      mode: conv.mode || "chat", webSearch: conv.webSearch || false,
       regenerate: true,
     });
     const run = runAnswer({
       conv: { ...conv, id: conversationId }, turn, answerId: answer.id,
       question: turn.question, sourceScope: turn.sourceScope, pool: conv.pool,
+      mode: conv.mode || "chat", webSearch: conv.webSearch || false,
     }, sendEvent);
     return { turnId, answerId: answer.id, done: run };
   }

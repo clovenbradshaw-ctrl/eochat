@@ -274,21 +274,36 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 **Why users need it:** The system should already understand the field, not start from zero. Priors are witness-tier knowledge about the corpus, not evidence from it.
 
 **How it manifests:**
-- `GET /api/priors` — list available priors
-- `GET /api/priors/read?id=<id>` — read a specific prior
+- `GET /api/priors` — list available priors, grouped in the UI by declared
+  scope (per-text / corpus-wide / derived-from-another-prior / undeclared),
+  not by filename or schema
+- `GET /api/priors/read?id=<id>` — read a specific prior; the Priors tab
+  reads this inline (click a prior to expand its card right there) rather
+  than requiring the full reader
 - `GET /api/priors/search?q=<query>` — search priors
+- `POST /api/priors/toggle` — switch one prior or an entire bucket off/on
 - Priors activate automatically on surf (not exposed to LLM as context)
+- A disabled prior stays cataloged and readable, but is pulled out of the
+  priors pool entirely: it stops widening any per-text coref query
+  (priors-bridge.js) and stops turning up in `/api/priors/search`
 
 **Success criteria:**
 - Priors improve retrieval quality without being cited
-- User can browse what priors are loaded
+- User can browse what priors are loaded, and read one without leaving the tab
+- User can switch a whole bucket or a single prior off, and back on
+- An off prior has zero effect on retrieval; the file on disk is untouched
+- The on/off state persists across restarts
 - Priors don't leak into corpus grounding
 
 **How to test:**
-1. Check `/api/priors` → should list coref priors
+1. Check `/api/priors` → should list coref priors, each with `disabled: false`
 2. Read a prior → should show domain knowledge (e.g., entity mappings)
 3. Ask a question → priors should steer retrieval but not appear as citations
 4. Verify priors pool is separate from corpus pool
+5. Toggle a per-text prior off (`POST /api/priors/toggle`) → `/api/priors/search`
+   for a term it used to widen should no longer surface it
+6. Restart the proxy → the same prior should still show `disabled: true`
+7. Toggle it back on → search results return
 
 ---
 
@@ -500,9 +515,10 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 - `GET /api/source/text?source=<ref>` — read source text by byte range
 
 ### Priors
-- `GET /api/priors` — list priors
-- `GET /api/priors/read?id=<id>` — read a prior
-- `GET /api/priors/search?q=<query>` — search priors
+- `GET /api/priors` — list priors (each entry carries `disabled: boolean`)
+- `GET /api/priors/read?id=<id>` — read a prior (works regardless of on/off state)
+- `GET /api/priors/search?q=<query>` — search priors (only searches enabled ones)
+- `POST /api/priors/toggle` — `{ id | ids: [...], enabled }`, switch one or a bucket off/on
 
 ### System
 - `GET /health` — health check

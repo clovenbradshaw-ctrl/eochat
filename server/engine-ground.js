@@ -1621,7 +1621,15 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
     const surfaces = globalSurfacesFor(r, entry);
     // Anchors are gathered for all referents with evidence, not just prior-typed ones.
     // Universal coref: discovered candidates are valid referents.
-    const evidence = type ? anchorsFor(pieces, doc.id, surfaces, anchorsPerReferent) : [];
+    //
+    // This used to read `type ? anchorsFor(...) : []`, which contradicted the
+    // two lines above it: an untyped referent got no anchors, fell into the
+    // universal-coref branch below, and reached the app with an empty
+    // `provenance.anchors` — so the entity profile's Anchors list was empty
+    // for every discovered referent and there was nothing to click through to
+    // in the reader. Locating a known surface is not typing it; the gate was
+    // in the wrong place.
+    const evidence = anchorsFor(pieces, doc.id, surfaces, anchorsPerReferent);
 
     const base = {
       id: r.id,
@@ -1656,15 +1664,22 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
     // Universal coref: discovered candidates are valid referents.
     // Only withhold if there's genuinely no evidence (no surfaces, no mentions).
     if (!type && !r.fromPrior && r.mentions > 0) {
-      // Auto-classify discovered referents
+      // `emanon` — a being the text names and shows but does not individuate
+      // into a kind. It is the honest floor for engine-tier discovery, not a
+      // classification: name-variant coreference establishes THAT something
+      // recurs under a name, never WHICH kind of being it is. Typing it
+      // holon/protogon/apparatus would be a fabrication with a nice label.
       const autoType = r.individuation || 'emanon';
       referents.push({
         ...base,
         individuation_type: autoType,
-        aliasesResolved: true,
-        evidence: [],
+        // Name variants are merged; pronouns and definite descriptions are
+        // not, and cannot be without a prior. Saying `true` here claimed a
+        // resolution the engine explicitly refuses to make.
+        aliasesResolved: false,
+        evidence,
         provenance: {
-          anchors: [],
+          anchors: evidence,
           tier: "engine",
           prior_snapshot: null,
           surfaces_scanned: surfaces,

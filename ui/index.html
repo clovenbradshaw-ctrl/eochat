@@ -32,9 +32,19 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.0.3/src/regular/style.css" />
 <!-- Parses .xlsx/.xls client-side (SheetJS). Optional: uploadFiles() checks
-     `typeof XLSX` and degrades to an unindexed binary source if this fails to
-     load (offline, CDN blocked), same as any other unparseable format. -->
+      `typeof XLSX` and degrades to an unindexed binary source if this fails to
+      load (offline, CDN blocked), same as any other unparseable format. -->
 <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<!-- Parses .pdf client-side (PDF.js). uploadFiles() checks `typeof pdfjsLib`
+     and degrades to an unindexed binary source if this fails to load (offline,
+     CDN blocked). -->
+<script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<!-- OCR for scanned PDFs (Tesseract.js). uploadFiles() dynamically imports it
+     when a PDF has no text layer. -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.3/dist/tesseract.min.js"></script>
+<!-- Renders markdown in AI answers. Falls through to plain text if the CDN is
+      unreachable — same offline-degrade pattern as the other optional libs. -->
+<script src="https://unpkg.com/marked@15.0.7/lib/marked.umd.min.js"></script>
 <style>
   body { margin: 0; background: #F4F2ED; -webkit-font-smoothing: antialiased; }
   a { color: #1F5A4C; text-decoration: none; }
@@ -49,6 +59,26 @@
   .eo-scrollbar::-webkit-scrollbar-thumb { background: #E0DACE; border-radius: 4px; }
   .eo-fade-in { animation: eoFadeIn .2s ease-out; }
   @keyframes eoFadeIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
+  .eo-md { line-height:1.72; text-wrap:pretty; word-break:break-word; }
+  .eo-md p { margin:0 0 .6em; }
+  .eo-md p:last-child { margin-bottom:0; }
+  .eo-md ul, .eo-md ol { margin:.3em 0; padding-left:1.5em; }
+  .eo-md li { margin:.15em 0; }
+  .eo-md code { font-family:'IBM Plex Mono', monospace; font-size:.85em; background:#F1EEE7; border-radius:4px; padding:.15em .4em; color:#26241F; }
+  .eo-md pre { margin:.5em 0; background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:10px 12px; overflow-x:auto; }
+  .eo-md pre code { background:none; border-radius:0; padding:0; font-size:.8em; line-height:1.55; }
+  .eo-md strong { font-weight:600; }
+  .eo-md a { color:#1F5A4C; text-decoration:underline; }
+  .eo-md a:hover { color:#143B31; }
+  .eo-md h1, .eo-md h2, .eo-md h3, .eo-md h4 { margin:.6em 0 .3em; font-weight:500; color:#26241F; }
+  .eo-md h1 { font-size:1.25em; }
+  .eo-md h2 { font-size:1.15em; }
+  .eo-md h3 { font-size:1.05em; }
+  .eo-md blockquote { margin:.4em 0; padding-left:.8em; border-left:3px solid #E0DACE; color:#6E6A60; }
+  .eo-md table { border-collapse:collapse; margin:.5em 0; font-size:.9em; }
+  .eo-md th, .eo-md td { border:1px solid #E4DFD5; padding:5px 9px; text-align:left; }
+  .eo-md th { background:#F2EFE8; font-weight:500; }
+  .eo-md hr { border:none; border-top:1px solid #E0DACE; margin:.8em 0; }
 </style>
 </helmet>
 
@@ -57,11 +87,14 @@
 
   <div style="display:flex; align-items:center; justify-content:space-between; padding:0 2px;">
     <div style="display:flex; align-items:center; gap:10px; position:relative;">
-      <span onClick="{{ goToApp }}" style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C; cursor:pointer;">eochat</span>
-      <button type="button" onClick="{{ toggleSpaces }}" style="display:flex; align-items:center; gap:6px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; padding:5px 10px 5px 12px; cursor:pointer; font-family:inherit;">
-        <span style="font-size:13px; color:#26241F;">{{ activeSpaceName }}</span>
-        <span style="font-size:9px; color:#A39D91;">▾</span>
-      </button>
+      <sc-if value="{{ showingProjects }}">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C;">eochat</span>
+      </sc-if>
+      <sc-if value="{{ notShowingProjects }}">
+        <span onClick="{{ goToApp }}" style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C; cursor:pointer;">eochat</span>
+        <button type="button" onClick="{{ goToProjects }}" style="display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:4px 9px; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C;"><i class="ph ph-arrow-left" style="font-size:11px;"></i>Back</button>
+        <span style="font-size:13px; color:#26241F; font-weight:500;">{{ activeProjectName }}</span>
+      </sc-if>
       <sc-if value="{{ spacesOpen }}">
       <div style="position:absolute; top:36px; left:76px; width:260px; max-height:60vh; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:6px; z-index:20; display:flex; flex-direction:column; gap:1px;" class="eo-scrollbar">
         <button type="button" onClick="{{ addSpace }}" style="display:flex; align-items:center; gap:8px; border:0; background:none; border-radius:7px; padding:8px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#1F5A4C; margin-bottom:4px;">
@@ -95,54 +128,132 @@
       <sc-if value="{{ proxyDead }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#c0341a; letter-spacing:.04em;">proxy off</span>
       </sc-if>
+      <sc-if value="{{ model }}">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#8C877C;">{{ model }}</span>
+      </sc-if>
+      <button type="button" aria-label="Settings" onClick="{{ toggleSettings }}" style="width:30px; height:30px; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:#8C877C; cursor:pointer; font-size:16px;"><i class="ph ph-gear"></i></button>
     </div>
   </div>
 
-  <div style="position:relative; flex:1; min-height:0; display:grid; grid-template-columns: {{ leftColWidth }} minmax(0, 1fr) {{ readerColWidth }} 248px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:14px; box-shadow:0 1px 2px rgba(28,26,23,.04), 0 12px 28px -22px rgba(28,26,23,.35); overflow:hidden;">
+  <div style="position:relative; flex:1; min-height:0; display:grid; grid-template-columns: {{ leftColWidth }} minmax(0, 1fr) {{ readerColWidth }} {{ rightRailWidth }}; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:14px; box-shadow:0 1px 2px rgba(28,26,23,.04), 0 12px 28px -22px rgba(28,26,23,.35); overflow:hidden;">
 
     <div style="background:#FAF8F4; border-right:1px solid #EBE6DC; padding: {{ leftPadding }}; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; align-items: {{ leftAlign }};">
       <sc-if value="{{ leftCollapsed }}">
         <button type="button" aria-label="Expand sources" onClick="{{ toggleLeftCollapsed }}" style="width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-sidebar-simple" style="font-size:13px;"></i></button>
-        <span style="writing-mode:vertical-rl; font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; letter-spacing:.08em; margin-top:6px;">{{ sourceCount }} sources</span>
+        <span style="writing-mode:vertical-rl; font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; letter-spacing:.08em; margin-top:6px;">{{ leftPanelCountLabel }}</span>
       </sc-if>
       <sc-if value="{{ leftExpanded }}">
       <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
-        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Sources</span>
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">{{ leftPanelHeader }}</span>
         <div style="display:flex; gap:6px;">
+          <sc-if value="{{ activeProject }}">
           <button type="button" aria-label="Search the web" onClick="{{ searchWeb }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-magnifying-glass" style="font-size:13px;"></i></button>
           <button type="button" aria-label="Add source" onClick="{{ addSource }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-plus" style="font-size:13px;"></i></button>
+          </sc-if>
           <button type="button" aria-label="Collapse sources" onClick="{{ toggleLeftCollapsed }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-sidebar-simple" style="font-size:13px;"></i></button>
         </div>
       </div>
 
       <div style="display:flex; flex-direction:column; gap:14px; flex:1; min-height:0; overflow-y:auto; width:100%;" class="eo-scrollbar">
+
         <div style="display:flex; flex-direction:column; gap:1px;">
-          <sc-for list="{{ activeSources }}" as="src">
-            <div style="border-radius:8px; overflow:hidden; opacity: {{ src.rowOpacity }};">
-              <div style="display:flex; align-items:center; gap:4px;">
-                <button type="button" onClick="{{ src.toggle }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color: {{ src.color }}; width:12px; flex:none;">{{ src.glyph }}</span>
-                  <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">{{ src.name }}</span>
-                  <i class="{{ src.chevronClass }}" style="font-size:11px; color:#A39D91;"></i>
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button type="button" onClick="{{ toggleProjectsOpen }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:12px; flex:none;">●</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">Projects</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ projectCount }}</span>
+              <i class="{{ projectsChevron }}" style="font-size:11px; color:#A39D91;"></i>
+            </button>
+            <button type="button" aria-label="New project" onClick="{{ newProject }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-plus" style="font-size:13px;"></i></button>
+          </div>
+          <sc-if value="{{ projectsOpen }}">
+            <sc-for list="{{ projectList }}" as="p">
+              <div style="display:flex; align-items:center; gap:2px; border-radius:7px; background: {{ p.bg }}; margin-left:30px;">
+                <button type="button" onClick="{{ p.select }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; border-radius:7px; padding:6px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#26241F;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:10px; flex:none;">{{ p.marker }}</span>
+                  <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ p.name }}</span>
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91; flex:none;">{{ p.conversationCount }}</span>
                 </button>
-                <button type="button" aria-label="Read" onClick="{{ src.open }}" style="border:0; background:none; color:#8C877C; cursor:pointer; padding:0 2px; display:flex; flex:none;"><i class="ph ph-book-open" style="font-size:14px;"></i></button>
-                <button type="button" aria-label="Delete source" onClick="{{ src.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:0 2px; display:flex; flex:none; opacity:0.4;"><i class="ph ph-trash" style="font-size:13px;"></i></button>
-                <button type="button" aria-label="Toggle source" onClick="{{ src.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ src.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
-                  <span style="position:absolute; top:2px; left: {{ src.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
-                </button>
+                <button type="button" aria-label="Delete project" onClick="{{ p.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:4px 8px 4px 4px; display:flex; flex:none; opacity:0.4;"><i class="ph ph-trash" style="font-size:12px;"></i></button>
               </div>
-              <sc-if value="{{ src.expanded }}">
-                <div style="padding:2px 10px 12px 30px;">
-                  <span style="font-family:Georgia, 'Times New Roman', serif; font-size:12.5px; line-height:1.65; color:#3A372F; text-wrap:pretty;">{{ src.preview }}</span>
-                  <button type="button" onClick="{{ src.open }}" style="display:flex; align-items:center; gap:5px; margin-top:8px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C; cursor:pointer; padding:0;"><i class="ph ph-book-open"></i>Open in reader</button>
-                </div>
-              </sc-if>
-            </div>
-          </sc-for>
-          <sc-if value="{{ noSources }}">
-            <span style="font-size:12px; color:#A39D91; padding:6px 9px;">No sources yet</span>
+            </sc-for>
+            <sc-if value="{{ noProjects }}">
+              <span style="font-size:12px; color:#A39D91; padding:6px 9px 6px 39px;">No projects yet.</span>
+            </sc-if>
           </sc-if>
         </div>
+
+        <sc-if value="{{ activeProject }}">
+        <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button type="button" onClick="{{ toggleSourcesOpen }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:12px; flex:none;">◱</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">Documents</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ sourceCount }}</span>
+              <i class="{{ sourcesChevron }}" style="font-size:11px; color:#A39D91;"></i>
+            </button>
+            <button type="button" aria-label="Add document to project" onClick="{{ addProjectDocument }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-plus" style="font-size:13px;"></i></button>
+          </div>
+          <sc-if value="{{ sourcesOpen }}">
+            <sc-for list="{{ activeSources }}" as="src">
+              <div style="border-radius:8px; overflow:hidden; opacity: {{ src.rowOpacity }}; margin-left:30px;">
+                <div style="display:flex; align-items:center; gap:4px;">
+                  <button type="button" onClick="{{ src.toggle }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:6px 9px; cursor:pointer; font-family:inherit;">
+                    <sc-if value="{{ src.processing }}">
+                      <span class="eo-spin" style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91; width:12px; flex:none;">◌</span>
+                    </sc-if>
+                    <sc-if value="{{ src.notProcessing }}">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color: {{ src.color }}; width:12px; flex:none;">{{ src.glyph }}</span>
+                    </sc-if>
+                    <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">{{ src.name }}</span>
+                    <i class="{{ src.chevronClass }}" style="font-size:11px; color:#A39D91;"></i>
+                  </button>
+                  <button type="button" aria-label="Read" onClick="{{ src.open }}" style="border:0; background:none; color:#8C877C; cursor:pointer; padding:0 2px; display:flex; flex:none;"><i class="ph ph-book-open" style="font-size:14px;"></i></button>
+                  <button type="button" aria-label="Delete source" onClick="{{ src.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:0 2px; display:flex; flex:none; opacity:0.4;"><i class="ph ph-trash" style="font-size:13px;"></i></button>
+                  <button type="button" aria-label="Toggle source" onClick="{{ src.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ src.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+                    <span style="position:absolute; top:2px; left: {{ src.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                  </button>
+                </div>
+                <sc-if value="{{ src.expanded }}">
+                  <div style="padding:2px 10px 12px 30px;">
+                    <span style="font-family:Georgia, 'Times New Roman', serif; font-size:12.5px; line-height:1.65; color:#3A372F; text-wrap:pretty;">{{ src.preview }}</span>
+                    <button type="button" onClick="{{ src.open }}" style="display:flex; align-items:center; gap:5px; margin-top:8px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C; cursor:pointer; padding:0;"><i class="ph ph-book-open"></i>Open in reader</button>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+            <sc-if value="{{ noSources }}">
+              <span style="font-size:12px; color:#A39D91; padding:6px 9px 6px 39px;">No sources yet</span>
+            </sc-if>
+          </sc-if>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button type="button" onClick="{{ toggleChatsOpen }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:12px; flex:none;">○</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">Chats</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ spacesCount }}</span>
+              <i class="{{ chatsChevron }}" style="font-size:11px; color:#A39D91;"></i>
+            </button>
+            <button type="button" aria-label="New chat" onClick="{{ addSpace }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-plus" style="font-size:13px;"></i></button>
+          </div>
+          <sc-if value="{{ chatsOpen }}">
+            <sc-for list="{{ spaces }}" as="sp">
+              <div style="display:flex; align-items:center; gap:2px; border-radius:7px; background: {{ sp.bg }}; margin-left:30px;">
+                <button type="button" onClick="{{ sp.select }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; border-radius:7px; padding:6px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#26241F;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:10px; flex:none;">{{ sp.marker }}</span>
+                  <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ sp.name }}</span>
+                </button>
+                <sc-if value="{{ sp.notRenaming }}">
+                <button type="button" aria-label="Rename" onClick="{{ sp.startRename }}" style="border:0; background:none; color:#A39D91; cursor:pointer; padding:4px; display:flex; flex:none;"><i class="ph ph-pencil-simple" style="font-size:12px;"></i></button>
+                <button type="button" aria-label="Delete" onClick="{{ sp.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:4px 8px 4px 4px; display:flex; flex:none; opacity:0.4;"><i class="ph ph-trash" style="font-size:12px;"></i></button>
+                </sc-if>
+              </div>
+            </sc-for>
+          </sc-if>
+        </div>
+        </sc-if>
 
         <sc-if value="{{ hasWebHistory }}">
         <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
@@ -216,16 +327,43 @@
         </sc-if>
       </div>
 
+      <sc-if value="{{ activeProject }}">
       <div style="padding-top:12px; border-top:1px solid #EBE6DC; display:flex; flex-direction:column; gap:3px; width:100%;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#6E6A60;">{{ sourceCount }} sources</span>
         <span style="font-size:11px; color:#A39D91;">{{ sourceFooterNote }}</span>
       </div>
       </sc-if>
+      </sc-if>
     </div>
 
     <div style="display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden;">
+
+      <sc-if value="{{ showingProjects }}">
+      <div style="flex:1; padding:32px 28px; display:flex; flex-direction:column; gap:18px; min-height:0; overflow-y:auto;" class="eo-scrollbar">
+        <span style="font-size:22px; font-weight:500; color:#26241F;">Projects</span>
+        <span style="font-size:13px; color:#8C877C; line-height:1.6; max-width:520px;">A project is a named collection with its own knowledge base — upload documents to a project and chat with the AI about them. Sources and conversations are scoped to each project.</span>
+        <sc-if value="{{ noProjects }}">
+          <div style="text-align:center; padding:40px 20px; background:#FAF8F4; border:1px dashed #E4DFD5; border-radius:12px;">
+            <span style="font-size:14px; color:#A39D91; line-height:1.6;">No projects yet.<br/>Click + in the sidebar to create your first project.</span>
+          </div>
+        </sc-if>
+        <sc-for list="{{ projectList }}" as="p">
+          <button type="button" onClick="{{ p.select }}" style="display:flex; align-items:center; gap:14px; width:100%; text-align:left; border:1px solid #E4DFD5; border-radius:10px; background:#FFFDFA; padding:16px 18px; cursor:pointer; font-family:inherit;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:14px; color:#1F5A4C;">{{ p.marker }}</span>
+            <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
+              <span style="font-size:15px; font-weight:500; color:#26241F;">{{ p.name }}</span>
+              <span style="font-size:12px; color:#A39D91;">{{ p.conversationCount }} conversations · {{ p.sourceCount }} sources</span>
+            </div>
+            <span style="font-size:12px; color:#1F5A4C;">Open →</span>
+          </button>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ notShowingProjects }}">
       <sc-if value="{{ showTabs }}">
       <div style="display:flex; flex-wrap:wrap; gap:2px; padding:12px 20px 0; border-bottom:1px solid #EBE6DC;">
+        <button type="button" onClick="{{ tabDocuments }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabDocumentsColor }}; box-shadow: {{ tabDocumentsUnderline }}; cursor:pointer;">Documents</button>
         <button type="button" onClick="{{ tabChat }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabChatColor }}; box-shadow: {{ tabChatUnderline }}; cursor:pointer;">Chat</button>
         <button type="button" onClick="{{ tabOutline }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOutlineColor }}; box-shadow: {{ tabOutlineUnderline }}; cursor:pointer;">Outline</button>
         <button type="button" onClick="{{ tabOrbit }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOrbitColor }}; box-shadow: {{ tabOrbitUnderline }}; cursor:pointer;">Orbit</button>
@@ -241,28 +379,32 @@
 
       <sc-if value="{{ isChat }}">
       <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:20px; overflow:hidden;">
-        <div ref="{{ chatScrollRef }}" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:20px;" class="eo-scrollbar">
+        <div ref="{{ chatScrollRef }}" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; align-items:center; gap:20px;" class="eo-scrollbar">
+          <div style="width:100%; max-width:768px; display:flex; flex-direction:column; gap:20px;">
           <sc-if value="{{ showEmptyChat }}">
             <span style="font-size:13px; color:#A39D91;">No messages yet — attach sources and ask a question.</span>
           </sc-if>
 
           <sc-if value="{{ showThinkingIndicator }}">
-            <button type="button" onClick="{{ openThinkingModal }}" style="display:flex; flex-direction:column; gap:6px; border:0; background:none; cursor:pointer; text-align:left; padding:0; font-family:inherit; width:100%;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">⊨</span>
-                <span style="font-size:13px; color:#8C877C;">{{ thinkingPhase }}</span>
-              </div>
-              <sc-if value="{{ thinkingMeta }}">
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; padding-left:20px;">{{ thinkingMeta }}</span>
-              </sc-if>
+            <div class="eo-fade-in" style="background:#F4F8F6; border:1px solid #DDEAE6; border-radius:9px; padding:10px 12px; display:flex; flex-direction:column; gap:7px;">
+              <button type="button" onClick="{{ openThinkingModal }}" style="display:flex; flex-direction:column; gap:6px; border:0; background:none; cursor:pointer; text-align:left; padding:0; font-family:inherit; width:100%;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:13px; color:#1F5A4C; font-weight:500;">⊨</span>
+                  <span style="font-size:13px; font-weight:500; color:#1F5A4C;">{{ thinkingPhase }}</span>
+                  <span style="margin-left:auto; font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#8C877C;">details →</span>
+                </div>
+                <sc-if value="{{ thinkingMeta }}">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E8880; padding-left:22px;">{{ thinkingMeta }}</span>
+                </sc-if>
+              </button>
               <sc-if value="{{ thinkingLogPreview }}">
-                <div style="display:flex; flex-direction:column; gap:3px; padding-left:20px;">
+                <div style="display:flex; flex-direction:column; gap:4px; padding-left:22px; border-left:2px solid #DDEAE6;">
                   <sc-for list="{{ thinkingLogPreviewRows }}" as="entry">
-                    <span class="eo-fade-in" style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ entry.color }}; line-height:1.5; white-space:pre-wrap; word-break:break-word;">{{ entry.glyph }} {{ entry.text }}</span>
+                    <span class="eo-fade-in" style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:{{ entry.color }}; line-height:1.5; white-space:pre-wrap; word-break:break-word;">{{ entry.glyph }} {{ entry.text }}</span>
                   </sc-for>
                 </div>
               </sc-if>
-            </button>
+            </div>
           </sc-if>
 
           <sc-for list="{{ turns }}" as="turn">
@@ -292,10 +434,13 @@
                 </div>
               </sc-if>
               <sc-if value="{{ turn.a }}">
-                <div style="max-width:96%; display:flex; flex-direction:column; gap:8px;">
-                  <span style="font-size:14px; color:#1B1A17; line-height:1.72; text-wrap:pretty;">{{ turn.a }}</span>
+                <div style="max-width:96%; display:flex; flex-direction:column; gap:8px; border-radius:8px; outline: {{ turn.surfOutline }}; outline-offset:2px;">
+                  <span class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ turn.answerHtml }}}</span>
                   <sc-if value="{{ turn.wasInterrupted }}">
                     <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A3592B;">⊘ stopped — partial answer</span>
+                  </sc-if>
+                  <sc-if value="{{ turn.model }}">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">via {{ turn.model }}</span>
                   </sc-if>
                   <sc-if value="{{ turn.citations }}">
                     <div style="display:flex; flex-wrap:wrap; gap:6px;">
@@ -335,6 +480,7 @@
                       <button type="button" onClick="{{ turn.toggleRaw }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.rawColor }}; cursor:pointer; padding:0;"><i class="{{ turn.rawChevron }}"></i>raw</button>
                     </sc-if>
                     <button type="button" aria-label="Fork" onClick="{{ turn.fork }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-git-fork"></i>fork</button>
+                    <button type="button" aria-label="Surf" onClick="{{ turn.selectForSurf }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.surfColor }}; cursor:pointer; padding:0;"><i class="ph ph-waves"></i>surf</button>
                     <sc-if value="{{ turn.canRegenerate }}">
                       <button type="button" aria-label="Regenerate" onClick="{{ turn.regenerate }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-arrow-clockwise"></i>regenerate</button>
                     </sc-if>
@@ -399,7 +545,10 @@
           </sc-for>
           <sc-if value="{{ streamingAnswer }}">
             <div style="max-width:96%; display:flex; flex-direction:column; gap:8px;">
-              <span style="font-size:14px; color:#1B1A17; line-height:1.72; text-wrap:pretty;">{{ streamingAnswer }}</span>
+              <span class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ streamingAnswerHtml }}}</span>
+              <sc-if value="{{ model }}">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">via {{ model }}</span>
+              </sc-if>
               <sc-if value="{{ streamingCitations }}">
                 <div style="display:flex; flex-wrap:wrap; gap:6px;">
                   <sc-for list="{{ streamingCitations }}" as="cit">
@@ -409,10 +558,12 @@
               </sc-if>
             </div>
           </sc-if>
+          </div>
         </div>
       </div>
 
-      <div style="padding:14px 20px 18px; border-top:1px solid #EBE6DC; background:#FFFDFA; display:flex; flex-direction:column; gap:8px;">
+      <div style="padding:14px 20px 18px; border-top:1px solid #EBE6DC; background:#FFFDFA; display:flex; flex-direction:column; align-items:center; gap:8px;">
+        <div style="width:100%; max-width:768px; display:flex; flex-direction:column; gap:8px;">
         <sc-if value="{{ hasDraftAttachments }}">
           <div style="display:flex; flex-wrap:wrap; gap:6px;">
             <sc-for list="{{ draftAttachments }}" as="att">
@@ -425,24 +576,38 @@
             </sc-for>
           </div>
         </sc-if>
-        <div style="display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 8px; background:#FFFDFA;">
+        <div style="position:relative; display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 8px; background:#FFFDFA;">
           <button type="button" aria-label="Attach file" onClick="{{ openFileDialog }}" style="width:28px; height:28px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:#8C877C; cursor:pointer;"><i class="ph ph-paperclip" style="font-size:15px;"></i></button>
           <input type="file" multiple="{{ true }}" ref="{{ setFileInput }}" onChange="{{ onFilesSelected }}" style="display:none;" />
-          <input type="text" placeholder="Ask across your sources" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
+          <sc-if value="{{ inputDisabled }}">
+            <input type="text" placeholder="Waiting for response…" value="" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#8C877C; padding:6px 0; cursor:default;" readonly />
+          </sc-if>
+          <sc-if value="{{ !inputDisabled }}">
+            <input type="text" placeholder="Ask across your sources" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
+          </sc-if>
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
           <sc-if value="{{ hasModels }}">
-            <select value="{{ provider }}" onChange="{{ onProviderChange }}" style="flex:none; border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; color:#4A463E; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:4px 6px; cursor:pointer; max-width:100px;">
-              <sc-for list="{{ modelOptions }}" as="opt">
-                <option value="{{ opt.id }}">{{ opt.label }}</option>
-              </sc-for>
-            </select>
+            <button type="button" aria-label="Choose model" aria-pressed="{{ modelMenuOpen }}" title="{{ modelPickerLabel }}" onClick="{{ toggleModelMenu }}" style="flex:none; display:flex; align-items:center; gap:4px; max-width:150px; border:1px solid {{ modelMenuOpen ? '#1F5A4C' : '#E0DACE' }}; border-radius:8px; background:#FFFDFA; color:#4A463E; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-cpu" style="font-size:12px;"></i><span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ modelPickerLabel }}</span><i class="ph ph-caret-down" style="font-size:8px;"></i></button>
           </sc-if>
-          <sc-if value="{{ hasModels }}">
-            <input type="text" placeholder="model" value="{{ model }}" onChange="{{ onModelChange }}" style="width:80px; flex:none; border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; color:#4A463E; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:4px 6px; outline:none;" />
+          <sc-if value="{{ modelMenuOpen }}">
+            <div style="position:absolute; bottom:44px; right:6px; width:220px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:10px; z-index:30; display:flex; flex-direction:column; gap:8px;">
+              <div style="display:flex; flex-direction:column; gap:4px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Provider</span>
+                <select value="{{ provider }}" onChange="{{ onProviderChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; cursor:pointer;">
+                  <sc-for list="{{ modelOptions }}" as="opt">
+                    <option value="{{ opt.id }}">{{ opt.label }}</option>
+                  </sc-for>
+                </select>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:4px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Model</span>
+                <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ model }}" onChange="{{ onModelChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; outline:none;" />
+              </div>
+              <button type="button" onClick="{{ closeModelMenu }}" style="align-self:flex-end; border:0; background:none; color:#8C877C; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:2px 4px; cursor:pointer;">done</button>
+            </div>
           </sc-if>
-          <button type="button" aria-label="{{ localLabel }}" aria-pressed="{{ localModel }}" title="{{ localLabel }}" onClick="{{ toggleLocalModel }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ localBorder }}; border-radius:8px; background:{{ localBg }}; color:{{ localColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ localIcon }}" style="font-size:12px;"></i>Local</button>
           <sc-if value="{{ streamingLoading }}">
-            <button type="button" aria-label="Stop generating" onClick="{{ stopGeneration }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:#26241F; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-stop" style="font-size:13px;"></i></button>
+            <button type="button" aria-label="Stop generating" onClick="{{ stopGeneration }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:#26241F; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer; {{ stopButtonAnim }}"><i class="ph ph-stop" style="font-size:13px;"></i></button>
           </sc-if>
           <sc-if value="{{ !streamingLoading }}">
             <button type="button" aria-label="Send" onClick="{{ send }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:{{ sendBg }}; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-arrow-right" style="font-size:14px;"></i></button>
@@ -459,6 +624,7 @@
             </sc-if>
           </div>
         </sc-if>
+        </div>
       </div>
       </sc-if>
 
@@ -538,31 +704,50 @@
       <sc-if value="{{ isPriors }}">
       <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Priors</span>
-        <span style="font-size:12px; color:#8C877C; line-height:1.5;">Witness-tier knowledge about corpora, grouped by what each prior is about — as it declares itself, not by filename. Descend into one to see its scope, and open it in Explorer.</span>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">Witness-tier knowledge about corpora, grouped by what each prior is about — as it declares itself, not by filename. Click a prior to read it here; the switch on a bucket or a single prior takes it out of retrieval without deleting it.</span>
         <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; max-width:100%;" class="eo-scrollbar">
           <sc-for list="{{ priorGenres }}" as="genre">
             <div style="border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4; overflow:hidden;">
-              <button type="button" onClick="{{ genre.toggle }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:10px 12px; cursor:pointer; font-family:inherit; text-align:left;">
-                <span style="display:flex; align-items:center; gap:9px;">
-                  <i class="{{ genre.chevronClass }}" style="font-size:11px; color:#A39D91;"></i>
-                  <span style="font-size:13px; font-weight:500; color:#26241F;">{{ genre.name }}</span>
-                </span>
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ genre.count }}</span>
-              </button>
+              <div style="display:flex; align-items:center; gap:4px;">
+                <button type="button" onClick="{{ genre.toggle }}" style="flex:1; min-width:0; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:10px 12px; cursor:pointer; font-family:inherit; text-align:left;">
+                  <span style="display:flex; align-items:center; gap:9px;">
+                    <i class="{{ genre.chevronClass }}" style="font-size:11px; color:#A39D91;"></i>
+                    <span style="font-size:13px; font-weight:500; color:#26241F;">{{ genre.name }}</span>
+                  </span>
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ genre.onCount }}</span>
+                </button>
+                <button type="button" aria-label="Toggle bucket" onClick="{{ genre.toggleBucket }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ genre.bucketSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:10px;">
+                  <span style="position:absolute; top:2px; left: {{ genre.bucketKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                </button>
+              </div>
               <sc-if value="{{ genre.expanded }}">
                 <div style="display:flex; flex-direction:column; gap:6px; padding:0 12px 12px;">
                   <sc-for list="{{ genre.items }}" as="item">
-                    <div style="border:1px solid #E7E2D8; border-radius:8px; padding:9px 10px; display:flex; flex-direction:column; gap:6px; background:#FFFDFA;">
-                      <span style="font-size:12.5px; color:#26241F; line-height:1.5;">{{ item.prior }}</span>
-                      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                    <div style="border:1px solid #E7E2D8; border-radius:8px; background:#FFFDFA; overflow:hidden; opacity: {{ item.rowOpacity }};">
+                      <div style="display:flex; align-items:center; gap:6px; padding:9px 10px 0;">
+                        <button type="button" onClick="{{ item.toggleContent }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:0 0 9px; cursor:pointer; font-family:inherit;">
+                          <i class="{{ item.chevronClass }}" style="font-size:11px; color:#A39D91; flex:none;"></i>
+                          <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">{{ item.name }}</span>
+                        </button>
                         <sc-if value="{{ item.surprising }}">
-                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color:#8A5A22; background:#F3E7D3; border-radius:5px; padding:2px 7px;">gap · {{ item.gapLabel }}</span>
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color:#8A5A22; background:#F3E7D3; border-radius:5px; padding:2px 7px; flex:none;">gap · {{ item.gapLabel }}</span>
                         </sc-if>
-                        <sc-if value="{{ item.notSurprising }}">
-                          <span></span>
-                        </sc-if>
-                        <button type="button" onClick="{{ item.openInExplorer }}" style="border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C; cursor:pointer; padding:0;">{{ item.name }} → Explorer</button>
+                        <button type="button" aria-label="Toggle prior" onClick="{{ item.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.switchBg }}; position:relative; cursor:pointer; padding:0; margin-bottom:9px;">
+                          <span style="position:absolute; top:2px; left: {{ item.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                        </button>
                       </div>
+                      <span style="display:block; padding:0 10px 9px 21px; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ item.prior }}</span>
+                      <sc-if value="{{ item.expanded }}">
+                        <div style="padding:0 10px 10px 21px; display:flex; flex-direction:column; gap:8px; border-top:1px solid #EBE6DC; margin:0 10px;">
+                          <sc-if value="{{ item.contentLoading }}">
+                            <span style="font-size:11.5px; color:#A39D91; padding-top:8px;">Loading…</span>
+                          </sc-if>
+                          <sc-if value="{{ item.hasContent }}">
+                            <span style="font-family:Georgia, 'Times New Roman', serif; font-size:12px; line-height:1.6; color:#3A372F; white-space:pre-wrap; text-wrap:pretty; max-height:320px; overflow-y:auto; display:block; padding-top:8px;" class="eo-scrollbar">{{ item.contentText }}</span>
+                          </sc-if>
+                          <button type="button" onClick="{{ item.openInReader }}" style="align-self:flex-start; display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C; cursor:pointer; padding:0;"><i class="ph ph-book-open"></i>Open in reader</button>
+                        </div>
+                      </sc-if>
                     </div>
                   </sc-for>
                 </div>
@@ -621,7 +806,7 @@
               <sc-for list="{{ composeResultSections }}" as="rs">
                 <div style="display:flex; flex-direction:column; gap:8px;">
                   <span style="font-size:13.5px; font-weight:500; color:#26241F;">{{ rs.label }}</span>
-                  <span style="font-size:13.5px; color:#1B1A17; line-height:1.65; text-wrap:pretty; white-space:pre-wrap;">{{ rs.content }}</span>
+                  <span class="eo-md" style="font-size:13.5px; color:#1B1A17;">{{{ rs.contentHtml }}}</span>
                   <sc-for list="{{ rs.citations }}" as="cit">
                     <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
                       <div style="display:flex; align-items:center; gap:8px;">
@@ -637,6 +822,48 @@
           </sc-if>
         </div>
       </div>
+      </sc-if>
+
+      <sc-if value="{{ isDocuments }}">
+      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Documents</span>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ sourceCount }} file(s)</span>
+        </div>
+        <sc-if value="{{ noSources }}">
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; gap:10px;">
+            <span style="font-size:60px; color:#E4DFD5;">◱</span>
+            <span style="font-size:14px; color:#A39D91;">No documents in this project.</span>
+            <button type="button" onClick="{{ addSource }}" style="border:1px solid #1F5A4C; background:#1F5A4C; color:#FFFDFA; border-radius:8px; padding:8px 16px; font-family:inherit; font-size:12.5px; cursor:pointer;">Add documents</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ hasSources }}">
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column;" class="eo-scrollbar">
+          <div style="display:grid; grid-template-columns:24px 1fr 80px 60px 70px; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid #EBE6DC; font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">
+            <span></span>
+            <span>Name</span>
+            <span>Type</span>
+            <span></span>
+            <span>Status</span>
+          </div>
+          <sc-for list="{{ documentRows }}" as="doc">
+            <div style="display:grid; grid-template-columns:24px 1fr 80px 60px 70px; gap:8px; align-items:center; padding:10px; border-bottom:1px solid #F0ECE4; opacity: {{ doc.rowOpacity }};">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:14px; color: {{ doc.color }}; text-align:center;">{{ doc.glyph }}</span>
+              <div style="display:flex; flex-direction:column; gap:1px; min-width:0;">
+                <span style="font-size:13px; color:#26241F; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ doc.name }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ doc.meta }}</span>
+              </div>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ doc.typeLabel }}</span>
+              <button type="button" aria-label="Read" onClick="{{ doc.open }}" style="border:1px solid #E0DACE; border-radius:6px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:4px 8px; font-family:'IBM Plex Mono', monospace; font-size:9px; justify-self:center;">Open</button>
+              <button type="button" aria-label="{{ doc.toggleLabel }}" onClick="{{ doc.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ doc.switchBg }}; position:relative; cursor:pointer; padding:0; justify-self:center;">
+                <span style="position:absolute; top:2px; left: {{ doc.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+              </button>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
       </sc-if>
       </sc-if>
     </div>
@@ -741,8 +968,28 @@
             </sc-if>
           </sc-if>
 
-          <sc-if value="{{ readerModeScroll }}">
-            <sc-for list="{{ readerSections }}" as="sec">
+          <sc-if value="{{ readerIsPDF }}">
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:14px; background:#F2EFE8; border-radius:7px; padding:2px; width:fit-content;">
+              <button type="button" onClick="{{ setReaderPDFRendered }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background:{{ readerPDFRenderedBg }}; color:{{ readerPDFRenderedColor }}; font-size:11px; padding:5px 9px; cursor:pointer; font-family:inherit;"><i class="ph ph-image"></i>Rendered</button>
+              <button type="button" onClick="{{ setReaderPDFExtracted }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background:{{ readerPDFExtractedBg }}; color:{{ readerPDFExtractedColor }}; font-size:11px; padding:5px 9px; cursor:pointer; font-family:inherit;"><i class="ph ph-text-aa"></i>Extracted</button>
+              <button type="button" onClick="{{ setReaderPDFSplit }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background:{{ readerPDFSplitBg }}; color:{{ readerPDFSplitColor }}; font-size:11px; padding:5px 9px; cursor:pointer; font-family:inherit;"><i class="ph ph-columns"></i>Split</button>
+            </div>
+
+            <sc-if value="{{ readerPDFShowRendered }}">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91;">Page {{ readerPDFCurrentPage }} of {{ readerPDFNumPages }}</span>
+                <div style="display:flex; gap:4px;">
+                  <button type="button" onClick="{{ readerPDFPrevPage }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:6px; padding:4px 9px; font-family:inherit; font-size:11px; color:#4A463E; cursor:pointer;">← Prev</button>
+                  <button type="button" onClick="{{ readerPDFNextPage }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:6px; padding:4px 9px; font-family:inherit; font-size:11px; color:#4A463E; cursor:pointer;">Next →</button>
+                </div>
+              </div>
+              <div style="border:1px solid #EBE6DC; border-radius:8px; overflow:hidden; background:#FFFDFA; margin-bottom:14px;">
+                <canvas ref="{{ setPDFCanvas }}" style="width:100%; display:block;"></canvas>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ readerPDFShowExtracted }}">
+              <sc-for list="{{ readerSections }}" as="sec">
               <div id="{{ sec.anchorId }}" style="margin:{{ sec.secMargin }}; background:{{ sec.secBg }}; border-left:{{ sec.secRail }}; padding:{{ sec.secPad }};">
                 <sc-if value="{{ sec.showHeading }}">
                   <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; margin-bottom:9px;">{{ sec.heading }}</span>
@@ -752,11 +999,52 @@
             </sc-for>
           </sc-if>
 
-          <sc-if value="{{ readerModePaginated }}">
-            <div style="margin-bottom:22px;">
-              <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; margin-bottom:9px;">{{ readerCurrentHeading }}</span>
-              <span style="font-family:Georgia, 'Times New Roman', serif; font-size:15.5px; line-height:1.85; color:#26241F; text-wrap:pretty; white-space:pre-wrap;">{{ readerCurrentBodyNodes }}</span>
+          <sc-if value="{{ readerPDFShowEOT }}">
+            <div style="margin-top:10px; margin-bottom:10px; background:#FAF8F4; border:1px solid #EBE6DC; border-radius:9px; padding:12px 14px;">
+              <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#8C877C; margin-bottom:8px;">Extraction provenance (EOT)</span>
+              <div style="display:flex; flex-direction:column; gap:5px;">
+                <sc-for list="{{ readerPDFEOTRows }}" as="eot">
+                  <div style="display:flex; gap:8px; align-items:flex-start;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:{{ eot.color }}; flex:none;">{{ eot.glyph }}</span>
+                    <div style="display:flex; flex-direction:column; gap:1px; min-width:0;">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#3A372F;">{{ eot.label }}</span>
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; white-space:pre-wrap;">{{ eot.detail }}</span>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+              <sc-if value="{{ readerPDFHasLayout }}">
+                <div style="margin-top:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
+                  <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#8C877C; margin-bottom:6px;">CV layout blocks per page</span>
+                  <sc-for list="{{ readerPDFLayoutRows }}" as="lp">
+                    <div style="display:flex; gap:6px; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60; padding:2px 0;">
+                      <span style="flex:none; color:#1F5A4C;">Page {{ lp.page }}</span>
+                      <span>{{ lp.blocks }} blocks</span>
+                      <span>{{ lp.dims }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
             </div>
+          </sc-if>
+        </sc-if>
+
+        <sc-if value="{{ readerModeScroll }}">
+          <sc-for list="{{ readerSections }}" as="sec">
+            <div id="{{ sec.anchorId }}" style="margin:{{ sec.secMargin }}; background:{{ sec.secBg }}; border-left:{{ sec.secRail }}; padding:{{ sec.secPad }};">
+              <sc-if value="{{ sec.showHeading }}">
+                <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; margin-bottom:9px;">{{ sec.heading }}</span>
+              </sc-if>
+              <span style="font-family:Georgia, 'Times New Roman', serif; font-size:15.5px; line-height:1.85; color:#26241F; text-wrap:pretty; white-space:pre-wrap;">{{ sec.bodyNodes }}</span>
+            </div>
+          </sc-for>
+        </sc-if>
+
+        <sc-if value="{{ readerModePaginated }}">
+          <div style="margin-bottom:22px;">
+            <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; margin-bottom:9px;">{{ readerCurrentHeading }}</span>
+            <span style="font-family:Georgia, 'Times New Roman', serif; font-size:15.5px; line-height:1.85; color:#26241F; text-wrap:pretty; white-space:pre-wrap;">{{ readerCurrentBodyNodes }}</span>
+          </div>
             <div style="display:flex; align-items:center; justify-content:space-between; padding-top:20px; border-top:1px solid #EBE6DC;">
               <button type="button" onClick="{{ readerSectionPrev }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:6px 12px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">← Prev</button>
               <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#A39D91;">{{ readerSectionPos }}</span>
@@ -772,72 +1060,106 @@
     </sc-if>
     </div>
 
-    <div style="background:#FAF8F4; border-left:1px solid #EBE6DC; padding:18px 16px; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0;">
+    <sc-if value="{{ notShowingProjects }}">
+    <div style="background:#FAF8F4; border-left:1px solid #EBE6DC; padding:18px 16px; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; overflow-y:auto;" class="eo-scrollbar">
 
-      <sc-if value="{{ hasSelectedEntity }}">
-        <button type="button" onClick="{{ clearSelectedEntity }}" style="display:flex; align-items:center; gap:6px; border:0; background:none; padding:0; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;"><i class="ph ph-arrow-left"></i>entities</button>
-        <span style="font-size:15px; font-weight:500; color:#26241F;">{{ selectedEntityName }}</span>
-        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; text-transform:uppercase; letter-spacing:.06em; margin-top:-8px;">mentioned {{ selectedEntityMentions }}×</span>
-        <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
-          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Relations</span>
-          <sc-for list="{{ selectedEntityRelations }}" as="rel">
-            <div style="display:flex; gap:8px; align-items:flex-start;">
-              <sc-if value="{{ showGlyphs }}"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; line-height:1.5;">{{ rel.glyph }}</span></sc-if>
-              <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ rel.text }}</span>
+      <sc-if value="{{ hasSurfPassages }}">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Surf passages</span>
+          <button type="button" onClick="{{ clearSurfSelection }}" style="display:flex; align-items:center; gap:4px; border:0; background:none; padding:0; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;"><i class="ph ph-x"></i>close</button>
+        </div>
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ surfMeta }}</span>
+        <div style="display:flex; flex-direction:column; gap:8px; flex:1; overflow-y:auto;" class="eo-scrollbar">
+          <sc-for list="{{ surfPassageRows }}" as="sp">
+            <div style="display:flex; flex-direction:column; gap:5px; background:#FFFDFA; border:1px solid {{ sp.border }}; border-left:3px solid {{ sp.rail }}; border-radius:3px 8px 8px 3px; padding:9px 11px;">
+              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ sp.num }}</span>
+                <span style="font-size:11px; font-family:'IBM Plex Mono', monospace; letter-spacing:.05em; text-transform:uppercase; color:#A39D91;">verbatim</span>
+                <span style="font-size:11.5px; color:#4A463E; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ sp.source }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ sp.rank }}</span>
+              </div>
+              <span style="font-family:Georgia, 'Iowan Old Style', serif; font-size:12px; font-style:italic; color:#3A372F; line-height:1.6; word-break:break-word;">&ldquo;{{ sp.quote }}&rdquo;</span>
+              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ sp.meta }}</span>
+                <sc-if value="{{ sp.cited }}">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#1F5A4C;">cited</span>
+                </sc-if>
+                <sc-if value="{{ sp.dropped }}">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A3592B;">dropped by fold</span>
+                </sc-if>
+                <span style="margin-left:auto;">&nbsp;</span>
+                <button type="button" onClick="{{ sp.open }}" style="display:flex; align-items:center; gap:4px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:{{ sp.openColor }}; cursor:{{ sp.openCursor }}; padding:0;"><i class="{{ sp.openIcon }}"></i>{{ sp.openLabel }}</button>
+              </div>
             </div>
           </sc-for>
-          <sc-if value="{{ selectedEntityNoRelations }}">
-            <span style="font-size:11.5px; color:#A39D91;">No recorded relations yet.</span>
-          </sc-if>
         </div>
-        <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
-          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Anchors</span>
-          <sc-for list="{{ selectedEntityAnchors }}" as="a">
-            <button type="button" onClick="{{ a.open }}" style="display:flex; flex-direction:column; gap:2px; border:0; background:none; padding:6px 0; cursor:pointer; font-family:inherit; text-align:left; border-bottom:1px solid #F0ECE4;">
-              <span style="font-size:11.5px; color:#26241F;">&ldquo;{{ a.surface }}&rdquo;</span>
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">byte {{ a.range }} · open in reader →</span>
+        <span style="font-size:11px; color:#A39D91; padding-top:8px; border-top:1px solid #EBE6DC;">click a response's <i class="ph ph-waves"></i> surf button to see its engine passages</span>
+      </sc-if>
+
+      <sc-if value="{{ noSurfPassages }}">
+        <sc-if value="{{ hasSelectedEntity }}">
+          <button type="button" onClick="{{ clearSelectedEntity }}" style="display:flex; align-items:center; gap:6px; border:0; background:none; padding:0; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;"><i class="ph ph-arrow-left"></i>entities</button>
+          <span style="font-size:15px; font-weight:500; color:#26241F;">{{ selectedEntityName }}</span>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; text-transform:uppercase; letter-spacing:.06em; margin-top:-8px;">mentioned {{ selectedEntityMentions }}×</span>
+          <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Relations</span>
+            <sc-for list="{{ selectedEntityRelations }}" as="rel">
+              <div style="display:flex; gap:8px; align-items:flex-start;">
+                <sc-if value="{{ showGlyphs }}"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; line-height:1.5;">{{ rel.glyph }}</span></sc-if>
+                <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ rel.text }}</span>
+              </div>
+            </sc-for>
+            <sc-if value="{{ selectedEntityNoRelations }}">
+              <span style="font-size:11.5px; color:#A39D91;">No recorded relations yet.</span>
+            </sc-if>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Anchors</span>
+            <sc-for list="{{ selectedEntityAnchors }}" as="a">
+              <button type="button" onClick="{{ a.open }}" style="display:flex; flex-direction:column; gap:2px; border:0; background:none; padding:6px 0; cursor:pointer; font-family:inherit; text-align:left; border-bottom:1px solid #F0ECE4;">
+                <span style="font-size:11.5px; color:#26241F;">&ldquo;{{ a.surface }}&rdquo;</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">byte {{ a.range }} · open in reader →</span>
+              </button>
+            </sc-for>
+            <sc-if value="{{ selectedEntityNoAnchors }}">
+              <span style="font-size:11.5px; color:#A39D91;">No verified anchors yet.</span>
+            </sc-if>
+          </div>
+          <span style="margin-top:auto; font-size:11px; color:#A39D91; padding-top:12px; border-top:1px solid #EBE6DC;">{{ selectedEntityProvenance }}</span>
+        </sc-if>
+
+        <sc-if value="{{ showEntityIndex }}">
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Entities</span>
+        <div style="display:flex; flex-direction:column; gap:2px;">
+          <sc-for list="{{ entityRows }}" as="ent">
+            <button type="button" onClick="{{ ent.select }}" style="display:flex; align-items:center; gap:9px; border:0; background:none; padding:6px 4px; cursor:pointer; font-family:inherit; text-align:left; border-radius:6px;">
+              <span style="font-size:12.5px; color:#26241F; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ent.name }}</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ ent.type }}</span>
+              <span style="width: {{ ent.barWidth }}; height:3px; border-radius:2px; background: {{ ent.color }}; flex:none;"></span>
             </button>
           </sc-for>
-          <sc-if value="{{ selectedEntityNoAnchors }}">
-            <span style="font-size:11.5px; color:#A39D91;">No verified anchors yet.</span>
-          </sc-if>
         </div>
-        <span style="margin-top:auto; font-size:11px; color:#A39D91; padding-top:12px; border-top:1px solid #EBE6DC;">profile grows as you read</span>
-      </sc-if>
 
-      <sc-if value="{{ showEntityIndex }}">
-      <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Entities</span>
-      <div style="display:flex; flex-direction:column; gap:2px;">
-        <sc-for list="{{ entityRows }}" as="ent">
-          <button type="button" onClick="{{ ent.select }}" style="display:flex; align-items:center; gap:9px; border:0; background:none; padding:6px 4px; cursor:pointer; font-family:inherit; text-align:left; border-radius:6px;">
-            <span style="font-size:12.5px; color:#26241F; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ent.name }}</span>
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ ent.type }}</span>
-            <span style="width: {{ ent.barWidth }}; height:3px; border-radius:2px; background: {{ ent.color }}; flex:none;"></span>
-          </button>
-        </sc-for>
-      </div>
-
-      <!-- Candidates the text proposed and no per-text prior typed. Listing
-           them is the point: silence here would read as "not in the book"
-           when it means "witness-tier knowledge is missing". -->
-      <sc-if value="{{ hasWithheld }}">
-      <div style="display:flex; flex-direction:column; gap:6px; padding-top:10px; margin-top:6px; border-top:1px solid #EBE6DC;">
-        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Withheld</span>
-        <span style="font-size:11px; color:#A39D91; line-height:1.5;">{{ withheldSummary }}</span>
-        <div style="display:flex; flex-wrap:wrap; gap:4px;">
-          <sc-for list="{{ withheldRows }}" as="w">
-            <span title="{{ w.reason }}" style="font-size:11px; color:#8A857A; border:1px dashed #E0DACE; border-radius:5px; padding:2px 6px;">{{ w.name }}</span>
-          </sc-for>
+        <sc-if value="{{ hasWithheld }}">
+        <div style="display:flex; flex-direction:column; gap:6px; padding-top:10px; margin-top:6px; border-top:1px solid #EBE6DC;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Withheld</span>
+          <span style="font-size:11px; color:#A39D91; line-height:1.5;">{{ withheldSummary }}</span>
+          <div style="display:flex; flex-wrap:wrap; gap:4px;">
+            <sc-for list="{{ withheldRows }}" as="w">
+              <span title="{{ w.reason }}" style="font-size:11px; color:#8A857A; border:1px dashed #E0DACE; border-radius:5px; padding:2px 6px;">{{ w.name }}</span>
+            </sc-for>
+          </div>
         </div>
-      </div>
-      </sc-if>
+        </sc-if>
 
-      <div style="margin-top:auto; padding-top:12px; border-top:1px solid #EBE6DC; display:flex; flex-direction:column; gap:3px;">
-        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#6E6A60;">{{ entityCountLabel }}</span>
-        <span style="font-size:11px; color:#A39D91;">grows as you read · click a name for its profile</span>
-      </div>
+        <div style="margin-top:auto; padding-top:12px; border-top:1px solid #EBE6DC; display:flex; flex-direction:column; gap:3px;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#6E6A60;">{{ entityCountLabel }}</span>
+          <span style="font-size:11px; color:#A39D91;">folded from your enabled sources · click a name for its profile</span>
+        </div>
+        </sc-if>
       </sc-if>
     </div>
+    </sc-if>
 
   </div>
 
@@ -895,6 +1217,60 @@
     </div>
   </div>
   </sc-if>
+
+  <sc-if value="{{ settingsOpen }}">
+  <div onClick="{{ closeSettings }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:10vh 24px 24px; z-index:60;">
+    <div onClick="{{ stopSettingsClick }}" class="eo-fade-in" style="width:100%; max-width:480px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:16px;">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#6E6A60;">Settings</span>
+        <button type="button" aria-label="Close settings" onClick="{{ closeSettings }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:12px; flex:1; overflow-y:auto; max-height:52vh;" class="eo-scrollbar">
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">API Keys</span>
+          <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">Keys are stored in this browser and sent to the proxy at runtime. They do not persist across a proxy restart.</span>
+          <sc-for list="{{ settingsProviders }}" as="sp">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">{{ sp.label }}</span>
+              <input type="password" placeholder="{{ sp.placeholder }}" value="{{ sp.keyValue }}" onChange="{{ sp.onChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;" />
+              <sc-if value="{{ sp.hasKey }}">
+                <span style="font-size:10px; color:#1F5A4C;">key set</span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="height:1px; background:#EBE6DC;"></div>
+
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">Model</span>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Default provider</span>
+            <select value="{{ settingsProvider }}" onChange="{{ onSettingsProviderChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:inherit; font-size:12.5px; color:#26241F; outline:none;">
+              <sc-for list="{{ settingsModelOptions }}" as="opt">
+                <option value="{{ opt.id }}">{{ opt.label }}</option>
+              </sc-for>
+            </select>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Model name</span>
+            <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ settingsModel }}" onChange="{{ onSettingsModelChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;" />
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button type="button" aria-pressed="{{ localModel }}" onClick="{{ settingsToggleLocal }}" style="display:flex; align-items:center; gap:4px; border:1px solid {{ settingsLocalBorder }}; border-radius:8px; background:{{ settingsLocalBg }}; color:{{ settingsLocalColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ settingsLocalIcon }}" style="font-size:12px;"></i>Local</button>
+            <span style="font-size:11px; color:#8C877C;">Answer in-browser via WebLLM (no proxy)</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
+        <button type="button" onClick="{{ closeSettings }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Cancel</button>
+        <button type="button" onClick="{{ saveSettings }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Save</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
 </div>
 </div>
 </x-dc>
@@ -918,9 +1294,11 @@ const SPACES_KEY = 'eochat.spaces.v2';
 
 class Component extends DCLogic {
   state = {
-    tab: 'chat', draft: '',
+    view: 'projects', // 'projects' | 'chat'
+    projects: [], activeProjectId: null,
+    tab: 'documents', draft: '',
     webSearch: false,
-    provider: 'ollama', model: null, _availableModels: [],
+    provider: 'ollama', model: null, _availableModels: [], modelMenuOpen: false,
     // Local mode: answer entirely in this tab via WebLLM (see
     // webllm-client.js / window.EOWebLLM), no proxy generation call.
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
@@ -928,7 +1306,10 @@ class Component extends DCLogic {
     // local mode before the download is ready — or after it has failed —
     // without those two facts being confused with each other.
     localModel: false, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
-    spacesOpen: false, activeSpaceId: 'default', leftCollapsed: false, selectedEntity: null,
+    spacesOpen: false, activeSpaceId: 'default', chatMode: 'chat', leftCollapsed: false, selectedEntity: null, activeTurnId: null,
+    projectsOpen: true,
+    sourcesOpen: true,
+    chatsOpen: false,
     renamingSpaceId: null, renameSpaceValue: '',
     webHistoryOpen: false,
     retrievedOpen: false,
@@ -971,7 +1352,7 @@ class Component extends DCLogic {
     // Priors catalog from /api/priors — the witness-tier pool, kept separate
     // from `_proxySources` (the corpus pool) because asking about the priors
     // and asking about the texts are different questions. null = not fetched.
-    _priors: null, _priorsError: null, priorGenreOpen: {},
+    _priors: null, _priorsError: null, priorGenreOpen: {}, priorItemOpen: {},
     // Per-source engine projections, keyed by source name.
     //
     // `folds` carries the cast: referents a per-text prior actually typed, the
@@ -987,6 +1368,14 @@ class Component extends DCLogic {
     folds: {}, outlines: {}, foldPending: {},
     _recycleBin: [],
     recycleBinOpen: false,
+    // PDF reader state: view mode (rendered/extracted/split), current page,
+    // layout data with bounding boxes, and extraction provenance for EOT.
+    readerPDFView: 'extracted', readerPDFPage: 0, readerPDFBlob: null,
+    readerPDFNumPages: 0, readerPDFLayout: {}, readerEOT: {},
+    readerOCRRunning: false, readerOCRProgress: '',
+    settingsOpen: false,
+    _settingsApiKeys: {},
+    settingsDraftKeys: {},
   };
 
   proxyUrl() {
@@ -1001,14 +1390,21 @@ class Component extends DCLogic {
   componentDidMount() {
     this.tick = this.tick.bind(this);
     this.checkHealth();
+    this.fetchProjects();
     this.loadConversations();
     this.fetchSources();
     this.fetchPriors();
     this.fetchRecycleBin();
     this.fetchModels();
+    this.loadSettings();
     // Escape closes the dialog from anywhere inside it, not just while the
     // input holds focus.
-    this._onWindowKeyDown = (e) => { if (e.key === 'Escape' && this.state.modal) this.closeModal(); };
+    this._onWindowKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (this.state.modal) this.closeModal();
+        else if (this.state.settingsOpen) this.setState({ settingsOpen: false });
+      }
+    };
     document.addEventListener('keydown', this._onWindowKeyDown);
     // window.EOWebLLM (webllm-client.js) exists as soon as its module script
     // runs, independent of React mount order — but guard anyway in case this
@@ -1027,8 +1423,8 @@ class Component extends DCLogic {
     if (this._unsubLocalModel) this._unsubLocalModel();
   }
 
-  openModal(cfg) { this.setState({ modal: cfg, modalValue: cfg.initialValue || '' }); }
-  closeModal() { this.setState({ modal: null, modalValue: '', thinkingModalOpen: false }); }
+  openModal(cfg) { this._modalProjectId = cfg.projectId || null; this.setState({ modal: cfg, modalValue: cfg.initialValue || '' }); }
+  closeModal() { this._modalProjectId = null; this.setState({ modal: null, modalValue: '', thinkingModalOpen: false }); }
   openThinkingModal() { this.setState({ thinkingModalOpen: true }); }
 
   // Whitespace-only input is not a name — reject it rather than creating a
@@ -1078,6 +1474,10 @@ class Component extends DCLogic {
   // guarantee — a prior must never become an attachable chat source.
   async fetchSources() {
     try {
+      // Fetch both the global corpus and the active project's pool
+      const activeProject = this.state.projects.find(p => p.id === this.state.activeProjectId);
+      const projectPool = activeProject ? activeProject.pool : null;
+
       const res = await fetch(this.proxyUrl() + '/api/sources?pool=corpus', { signal: AbortSignal.timeout(5000) });
       if (res.ok) {
         const list = await res.json();
@@ -1089,6 +1489,20 @@ class Component extends DCLogic {
         // source to be expanded. fetchFold is one-shot per source, so the
         // 15s health poll re-runs this harmlessly.
         this.warmFolds(corpus);
+      }
+
+      // Fetch project-scoped sources if a project is active
+      if (projectPool) {
+        const projRes = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(this.state.activeProjectId) + '/sources', { signal: AbortSignal.timeout(5000) });
+        if (projRes.ok) {
+          const { sources } = await projRes.json();
+          if (Array.isArray(sources)) {
+            const projectSources = sources.filter(s => (s.kind || 'corpus') === 'corpus');
+            this.setState(s => ({
+              _proxySources: [...((s._proxySources || []).filter(x => !projectSources.find(ps => ps.name === x.name))), ...projectSources],
+            }));
+          }
+        }
       }
     } catch {}
   }
@@ -1125,11 +1539,11 @@ class Component extends DCLogic {
       const res = await fetch(this.proxyUrl() + '/api/models', { signal: AbortSignal.timeout(5000) });
       if (res.ok) {
         const data = await res.json();
-        this.setState({
+        this.setState(s => ({
           _availableModels: data.providers || [],
-          provider: data.defaultProvider || 'ollama',
-          model: data.defaultModel || null,
-        });
+          provider: s.provider || data.defaultProvider || 'ollama',
+          model: s.model || data.defaultModel || null,
+        }));
       }
     } catch {}
   }
@@ -1161,6 +1575,67 @@ class Component extends DCLogic {
   // full declared string still shows on every item row, so nothing is hidden by
   // the trim. Anything that doesn't match the shape is left verbatim rather
   // than truncated into a guess.
+  // ── Projects — Claude-style named collections with their own knowledge base ──
+
+  async fetchProjects() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects', { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const { projects } = await res.json();
+        this.setState({ projects: projects || [] });
+        if (projects.length && !this.state.activeProjectId) {
+          this.setState({ activeProjectId: projects[0].id });
+        }
+      }
+    } catch {}
+  }
+
+  async createProject(name) {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name || 'Untitled project' }),
+      });
+      const project = await res.json();
+      this.setState(s => ({ projects: s.projects.concat([project]), activeProjectId: project.id, view: 'chat' }));
+      await this.switchProject(project.id);
+      this.logAdd('●', `Project "${project.name}" created`, 'chat');
+    } catch (err) {
+      this.logAdd('⊘', `Could not create project — ${err.message}`, 'chat');
+    }
+  }
+
+  async switchProject(id) {
+    this.setState({ activeProjectId: id, view: 'chat', tab: 'documents' });
+    const project = this.state.projects.find(p => p.id === id);
+    if (project) {
+      this.logAdd('●', `Switched to project "${project.name}"`, 'chat');
+    }
+  }
+
+  renameProject(id, name) {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    this.setState(s => ({ projects: s.projects.map(p => p.id === id ? { ...p, name: trimmed } : p) }));
+    fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(id), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: trimmed }),
+    }).catch(() => {});
+  }
+
+  async deleteProject(id) {
+    const remaining = this.state.projects.filter(p => p.id !== id);
+    this.setState(s => {
+      const nextActive = s.activeProjectId === id ? (remaining[0] ? remaining[0].id : null) : s.activeProjectId;
+      return { projects: remaining, activeProjectId: nextActive, view: 'projects' };
+    });
+    fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {});
+    this.logAdd('⊘', 'Project deleted', 'chat');
+  }
+
+  goToProjects() {
+    this.setState({ view: 'projects' });
+  }
+
   _textTitle(declared) {
     const m = declared.match(/\b(pg\d+)\b\s*[—–-]\s*([^;(]+)/);
     return m ? `${m[2].trim()} (${m[1]})` : declared;
@@ -1170,20 +1645,15 @@ class Component extends DCLogic {
     this.setState(s => ({ priorGenreOpen: { ...s.priorGenreOpen, [name]: !s.priorGenreOpen[name] } }));
   }
 
-  // Priors open by id through /api/priors/read, not through the attachments
-  // endpoint the corpus reader uses — they are not session uploads. The card
-  // layer is the readable projection; the raw JSON is the authority.
-  async openPrior(id) {
+  // Shared by the Priors tab's inline expansion and the full reader — both
+  // show the same text, keyed and cached the same way ('prior:' + id in
+  // readerContent), so opening one never re-fetches what the other already
+  // pulled down. The card layer is the readable projection; the raw JSON is
+  // the authority, and is what this falls back to when no card was built.
+  async fetchPriorContent(id) {
     const name = 'prior:' + id;
-    const already = this.state.readerContent[name];
-    this.setState(s => ({
-      readerOpen: true, readerSourceName: name, readerViewMode: 'scroll', readerSectionIndex: 0,
-      readerSortCol: null, readerSortDir: 'asc',
-      readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
-      readerContent: { ...s.readerContent, [name]: already || 'Loading prior…' }
-    }));
-    this.logAdd('◱', `Opened prior "${id}" in reader`, 'reader');
-    if (already) return;
+    if (this.state.readerContent[name]) return;
+    this.setState(s => ({ readerContent: { ...s.readerContent, [name]: 'Loading prior…' } }));
     let text;
     try {
       const res = await fetch(this.proxyUrl() + '/api/priors/read?id=' + encodeURIComponent(id) + '&layer=card', { signal: AbortSignal.timeout(20000) });
@@ -1202,6 +1672,61 @@ class Component extends DCLogic {
       text = `(could not read prior "${id}": ${err.message})`;
     }
     this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
+  }
+
+  // Expands a prior's content right inside the Priors tab. This is the
+  // primary way to read one now — "open in reader" (openPrior, below) still
+  // exists for byte-range navigation, but browsing the pool no longer
+  // requires leaving the tab.
+  togglePriorItem(id) {
+    const opening = !this.state.priorItemOpen[id];
+    this.setState(s => ({ priorItemOpen: { ...s.priorItemOpen, [id]: opening } }));
+    if (opening) this.fetchPriorContent(id);
+  }
+
+  // Priors open by id through /api/priors/read, not through the attachments
+  // endpoint the corpus reader uses — they are not session uploads.
+  async openPrior(id) {
+    this.setState({
+      readerOpen: true, readerSourceName: 'prior:' + id, readerViewMode: 'scroll', readerSectionIndex: 0,
+      readerSortCol: null, readerSortDir: 'asc',
+      readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
+    });
+    this.logAdd('◱', `Opened prior "${id}" in reader`, 'reader');
+    await this.fetchPriorContent(id);
+  }
+
+  // Switches one or more priors on/off — a single item, or every item in a
+  // bucket at once. Optimistic locally (so the switch responds immediately)
+  // and reconciled against the server's response, since a prior can fail to
+  // re-ingest (e.g. a card that no longer exists) and the UI must not claim
+  // "on" for something the engine didn't actually pick back up.
+  async setPriorsEnabled(ids, enabled) {
+    this.setState(s => ({
+      _priors: (s._priors || []).map(p => ids.includes(p.id) ? { ...p, disabled: !enabled } : p)
+    }));
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/priors/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, enabled }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const data = await res.json();
+      const failed = (data.results || []).filter(r => r.error);
+      this.logAdd(
+        failed.length ? '⊘' : (enabled ? '●' : '○'),
+        failed.length
+          ? `${enabled ? 'enable' : 'disable'} failed for ${failed.map(f => f.id || '?').join(', ')}`
+          : `${enabled ? 'Enabled' : 'Disabled'} ${ids.length} prior${ids.length === 1 ? '' : 's'}`,
+        'sources'
+      );
+    } catch (err) {
+      this.logAdd('⊘', `Could not reach the proxy to toggle priors: ${err.message}`, 'sources');
+    }
+    // Reconcile with the server's actual state regardless of outcome — the
+    // optimistic update above is a guess, this is the answer.
+    this.fetchPriors();
   }
 
   _baseName(name) { return String(name || '').replace(/^.*[/\\]/, ''); }
@@ -1305,6 +1830,33 @@ class Component extends DCLogic {
     try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
   }
 
+  loadSettings() {
+    const keys = this._loadLocal('eochat.apiKeys') || {};
+    this.setState({ _settingsApiKeys: keys, settingsDraftKeys: { ...keys } });
+  }
+  saveSettings() {
+    const keys = this.state.settingsDraftKeys;
+    this._saveLocal('eochat.apiKeys', keys);
+    this.setState({ _settingsApiKeys: keys, settingsOpen: false });
+    // Send API keys to proxy at runtime
+    fetch(this.proxyUrl() + '/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ anthropicKey: keys.anthropic || '' }),
+    }).catch(() => {});
+    // Re-fetch models so provider list updates
+    this.fetchModels();
+  }
+  toggleSettings() {
+    this.setState(s => ({
+      settingsOpen: !s.settingsOpen,
+      settingsDraftKeys: { ...s._settingsApiKeys },
+    }));
+  }
+  setDraftKey(provider, value) {
+    this.setState(s => ({ settingsDraftKeys: { ...s.settingsDraftKeys, [provider]: value } }));
+  }
+
   activeSpace() {
     return this.state.spaces.find(s => s.id === this.state.activeSpaceId) || this.state.spaces[0] || { id: 'default', name: 'Room', turns: [], retrievals: [], sources: [] };
   }
@@ -1359,9 +1911,11 @@ class Component extends DCLogic {
 
   // The cast of every enabled source, as the engine folded it.
   //
-  // Entities are never derived here. A referent exists because a per-text prior
-  // in eoPriors asserted an individuation type for it and an anchor verified —
-  // not because a word was capitalized. The surfaces we highlight are the
+  // Entities are never derived here. A referent exists because the engine's
+  // text perceiver discovered a recurring named surface and coreferred its
+  // name variants (engine tier), or because a per-text prior in eoPriors
+  // asserted an individuation type for it (model tier) — never because this
+  // file looked at the transcript. The surfaces we highlight are the
   // referent's own `surfaceForms`, scoped evidence the engine already resolved,
   // so an alias links to the same referent as its canonical name without this
   // file knowing they are related.
@@ -1382,6 +1936,11 @@ class Component extends DCLogic {
           type: r.individuation_type || null,
           mentions: (prev ? prev.mentions : 0) + (r.mentions || 0),
           frames: Math.max(prev ? prev.frames : 0, r.frames || 0),
+          // Which tier put this referent here. A reader auditing the cast needs
+          // to know whether a name is engine-discovered (name variants merged,
+          // pronouns not) or asserted by a curated prior — they are different
+          // claims and only one of them can be wrong about coreference.
+          tier: (prev && prev.tier === 'model') ? 'model' : ((r.provenance && r.provenance.tier) || null),
           anchors: (prev ? prev.anchors : []).concat((r.provenance && r.provenance.anchors) || r.evidence || []),
           // globalSurfaces, never surfaceForms. The latter includes surfaces the
           // prior scoped to a range — the Creature's narrator "I"/"me"/"my" —
@@ -1433,6 +1992,12 @@ class Component extends DCLogic {
       }
       return part;
     }));
+  }
+
+  renderMarkdown(text) {
+    if (!text) return '';
+    if (typeof marked === 'undefined') return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return marked.parse(text, { breaks: true, gfm: true });
   }
 
   // Fold and outline for one source. Both are engine projections keyed by
@@ -1516,6 +2081,10 @@ class Component extends DCLogic {
     const existing = (existingSpaces || []).find(s => s.id === summary.id);
     return {
       id: summary.id, name: summary.title,
+      parentId: summary.parentId || null,
+      path: summary.path || null,
+      mode: summary.mode || 'chat',
+      childIds: summary.childIds || [],
       turns: existing ? existing.turns : [],
       retrievals: existing ? existing.retrievals : [],
       sources: existing ? existing.sources : [],
@@ -1623,13 +2192,26 @@ class Component extends DCLogic {
 
   async newConversation(opts = {}) {
     this.setState({ spacesOpen: false });
+    const activeProject = this.state.projects.find(p => p.id === this.state.activeProjectId);
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: opts.title || 'New conversation' }),
+        body: JSON.stringify({
+          title: opts.title || 'New conversation',
+          spaceId: activeProject ? activeProject.id : null,
+          pool: activeProject ? activeProject.pool : 'corpus',
+          parentId: opts.parentId || null,
+          path: opts.path || null,
+          mode: opts.mode || 'chat',
+        }),
       });
       const conv = await res.json();
-      const space = { id: conv.id, name: conv.title, turns: [], retrievals: [], sources: [], sourcesOff: {}, _loaded: true };
+      const space = {
+        id: conv.id, name: conv.title,
+        parentId: conv.parentId || null, path: conv.path || null,
+        mode: conv.mode || 'chat', childIds: conv.childIds || [],
+        turns: [], retrievals: [], sources: [], sourcesOff: {}, _loaded: true,
+      };
       this.setState(s => ({ spaces: s.spaces.concat([space]), activeSpaceId: conv.id, tab: 'chat', selectedEntity: null }));
       if (!opts.silent) this.logAdd('●', `Conversation "${conv.title}" created`, 'chat');
     } catch (err) {
@@ -1657,25 +2239,27 @@ class Component extends DCLogic {
     this.logAdd('⊘', 'Conversation deleted', 'chat');
   }
 
-  // Maps a typed SSE event from turn-controller.js onto the section-6 status
-  // vocabulary. Collapses to a plain summary the instant the turn completes —
-  // nothing here narrates model routing, which stays in the trace/diagnostics
-  // surface instead of the primary chat.
+  // Maps a typed SSE event from turn-controller.js onto a terse phase label
+  // shown inline — surfing (retrieval), folding (witness processing), thinking
+  // (generation). Collapses to null so the indicator disappears once the answer
+  // begins streaming.
   _phaseForEvent(type, data) {
-    if (type === 'retrieval_started') return { phase: 'Reading your sources…', meta: null };
+    if (type === 'retrieval_started') return { phase: 'surfing...', meta: null };
     if (type === 'witnesses_selected') {
       return {
-        phase: data.empty ? (data.warming ? 'Corpus still loading…' : 'No matching passages — answering from general knowledge…') : 'Finding supporting passages…',
+        phase: data.empty ? (data.warming ? 'warming corpus...' : 'thinking...') : 'folding...',
         meta: data.empty ? null : `${data.sourceCount} found · ${data.foldedCount} folded`,
       };
     }
-    if (type === 'writing_started') return { phase: `Writing from ${data.passageCount} passage${data.passageCount === 1 ? '' : 's'}…`, meta: null };
-    if (type === 'citation_verified' || type === 'gap') return { phase: 'Checking citations…', meta: null };
+    if (type === 'writing_started') return { phase: `thinking...`, meta: null };
+    if (type === 'citation_verified') return { phase: 'folding...', meta: null };
+    if (type === 'gap') return { phase: 'folding...', meta: null };
     return null;
   }
 
-  async askConversation(question) {
+  async askConversation(question, mode) {
     const conversationId = this.state.activeSpaceId;
+    mode = mode || this.state.chatMode || 'chat';
     const localId = 'pending-' + Date.now();
     this.updateActiveSpace(sp => ({
       ...sp,
@@ -1689,7 +2273,7 @@ class Component extends DCLogic {
       ...sp, turns: sp.turns.map(t => (t.id === liveId ? { ...t, id: newId } : t)),
     }));
 
-    this.setState({ streamingLoading: true, thinkingPhase: 'Reading your sources…', thinkingMeta: null, thinkingLog: [] });
+    this.setState({ streamingLoading: true, thinkingPhase: 'surfing...', thinkingMeta: null, thinkingLog: [] });
     this.logAdd('⊨', `Asked: "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}"`, 'chat');
 
     let grounding = null;
@@ -1700,7 +2284,7 @@ class Component extends DCLogic {
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, sourceScope: this.groundSourceFilter(), webSearch: this.state.webSearch, provider: this.state.provider, model: this.state.model }),
+        body: JSON.stringify({ question, sourceScope: this.groundSourceFilter(), webSearch: this.state.webSearch, provider: this.state.provider, model: this.state.model, mode }),
       });
       if (!res.ok) throw new Error('Proxy returned ' + res.status);
 
@@ -1798,7 +2382,7 @@ class Component extends DCLogic {
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === turnId ? { ...t, ...patch } : t)),
     }));
-    this.setState({ streamingLoading: true, streamingTurnId: turnId, thinkingPhase: 'Reading your sources…', thinkingMeta: null });
+    this.setState({ streamingLoading: true, streamingTurnId: turnId, thinkingPhase: 'surfing...', thinkingMeta: null });
     let grounding = null, citations = [], snippets = [];
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns/' + encodeURIComponent(turnId) + '/regenerate', { method: 'POST' });
@@ -1971,19 +2555,16 @@ class Component extends DCLogic {
   }
 
   async send() {
+    if (this.state.streamingLoading) return;
     const q = this.state.draft.trim();
     if (!q && !this.state.draftAttachments.length) return;
-    this.setState({ draft: '', draftAttachments: [] });
-    // "iff it downloaded stably": local mode is only ever actually used once
-    // window.EOWebLLM reports ready. Wanting it on while it's still
-    // downloading (or after it failed) silently falls back to the normal
-    // grounded proxy pipeline rather than blocking the reader's question on
-    // a background download — the toggle's own status line is what tells
-    // them why this particular answer didn't run locally.
+    const mode = this.state.chatMode || 'chat';
+    this.setState({ draft: '', draftAttachments: [], streamingLoading: true, thinkingPhase: 'surfing...', thinkingMeta: null, thinkingLog: [] });
+    this.logAdd('→', `Sending ${mode !== 'chat' ? mode + ' ' : ''}question…`, 'chat');
     if (this.state.localModel && this.state.localModelStatus === 'ready') {
       await this.localAskConversation(q);
     } else {
-      await this.askConversation(q);
+      await this.askConversation(q, mode);
     }
   }
 
@@ -1993,6 +2574,14 @@ class Component extends DCLogic {
     if (turningOn && window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
       window.EOWebLLM.init();
     }
+  }
+
+  toggleSurfMode() {
+    this.setState(s => ({ chatMode: s.chatMode === 'surf' ? 'chat' : 'surf' }));
+  }
+
+  toggleThinkMode() {
+    this.setState(s => ({ chatMode: s.chatMode === 'think' ? 'chat' : 'think' }));
   }
   retryLocalModel() {
     if (window.EOWebLLM) window.EOWebLLM.init();
@@ -2057,7 +2646,7 @@ class Component extends DCLogic {
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
     }));
 
-    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: 'Reading your sources…', thinkingMeta: 'local model' });
+    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: 'surfing...', thinkingMeta: 'local model' });
     this.logAdd('◱', `Asked (local model): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
 
     let groundData;
@@ -2141,7 +2730,7 @@ class Component extends DCLogic {
       title: 'Add source',
       label: 'URL or file path',
       placeholder: 'https://example.com/article',
-      hint: 'A URL is fetched, stripped of markup and chunked into the engine. A bare path resolves on the proxy host. To use a file from this machine, upload it — the bytes cross the wire; a link would not. Text formats (.txt/.md/.json/…) are indexed and citable; .csv/.tsv/.xlsx/.xls open as a real spreadsheet grid and are indexed too; video/audio/PDF/DOCX have no parser yet, so they open in the reader but are not searchable.',
+      hint: 'A URL is fetched, stripped of markup and chunked into the engine. A bare path resolves on the proxy host. To use a file from this machine, upload it — the bytes cross the wire; a link would not. Text formats (.txt/.md/.json/…) are indexed and citable; .csv/.tsv/.xlsx/.xls open as a real spreadsheet grid and are indexed too; .pdf is text-extracted via PDF.js and indexed; video/audio/DOCX have no parser yet, so they open in the reader but are not searchable.',
       submitLabel: 'Ingest',
       upload: true,
       onSubmit: (ref) => this.ingestSource(ref)
@@ -2168,7 +2757,7 @@ class Component extends DCLogic {
     if (!name) return;
     const isUrl = /^https?:\/\//i.test(name);
     this.addSourceRow(name);
-    this.markSource(name, { glyph: '○', color: '#A39D91' });
+    this.markSource(name, { processing: true, glyph: '◌', color: '#A39D91' });
     this.logAdd('○', `Ingesting "${name}"…`, 'sources');
     try {
       const res = await fetch(this.proxyUrl() + '/api/ingest', {
@@ -2180,20 +2769,84 @@ class Component extends DCLogic {
       });
       const result = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
-      this.markSource(name, { glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
-      this.logAdd('⋈', `Ingested "${name}" (${result.chunks || 0} chunks)`, 'sources');
+      const srcName = result.name || name;
+      if (srcName !== name) {
+        this.updateActiveSpace(sp => ({
+          ...sp,
+          sources: sp.sources.filter(x => x.name !== name).concat([{ name: srcName, glyph: '●', color: '#1F5A4C', enabled: true, ingested: true, chunks: result.chunks || 0 }])
+        }));
+      } else {
+        this.markSource(name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      }
+      this.logAdd('⋈', `Ingested "${srcName}" (${result.chunks || 0} chunks)`, 'sources');
       this.fetchSources();
     } catch (err) {
-      this.markSource(name, { glyph: '⊘', color: '#A3592B', ingestError: err.message });
+      this.markSource(name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
       this.logAdd('⊘', `Ingest failed for "${name}" — ${err.message}`, 'sources');
     }
   }
 
+  // Project-scoped add: same URL / path / upload surface as addSource, but the
+  // bytes land in the active project's own pool via /api/projects/:id/ingest,
+  // so retrieval stays scoped to that project's knowledge base. The projectId
+  // is closed over at open time — the modal is torn down before onSubmit runs.
+  addProjectDocument() {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) return;
+    const project = this.state.projects.find(p => p.id === projectId);
+    this.openModal({
+      title: `Add document to ${project ? project.name : 'project'}`,
+      label: 'URL or file path',
+      placeholder: 'https://example.com/article',
+      hint: 'A URL is fetched, stripped of markup and chunked into this project\'s knowledge base. A bare path resolves on the proxy host. To use a file from this machine, upload it — text formats (.txt/.md/.json/.csv/.tsv/.xlsx/.xls/.pdf) are indexed and citable in this project; video/audio/DOCX open in the reader but are not searchable.',
+      submitLabel: 'Ingest',
+      upload: true,
+      projectId,
+      onSubmit: (ref) => this.ingestProjectSource(projectId, ref)
+    });
+  }
+
+  // Mirrors ingestSource, but POSTs to the project pool route and tags the
+  // same three ingest states (pending ○, ingested ●, failed ⊘) so a failure is
+  // always visible rather than swallowed.
+  async ingestProjectSource(projectId, ref) {
+    const name = (ref || '').trim();
+    if (!name) return;
+    const isUrl = /^https?:\/\//i.test(name);
+    this.addSourceRow(name);
+    this.markSource(name, { processing: true, glyph: '◌', color: '#A39D91' });
+    this.logAdd('○', `Ingesting "${name}" into project…`, 'sources');
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isUrl ? { url: name } : { path: name })
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
+      const srcName = result.name || name;
+      if (srcName !== name) {
+        this.updateActiveSpace(sp => ({
+          ...sp,
+          sources: sp.sources.filter(x => x.name !== name).concat([{ name: srcName, glyph: '●', color: '#1F5A4C', enabled: true, ingested: true, chunks: result.chunks || 0 }])
+        }));
+      } else {
+        this.markSource(name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      }
+      this.logAdd('⋈', `Ingested "${srcName}" into project (${result.chunks || 0} chunks)`, 'sources');
+      this.fetchSources();
+    } catch (err) {
+      this.markSource(name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
+      this.logAdd('⊘', `Project ingest failed for "${name}" — ${err.message}`, 'sources');
+    }
+  }
+
   // Only these extensions are safe to read with file.text() — everything
-  // `inferType` buckets as pdf/video/audio/binary is a real binary format (or,
-  // for .pdf/.doc/.docx, one this app has no parser for) and decoding it as
-  // UTF-8 produces mojibake, not text. Per the nameless-referent principle,
-  // a missing capability is a typed gap, never a silently wrong (garbled) span.
+  // `inferType` buckets as video/audio/binary is a real binary format (or, for
+  // .doc/.docx, one this app has no parser for) and decoding it as UTF-8
+  // produces mojibake, not text. Per the nameless-referent principle, a
+  // missing capability is a typed gap, never a silently wrong (garbled) span.
+  // .pdf is handled separately via PDF.js client-side extraction.
   _isTextIngestible(name) {
     return /\.(txt|md|markdown|json|js|jsx|ts|tsx|py|csv|tsv|html?|xml|log|css|ya?ml)$/i.test(name);
   }
@@ -2216,19 +2869,27 @@ class Component extends DCLogic {
     return fallback;
   }
 
-  // Uploads split two ways:
+  // Uploads split three ways:
   //  - text-ingestible files: bytes cross the wire and are chunked into the
   //    engine, same as before — these are citable.
-  //  - everything else (video/audio/pdf/doc/binary): no parser exists for
-  //    these, so the file is kept client-side as a blob URL for the reader
-  //    (video plays back; others get the same "not indexed" story the reader
-  //    already tells for pre-existing binary sources) instead of being mangled
-  //    into fake text and corrupting the search index.
-  async uploadFiles(fileList) {
+  //  - .pdf: extracted client-side via PDF.js, then chunked into the engine.
+  //  - everything else (video/audio/doc/binary): no parser exists for these,
+  //    so the file is kept client-side as a blob URL for the reader (video
+  //    plays back; others get the same "not indexed" story the reader already
+  //    tells for pre-existing binary sources) instead of being mangled into
+  //    fake text and corrupting the search index.
+  // When projectId is given (the left-panel "Documents" add), every ingest
+  // below targets the project's own pool instead of the room session.
+  async uploadFiles(fileList, projectId) {
     for (const file of fileList) {
       this.addSourceRow(file.name);
+      this.markSource(file.name, { processing: true, glyph: '◌', color: '#A39D91' });
       if (/\.(xlsx|xls)$/i.test(file.name)) {
-        await this._uploadSpreadsheetBinary(file);
+        await this._uploadSpreadsheetBinary(file, projectId);
+        continue;
+      }
+      if (/\.pdf$/i.test(file.name)) {
+        await this._uploadPDFBinary(file, projectId);
         continue;
       }
       const type = this.inferType(file.name);
@@ -2237,33 +2898,35 @@ class Component extends DCLogic {
         this._uploadBlobUrls.set(file.name, URL.createObjectURL(file));
         const glyph = TYPE_GLYPH[type] || '◱';
         const label = TYPE_LABEL[type] || 'File';
-        this.markSource(file.name, { glyph, color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+        this.markSource(file.name, { processing: false, glyph, color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
         this.logAdd('◱', `Stored "${file.name}" for reading — ${label.toLowerCase()} isn't parsed for search (no ${type} extractor)`, 'sources');
         continue;
       }
-      this.markSource(file.name, { glyph: '○', color: '#A39D91' });
       this.logAdd('○', `Ingesting "${file.name}"…`, 'sources');
       try {
         const text = await file.text();
-        const result = await this._ingestTextContent(file.name, text);
-        this.markSource(file.name, { glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+        const result = await this._ingestTextContent(file.name, text, projectId);
+        this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
         // Cache locally so the reader can render it (e.g. the spreadsheet grid)
         // without a round trip back through the proxy's attachment store.
         this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: text } }));
         this.logAdd('⋈', `Uploaded "${file.name}" (${result.chunks || 0} chunks)`, 'sources');
       } catch (err) {
-        this.markSource(file.name, { glyph: '⊘', color: '#A3592B', ingestError: err.message });
+        this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
         this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
       }
     }
     this.fetchSources();
   }
 
-  async _ingestTextContent(name, text) {
-    const res = await fetch(this.proxyUrl() + '/api/ingest', {
+  async _ingestTextContent(name, text, projectId) {
+    const endpoint = projectId ? '/api/projects/' + encodeURIComponent(projectId) + '/ingest' : '/api/ingest';
+    const res = await fetch(this.proxyUrl() + endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text.slice(0, 500000), name, session: this.sessionId() })
+      body: JSON.stringify(projectId
+        ? { content: text.slice(0, 500000), name }
+        : { content: text.slice(0, 500000), name, session: this.sessionId() })
     });
     const result = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
@@ -2276,10 +2939,11 @@ class Component extends DCLogic {
   // same text path as any .csv upload. If SheetJS didn't load (offline, CDN
   // blocked), this degrades to the same "stored, not searchable" state as any
   // other unparseable binary — a typed gap, not a silent wrong parse.
-  async _uploadSpreadsheetBinary(file) {
+  async _uploadSpreadsheetBinary(file, projectId) {
+    this.markSource(file.name, { processing: true, glyph: '◌', color: '#A39D91' });
     this.logAdd('○', `Ingesting "${file.name}" as spreadsheet…`, 'sources');
     if (typeof XLSX === 'undefined') {
-      this.markSource(file.name, { glyph: '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+      this.markSource(file.name, { processing: false, glyph: '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
       this.logAdd('◱', `Stored "${file.name}" for reading — SheetJS didn't load, spreadsheet not parsed`, 'sources');
       return;
     }
@@ -2288,15 +2952,123 @@ class Component extends DCLogic {
       const workbook = XLSX.read(buf, { type: 'array' });
       const sheetName = workbook.SheetNames[0];
       const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
-      const result = await this._ingestTextContent(file.name, csv);
-      this.markSource(file.name, { glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      const result = await this._ingestTextContent(file.name, csv, projectId);
+      this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
       this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: csv } }));
       const moreSheets = workbook.SheetNames.length - 1;
       this.logAdd('⋈', `Uploaded "${file.name}" — parsed sheet "${sheetName}"${moreSheets ? ` (${moreSheets} more sheet(s) not shown)` : ''} (${result.chunks || 0} chunks)`, 'sources');
     } catch (err) {
-      this.markSource(file.name, { glyph: '⊘', color: '#A3592B', ingestError: err.message });
+      this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
       this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
     }
+  }
+
+  async _uploadPDFBinary(file, projectId) {
+    this.markSource(file.name, { processing: true, glyph: '◌', color: '#A39D91' });
+    this.logAdd('○', `Ingesting "${file.name}" as PDF…`, 'sources');
+    if (typeof pdfjsLib === 'undefined') {
+      this.markSource(file.name, { processing: false, glyph: '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+      this.logAdd('◱', `Stored "${file.name}" for reading — PDF.js didn't load, PDF not parsed`, 'sources');
+      return;
+    }
+    try {
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      if (!this._uploadBlobUrls) this._uploadBlobUrls = new Map();
+      this._uploadBlobUrls.set(file.name, URL.createObjectURL(file));
+
+      let text = '';
+      const layout = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: 1 });
+        const content = await page.getTextContent();
+        const blocks = this._extractLayout(content, viewport, i);
+        layout.push({ page: i, width: viewport.width, height: viewport.height, blocks });
+        text += content.items.map(item => item.str).join(' ') + '\n\n';
+      }
+
+      const hasText = text.replace(/\s+/g, '').length > 20;
+      const eotEntries = [{ kind: 'extraction', method: hasText ? 'pdf-text-layer' : 'pdf-no-text-layer', pages: pdf.numPages, chars: text.length, layoutBlocks: layout.reduce((s, p) => s + p.blocks.length, 0) }];
+
+      let ocrText = '';
+      if (!hasText && typeof Tesseract !== 'undefined') {
+        this.logAdd('○', `No text layer in "${file.name}" — running OCR…`, 'sources');
+        try {
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 2 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
+            await page.render({ canvasContext: ctx, viewport }).promise;
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+            if (!blob) continue;
+            const { data } = await Tesseract.recognize(blob, 'eng', {
+              logger: (m) => { if (m.status === 'recognizing text') this.logAdd('○', `OCR page ${i}/${pdf.numPages}: ${Math.round(m.progress * 100)}%`, 'sources'); }
+            });
+            const ocrBlocks = (data.lines || []).map(ln => ({
+              text: ln.text, confidence: ln.confidence,
+              bbox: ln.bbox ? { x0: ln.bbox.x0 / 2, y0: ln.bbox.y0 / 2, x1: ln.bbox.x1 / 2, y1: ln.bbox.y1 / 2 } : null,
+              page: i, kind: 'ocr-line'
+            }));
+            if (layout[i - 1]) layout[i - 1].blocks = ocrBlocks;
+            ocrText += (data.text || '') + '\n\n';
+            eotEntries.push({ kind: 'ocr', page: i, lines: (data.lines || []).length, meanConfidence: (data.lines || []).reduce((s, l) => s + (l.confidence || 0), 0) / ((data.lines || []).length || 1) });
+          }
+        } catch (ocrErr) {
+          this.logAdd('⊘', `OCR failed for "${file.name}" — ${ocrErr.message}`, 'sources');
+          eotEntries.push({ kind: 'ocr-failed', error: ocrErr.message });
+        }
+      }
+
+      const finalText = ocrText || text;
+      const extractMethod = ocrText ? 'ocr' : 'pdf-text-layer';
+      const result = await this._ingestTextContent(file.name, finalText, projectId);
+      this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      this.setState(s => ({
+        readerContent: { ...s.readerContent, [file.name]: finalText },
+        readerPDFLayout: { ...(s.readerPDFLayout || {}), [file.name]: layout },
+        readerEOT: { ...(s.readerEOT || {}), [file.name]: eotEntries },
+        readerPDFNumPages: pdf.numPages,
+        readerPDFBlob: this._uploadBlobUrls.get(file.name),
+      }));
+      this.logAdd('⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)`, 'sources');
+    } catch (err) {
+      this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
+      this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
+    }
+  }
+
+  _extractLayout(content, viewport, pageNum) {
+    const blocks = [];
+    let lastY = null, block = null;
+    for (const item of content.items) {
+      const x = item.transform[4], y = item.transform[5];
+      const h = 12;
+      const w = item.width || (item.str.length * 6);
+      const bbox = { x0: x, y0: y - h, x1: x + w, y1: y + 4 };
+      if (lastY !== null && Math.abs(y - lastY) > h * 1.5) {
+        if (block && block.items.length) {
+          block.text = block.items.map(i => i.str).join(' ');
+          blocks.push(block);
+        }
+        block = { page: pageNum, bbox: { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }, items: [] };
+      }
+      if (!block) block = { page: pageNum, bbox: { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }, items: [] };
+      block.items.push(item);
+      block.bbox.x0 = Math.min(block.bbox.x0, bbox.x0);
+      block.bbox.y0 = Math.min(block.bbox.y0, bbox.y0);
+      block.bbox.x1 = Math.max(block.bbox.x1, bbox.x1);
+      block.bbox.y1 = Math.max(block.bbox.y1, bbox.y1);
+      lastY = y;
+    }
+    if (block && block.items.length) {
+      block.text = block.items.map(i => i.str).join(' ');
+      blocks.push(block);
+    }
+    return blocks;
   }
 
   searchWeb() {
@@ -2501,8 +3273,11 @@ class Component extends DCLogic {
     const fileList = Array.from(e.target.files || []);
     e.target.value = '';
     if (!fileList.length) return;
+    // Captured before closeModal clears it — project-scoped uploads land in
+    // the project's own pool; room uploads keep the room session.
+    const projectId = this._modalProjectId;
     this.closeModal();
-    this.uploadFiles(fileList);
+    this.uploadFiles(fileList, projectId);
   }
 
   // Bring a freshly-marked span into view once — and only once per span, so
@@ -2518,6 +3293,8 @@ class Component extends DCLogic {
     if (!el) return;
     this._scrolledHl = key;
     requestAnimationFrame(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+    // Trigger PDF page render when the PDF reader opens
+    if (this._pdfCanvasEl && this.state.readerPDFView !== 'extracted') this._renderPDFPage();
   }
 
   openReader(name, highlight = null) {
@@ -2552,7 +3329,26 @@ class Component extends DCLogic {
       this.logAdd('⊘', `Seek failed for "${name}" — ${e.message || e}`, 'reader');
     }
   }
-  closeReader() { this.setState({ readerOpen: false, readerHighlight: null }); }
+  closeReader() { this.setState({ readerOpen: false, readerHighlight: null, readerPDFView: 'extracted', readerPDFPage: 0 }); this._pdfCanvasEl = null; }
+  async _renderPDFPage() {
+    const el = this._pdfCanvasEl;
+    if (!el) return;
+    const name = this.state.readerSourceName;
+    if (!name) return;
+    const blobUrl = this._uploadBlobUrls && this._uploadBlobUrls.get(name);
+    if (!blobUrl) return;
+    const pageNum = this.state.readerPDFPage || 0;
+    if (typeof pdfjsLib === 'undefined') return;
+    try {
+      const pdf = await pdfjsLib.getDocument(blobUrl).promise;
+      const page = await pdf.getPage(pageNum + 1);
+      const viewport = page.getViewport({ scale: 1.5 });
+      el.width = viewport.width;
+      el.height = viewport.height;
+      const ctx = el.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    } catch {} // best-effort canvas render
+  }
   clearReaderHighlight() { this.setState({ readerHighlight: null }); }
 
   // Two namespaces have to be reconciled here: engine source ids
@@ -2645,7 +3441,7 @@ class Component extends DCLogic {
     const cache = {}, ids = Object.keys(this.orbitBodies);
     if (!this.orbitEdges.length) {
       ctx.fillStyle = '#D5DFD9'; ctx.font = '14px "Instrument Sans", sans-serif';
-      ctx.textAlign = 'center'; ctx.fillText('Entities appear as you chat', w / 2, h / 2);
+      ctx.textAlign = 'center'; ctx.fillText(this.orbitEmptyReason(), w / 2, h / 2);
       return;
     }
     const positions = {};
@@ -2676,6 +3472,22 @@ class Component extends DCLogic {
     });
   }
 
+  // An empty orbit has three different causes and they need three different
+  // sentences. "Entities appear as you chat" was none of them: entities have
+  // never come from the transcript, so a reader who chatted and saw nothing
+  // change was being told to keep doing the thing that cannot work.
+  orbitEmptyReason() {
+    const enabled = this.roomSources().filter(s => s.enabled !== false);
+    if (!enabled.length) return 'Attach a source — its cast appears here';
+    const pending = enabled.filter(s => !this.state.folds[s.name]);
+    if (pending.length) return `Reading ${pending[0].name}…`;
+    const errored = enabled.filter(s => this.state.folds[s.name] && this.state.folds[s.name].error);
+    if (errored.length === enabled.length) return 'The fold could not be read — see Glass box';
+    const { withheld } = this.castOfEnabledSources();
+    if (withheld.length) return `${withheld.length} candidate${withheld.length === 1 ? '' : 's'} withheld — none could be shown`;
+    return 'No recurring named referent in these sources';
+  }
+
   onOrbitClick(e) {
     const canvas = this.canvasEl;
     if (!canvas || !this.nodeScreen) return;
@@ -2687,15 +3499,33 @@ class Component extends DCLogic {
       if (d < bestD) { bestD = d; best = id; }
     });
     if (best && this.orbitBodies[best]) {
-      this.setState({ orbitFocus: best });
+      // Focusing a body and selecting its referent are the same act. They were
+      // two: Orbit set `orbitFocus` and nothing else, so clicking a node moved
+      // the camera and left the entity rail beside it showing the index — the
+      // one panel that could say what the node you just clicked actually is.
+      // `entityId` was already carried on every body for exactly this and was
+      // read nowhere.
+      const id = this.orbitBodies[best].entityId || null;
+      // The rail shows a selected turn's passages ahead of the entity index,
+      // so a lingering surf selection would swallow the profile this click
+      // just asked for.
+      this.setState({ orbitFocus: best, selectedEntity: id, activeTurnId: null });
       this.logAdd('△', `Orbit refocused on "${this.orbitBodies[best].label}"`, 'reader');
+      return;
+    }
+    // The room is deliberately invisible and unclickable (it is the frame, not
+    // a thing in it) — which left no way back once a leaf had the camera.
+    // Empty space is the way back.
+    if (this.state.orbitFocus !== 'room') {
+      this.setState({ orbitFocus: 'room', selectedEntity: null });
     }
   }
 
-  // Orbit is a view of the fold's cast, so a body exists here only if a prior
-  // typed that referent. Radius and period are read off measured quantities —
-  // mentions and frame span — rather than the index in a list, so two bodies
-  // at the same distance are equally present in the text and mean it.
+  // Orbit is a view of the fold's cast: one body per referent the engine
+  // discovered or a prior asserted, in the sources currently enabled. Radius
+  // and period are read off measured quantities — mentions and frame span —
+  // rather than the index in a list, so two bodies at the same distance are
+  // equally present in the text and mean it.
   computeOrbit() {
     const active = this.activeSpace();
     const { entities } = this.castOfEnabledSources();
@@ -2729,7 +3559,7 @@ class Component extends DCLogic {
   //   0 answer prose · 1 citation pills · 2 passages · 3 trace · 4 raw prompt
   // A level with no evidence shows no control, so an empty panel is never a
   // thing you can open.
-  turnVals(turn, i) {
+  turnVals(turn, i, selectEntity) {
     const panels = this.state.turnPanels[turn.id] || {};
     const cits = turn.citations || [];
     const resolved = cits.filter(c => c.resolved);
@@ -2928,7 +3758,12 @@ class Component extends DCLogic {
       rawHeading: turn.prompt ? 'prompt sent to model' : 'prompt not reported by proxy',
       rawPrompt: turn.prompt || 'The proxy did not report an injected prompt for this turn. Nothing is reconstructed here — use “copy json” for everything the client actually received.',
 
-      ungroundedNotice
+      ungroundedNotice,
+      answerHtml: turn.a ? this.renderMarkdown(turn.a) : null,
+      streamingAnswerHtml: null,
+      selectForSurf: () => this.setState({ activeTurnId: turn.id, selectedEntity: null }),
+      surfOutline: this.state.activeTurnId === turn.id ? '2px solid #1F5A4C' : '0',
+      surfColor: this.state.activeTurnId === turn.id ? '#1F5A4C' : '#8C877C',
     };
   }
 
@@ -2936,7 +3771,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose');
+    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // Selection is by referent id — the identity the engine assigned — so two
@@ -2985,7 +3820,7 @@ class Component extends DCLogic {
       setRenameInput: (el) => { if (el) requestAnimationFrame(() => el.focus()); },
       delete: (e) => { e.stopPropagation(); this.deleteConversation(sp.id); },
     }));
-    const previewByType = { pdf: 'A text document — bonded to this room and citable.', video: 'Structure found by segmenting raw container bytes — no frame decoded.', audio: 'Transcribed locally by an on-device model.', spreadsheet: 'A spreadsheet — parsed into rows and columns, bonded to this room and citable.', link: 'A web source bonded and citable.', binary: 'Preview not available — stored as an opaque binary.' };
+    const previewByType = { pdf: 'A PDF — text extracted via PDF.js, bonded to this room and citable.', video: 'Structure found by segmenting raw container bytes — no frame decoded.', audio: 'Transcribed locally by an on-device model.', spreadsheet: 'A spreadsheet — parsed into rows and columns, bonded to this room and citable.', link: 'A web source bonded and citable.', binary: 'Preview not available — stored as an opaque binary.' };
     const roomSources = this.roomSources();
     const activeSources = roomSources.map(s => {
       const type = this.inferType(s.name);
@@ -3011,7 +3846,9 @@ class Component extends DCLogic {
         },
         toggleEnabled: () => this.toggleSource(s.name),
         delete: () => this.deleteSource(s.name),
-        rowOpacity: s.enabled === false ? 0.45 : 1,
+        processing: s.processing || false,
+        notProcessing: !s.processing,
+        rowOpacity: s.enabled === false ? 0.45 : (s.processing ? 0.7 : 1),
         switchBg: s.enabled === false ? '#E0DACE' : '#1F5A4C',
         knobLeft: s.enabled === false ? '2px' : '13px',
         expanded, chevronClass: expanded ? 'ph ph-caret-down' : 'ph ph-caret-right',
@@ -3060,14 +3897,23 @@ class Component extends DCLogic {
       reason: w.withheld_because || 'no per-text prior asserts this referent'
     }));
     const withheldCount = castWithheld.length;
+    // The summary used to state one reason for all of them ("no per-text prior
+    // asserts an individuation type"). With engine-tier discovery admitting
+    // untyped candidates that is no longer why anything is withheld, and a
+    // fixed reason line would be wrong on every row. Each row already carries
+    // the fold's own `withheld_because`; the summary counts and defers to it.
     const withheldSummary = withheldCount
-      ? `${withheldCount} candidate${withheldCount === 1 ? '' : 's'} withheld — no per-text prior asserts an individuation type`
+      ? `${withheldCount} candidate${withheldCount === 1 ? '' : 's'} the fold could not show — hover for why`
       : '';
     const castGapRows = castGaps.map(g => ({ reason: (g.reason || String(g)), source: g.source || '' }));
 
     const { orbitBodies, orbitEdges } = this.computeOrbit();
-    const orbitNode = orbitBodies[S.orbitFocus];
-    const orbitKids = Object.keys(orbitBodies).filter(k => orbitBodies[k].parent === S.orbitFocus);
+    // Disabling a source deletes bodies. A focus pointing at one of them left
+    // getPos falling back to the origin and the caption naming nothing, so the
+    // camera silently drifted off the graph. Fall back to the room.
+    const orbitFocus = orbitBodies[S.orbitFocus] ? S.orbitFocus : 'room';
+    const orbitNode = orbitBodies[orbitFocus];
+    const orbitKids = Object.keys(orbitBodies).filter(k => orbitBodies[k].parent === orbitFocus);
 
     const readerType = S.readerSourceName ? this.inferType(S.readerSourceName) : null;
     const readerGlyph = TYPE_GLYPH[readerType] || '●';
@@ -3222,6 +4068,14 @@ class Component extends DCLogic {
       range: `${a.byte_start}–${a.byte_end}`,
       open: () => this.openReaderAtByte(selectedCastEntity.source, a.byte_start)
     }));
+    // "profile grows as you read" was decoration: the fold is computed at
+    // ingest and does not grow. What the footer can honestly say is which tier
+    // this referent came from, which is the thing that decides how far to
+    // trust its mention count.
+    const selectedEntityProvenance = !selectedCastEntity ? ''
+      : selectedCastEntity.tier === 'model'
+        ? 'asserted by a per-text prior · aliases resolved'
+        : 'engine-discovered · name variants merged, pronouns not';
 
     const catList = ['all', 'sources', 'chat', 'spaces', 'reader', 'perception'];
     const categoryChips = catList.map(cat => ({
@@ -3237,7 +4091,7 @@ class Component extends DCLogic {
 
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose',
+      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose',
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
       webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
@@ -3247,6 +4101,7 @@ class Component extends DCLogic {
       toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch })),
       provider: S.provider,
       model: S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : ''),
+      modelPickerLabel: `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`,
       onProviderChange: (e) => {
         const p = S._availableModels.find(m => m.id === e.target.value);
         this.setState({ provider: e.target.value, model: p ? p.defaultModel : S.model });
@@ -3254,13 +4109,40 @@ class Component extends DCLogic {
       onModelChange: (e) => this.setState({ model: e.target.value }),
       hasModels: S._availableModels.length > 0,
       modelOptions: S._availableModels,
+      modelMenuOpen: S.modelMenuOpen,
+      toggleModelMenu: () => this.setState(s => ({ modelMenuOpen: !s.modelMenuOpen })),
+      closeModelMenu: () => this.setState({ modelMenuOpen: false }),
       ...this._localModelProps(S),
+      settingsOpen: S.settingsOpen,
+      toggleSettings: () => this.toggleSettings(),
+      closeSettings: () => this.setState({ settingsOpen: false }),
+      saveSettings: () => this.saveSettings(),
+      stopSettingsClick: (e) => e.stopPropagation(),
+      settingsProviders: [
+        { id: 'anthropic', label: 'Anthropic', placeholder: 'sk-ant-…', keyValue: S.settingsDraftKeys.anthropic || '', hasKey: !!S._settingsApiKeys.anthropic, onChange: (e) => this.setDraftKey('anthropic', e.target.value) },
+        { id: 'openai', label: 'OpenAI', placeholder: 'sk-…', keyValue: S.settingsDraftKeys.openai || '', hasKey: !!S._settingsApiKeys.openai, onChange: (e) => this.setDraftKey('openai', e.target.value) },
+      ],
+      settingsProvider: S.provider,
+      onSettingsProviderChange: (e) => {
+        const p = S._availableModels.find(m => m.id === e.target.value);
+        this.setState({ provider: e.target.value, model: p ? p.defaultModel : S.model });
+      },
+      settingsModel: S.model || '',
+      onSettingsModelChange: (e) => this.setState({ model: e.target.value }),
+      settingsModelOptions: S._availableModels,
+      settingsToggleLocal: () => this.toggleLocalModel(),
+      settingsLocalBorder: S.localModel ? '#1F5A4C' : '#E0DACE',
+      settingsLocalBg: S.localModel ? '#1F5A4C' : 'none',
+      settingsLocalColor: S.localModel ? '#FFFDFA' : '#8C877C',
+      settingsLocalIcon: S.localModelStatus === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
       proxyLive: live, proxyDead: !live,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
       retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
+      tabDocuments: () => this.setState({ tab: 'documents' }),
       tabChat: () => this.setState({ tab: 'chat' }), tabOutline: () => this.setState({ tab: 'outline' }),
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
       tabPriors: () => this.setState({ tab: 'priors' }), tabCompose: () => this.setState({ tab: 'compose' }),
+      tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
       tabChatColor: c.color, tabChatUnderline: c.underline,
       tabOutlineColor: o.color, tabOutlineUnderline: o.underline,
       tabOrbitColor: r.color, tabOrbitUnderline: r.underline,
@@ -3301,10 +4183,11 @@ class Component extends DCLogic {
       composeSummary: S.composeResult
         ? `${S.composeResult.sections} section(s), ${S.composeResult.mechanicalCitations} mechanical citation(s), ${S.composeResult.gaps} gap(s)`
         : '',
-      composeResultSections: (S.composeResult && S.composeResult.results || []).map(r => ({
+        composeResultSections: (S.composeResult && S.composeResult.results || []).map(r => ({
         id: r.id,
         label: r.label,
         content: r.content,
+        contentHtml: this.renderMarkdown(r.content),
         citations: (r.citations || []).map(cit => {
           const s = (r.surf || [])[cit.surfIndex];
           return {
@@ -3315,12 +4198,14 @@ class Component extends DCLogic {
         }),
       })),
       draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
+      inputDisabled: S.streamingLoading,
+      stopButtonAnim: S.streamingLoading ? 'animation: eoPulse 1.8s ease-in-out infinite;' : '',
       composerHint: enabledSourceCount === 0 && roomSources.length
         ? 'Every source is switched off — switch one on in the rail to ask.'
         : 'Answers cite only what your sources say.',
       composerHintColor: enabledSourceCount === 0 && roomSources.length ? '#A3592B' : '#A39D91',
-      turns: active.turns.map((turn, i) => this.turnVals(turn, i)),
-      streamingAnswer: S.streamingAnswer, streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
+      turns: active.turns.map((turn, i) => this.turnVals(turn, i, selectEntity)),
+      streamingAnswer: S.streamingAnswer, streamingAnswerHtml: S.streamingAnswer ? this.renderMarkdown(S.streamingAnswer) : null, streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
       thinkingPhase: S.thinkingPhase,
       // Once the answer's own prose starts arriving, thinkingPhase is cleared —
       // the top-of-chat indicator has nothing left to say, so it disappears
@@ -3350,10 +4235,44 @@ class Component extends DCLogic {
       showEmptyChat: active.turns.length === 0 && !S.streamingLoading && !S.streamingAnswer,
       onDraft: (e) => this.setState({ draft: e.target.value }),
       onKey: (e) => { if (e.key === 'Enter') this.send(); }, send: () => this.send(),
+      // Mode state
+      currentMode: S.chatMode || 'chat',
+      isSurfMode: S.chatMode === 'surf',
+      isThinkMode: S.chatMode === 'think',
+      surfBorder: S.chatMode === 'surf' ? '#1F5A4C' : '#E0DACE',
+      surfBg: S.chatMode === 'surf' ? '#E5EDE9' : '#FFFDFA',
+      surfColor: S.chatMode === 'surf' ? '#1F5A4C' : '#8C877C',
+      thinkBorder: S.chatMode === 'think' ? '#5A3E1F' : '#E0DACE',
+      thinkBg: S.chatMode === 'think' ? '#EDE5D9' : '#FFFDFA',
+      thinkColor: S.chatMode === 'think' ? '#5A3E1F' : '#8C877C',
+      toggleSurfMode: () => this.toggleSurfMode(),
+      toggleThinkMode: () => this.toggleThinkMode(),
+      showModeBadge: S.chatMode && S.chatMode !== 'chat',
+      modeBadgeLabel: S.chatMode === 'surf' ? '◈ Surf' : (S.chatMode === 'think' ? '◈ Think' : ''),
+      modeBadgeBg: S.chatMode === 'surf' ? '#E5EDE9' : '#EDE5D9',
+      modeBadgeColor: S.chatMode === 'surf' ? '#1F5A4C' : '#5A3E1F',
+      modeBadgeBorder: S.chatMode === 'surf' ? '#C5DDD7' : '#DDD0C0',
       activeSpaceName: active.name, spacesOpen: S.spacesOpen,
       toggleSpaces: () => this.setState(s => ({ spacesOpen: !s.spacesOpen })),
       spaces, addSpace: () => this.addSpace(),
-      activeSources, noSources: roomSources.length === 0, sourceCount: roomSources.length,
+      activeSources, noSources: roomSources.length === 0, hasSources: roomSources.length > 0, sourceCount: roomSources.length,
+      documentRows: roomSources.map(s => {
+        const type = this.inferType(s.name);
+        const enabled = s.enabled !== false;
+        return {
+          name: s.name,
+          glyph: s.glyph || TYPE_GLYPH[type] || '◱',
+          color: s.color || '#1F5A4C',
+          typeLabel: TYPE_LABEL[type] || 'File',
+          meta: type === 'link' ? 'web' : type,
+          rowOpacity: enabled ? 1 : 0.5,
+          switchBg: enabled ? '#1F5A4C' : '#E0DACE',
+          knobLeft: enabled ? '13px' : '2px',
+          toggleLabel: enabled ? 'Disable' : 'Enable',
+          toggleEnabled: (e) => { e.stopPropagation(); this.toggleSource(s.name); },
+          open: () => this.openReader(s.name),
+        };
+      }),
       hasWebHistory: webRows.length > 0,
       webHistoryCount: webRows.length,
       webHistoryOpen: S.webHistoryOpen,
@@ -3363,13 +4282,18 @@ class Component extends DCLogic {
       webAllSwitchBg: anyWebOn ? '#1F5A4C' : '#E0DACE',
       webAllKnobLeft: anyWebOn ? '13px' : '2px',
       webHistoryRows: webRows,
-      recycleBinRows: (S._recycleBin || []).map(d => ({
+      // Disabling a prior reuses engineDeleteSource under the hood (see
+      // priors-source.js::setPriorEnabled), so its entry lands in the same
+      // engine-wide recycle bin — tagged `pool: "priors"`. This rail is the
+      // corpus pool's recycle bin; a prior belongs in the Priors tab's own
+      // on/off state, not here.
+      recycleBinRows: (S._recycleBin || []).filter(d => d.pool !== 'priors').map(d => ({
         name: d.name || d.sourceKey,
         restore: () => this.restoreSource(d.sourceKey || d.name),
         purge: () => this.purgeSource(d.sourceKey || d.name),
       })),
-      hasRecycleBin: (S._recycleBin || []).length > 0,
-      recycleBinCount: (S._recycleBin || []).length,
+      hasRecycleBin: (S._recycleBin || []).filter(d => d.pool !== 'priors').length > 0,
+      recycleBinCount: (S._recycleBin || []).filter(d => d.pool !== 'priors').length,
       recycleBinOpen: S.recycleBinOpen,
       recycleBinChevron: S.recycleBinOpen ? 'ph ph-caret-down' : 'ph ph-caret-right',
       toggleRecycleBin: () => this.toggleRecycleBin(),
@@ -3383,7 +4307,19 @@ class Component extends DCLogic {
       leftAlign: S.leftCollapsed ? 'center' : 'stretch',
       leftColWidth: S.leftCollapsed ? '52px' : '232px',
       toggleLeftCollapsed: () => this.setState(s => ({ leftCollapsed: !s.leftCollapsed })),
-      addSource: () => this.addSource(), searchWeb: () => this.searchWeb(),
+      leftPanelHeader: S.activeProjectId ? 'Workspace' : 'Projects',
+      leftPanelCountLabel: S.activeProjectId ? `${roomSources.length} sources` : `${S.projects.length} projects`,
+      projectsOpen: S.projectsOpen,
+      sourcesOpen: S.sourcesOpen,
+      chatsOpen: S.chatsOpen,
+      projectsChevron: S.projectsOpen ? 'ph ph-caret-down' : 'ph ph-caret-right',
+      sourcesChevron: S.sourcesOpen ? 'ph ph-caret-down' : 'ph ph-caret-right',
+      chatsChevron: S.chatsOpen ? 'ph ph-caret-down' : 'ph ph-caret-right',
+      toggleProjectsOpen: () => this.setState(s => ({ projectsOpen: !s.projectsOpen })),
+      toggleSourcesOpen: () => this.setState(s => ({ sourcesOpen: !s.sourcesOpen })),
+      toggleChatsOpen: () => this.setState(s => ({ chatsOpen: !s.chatsOpen })),
+      spacesCount: S.spaces.length,
+      addSource: () => this.addSource(), addProjectDocument: () => this.addProjectDocument(), searchWeb: () => this.searchWeb(),
       modalOpen: !!modal,
       modalTitle: modal ? modal.title : '',
       modalLabel: modal ? modal.label : '',
@@ -3435,12 +4371,26 @@ class Component extends DCLogic {
       setCanvas: (el) => { this.canvasEl = el; this.manageOrbitLoop(); if (el) this.draw(); },
       onOrbitClick: (e) => this.onOrbitClick(e),
       orbitFocusLabel: orbitNode ? orbitNode.label : '',
-      orbitHint: orbitKids.length ? 'click a node — swap universes to it' : 'entities appear as you chat',
-      orbitStatus: orbitKids.length ? ` · ${orbitKids.map(k => orbitBodies[k].label).join(', ')} orbit${orbitKids.length > 1 ? '' : 's'} it` : ' · entities from chat will appear here',
+      // These two used to key off `orbitKids` — the children of the FOCUSED
+      // node. Every entity is a leaf, so focusing one emptied that list and
+      // both lines reverted to the empty-state copy while eight bodies were
+      // visibly orbiting. What the reader is being told about is the cast, so
+      // the cast is what the condition reads.
+      orbitHint: !orbitEdges.length
+        ? 'entities appear when you attach a source'
+        : orbitFocus === 'room'
+          ? 'click a node — its profile opens beside you'
+          : 'click empty space to come back',
+      orbitStatus: !orbitEdges.length
+        ? ` · ${this.orbitEmptyReason().toLowerCase()}`
+        : orbitKids.length
+          ? ` · ${orbitKids.map(k => orbitBodies[k].label).join(', ')} orbit${orbitKids.length > 1 ? '' : 's'} it`
+          : ` · ${orbitEdges.length} entit${orbitEdges.length === 1 ? 'y' : 'ies'} in this room`,
       // The reader sits *beside* the chat, never on top of it. Checking a
       // source used to cost you the conversation, which is why nobody checked.
       readerOpen: S.readerOpen, showTabs: true,
-      readerColWidth: S.readerOpen ? 'minmax(0, 1fr)' : '0px',
+      readerColWidth: (S.readerOpen && S.view !== 'projects') ? 'minmax(0, 1fr)' : '0px',
+      rightRailWidth: S.view === 'projects' ? '0px' : '248px',
       readerName: S.readerSourceName, readerGlyph, readerTypeLabel, readerPipelineLabel,
       showReaderPipeline: !!readerPipelineLabel, showSectionChips: docOutline.length > 1,
       readerIsVideo: readerType === 'video', readerIsAudioType: readerType === 'audio',
@@ -3467,11 +4417,48 @@ class Component extends DCLogic {
       readerVideoSrc: readerType === 'video' && S.readerSourceName
         ? ((this._uploadBlobUrls && this._uploadBlobUrls.get(S.readerSourceName)) || S.readerSourceName)
         : '',
-      readerShowModeToggle: readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet',
+      readerShowModeToggle: readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && readerType !== 'pdf',
+      // PDF reader — rendered / extracted / split modes with page navigation
+      readerIsPDF: readerType === 'pdf' && S.readerPDFLayout && S.readerPDFLayout[S.readerSourceName],
+      readerPDFRenderedBg: S.readerPDFView === 'rendered' || S.readerPDFView === 'split' ? '#1F5A4C' : 'transparent',
+      readerPDFRenderedColor: S.readerPDFView === 'rendered' || S.readerPDFView === 'split' ? '#FFFDFA' : '#8C877C',
+      readerPDFExtractedBg: S.readerPDFView === 'extracted' || S.readerPDFView === 'split' ? '#1F5A4C' : 'transparent',
+      readerPDFExtractedColor: S.readerPDFView === 'extracted' || S.readerPDFView === 'split' ? '#FFFDFA' : '#8C877C',
+      readerPDFSplitBg: S.readerPDFView === 'split' ? '#1F5A4C' : 'transparent',
+      readerPDFSplitColor: S.readerPDFView === 'split' ? '#FFFDFA' : '#8C877C',
+      readerPDFShowRendered: S.readerPDFView === 'rendered' || S.readerPDFView === 'split',
+      readerPDFShowExtracted: S.readerPDFView === 'extracted' || S.readerPDFView === 'split',
+      readerPDFShowSplit: S.readerPDFView === 'split',
+      readerPDFCurrentPage: (S.readerPDFPage != null ? S.readerPDFPage : 0) + 1,
+      readerPDFNumPages: S.readerPDFNumPages || 0,
+      readerPDFPrevPage: () => this.setState(s => ({ readerPDFPage: Math.max(0, (s.readerPDFPage || 0) - 1) }), () => this._renderPDFPage()),
+      readerPDFNextPage: () => this.setState(s => ({ readerPDFPage: Math.min((s.readerPDFNumPages || 1) - 1, (s.readerPDFPage || 0) + 1) }), () => this._renderPDFPage()),
+      setReaderPDFRendered: () => this.setState({ readerPDFView: 'rendered', readerPDFPage: 0 }, () => this._renderPDFPage()),
+      setReaderPDFExtracted: () => this.setState({ readerPDFView: 'extracted' }),
+      setReaderPDFSplit: () => this.setState({ readerPDFView: 'split', readerPDFPage: 0 }, () => this._renderPDFPage()),
+      setPDFCanvas: (el) => { this._pdfCanvasEl = el; if (el) this._renderPDFPage(); },
+      // EOT provenance for PDF extraction
+      readerPDFShowEOT: readerType === 'pdf' && S.readerEOT && S.readerEOT[S.readerSourceName],
+      readerPDFEOTRows: (() => {
+        const eot = S.readerEOT && S.readerEOT[S.readerSourceName];
+        if (!eot) return [];
+        return eot.map(e => {
+          if (e.kind === 'extraction') return { glyph: '⋈', color: '#1F5A4C', label: 'Extraction', detail: `${e.method} — ${e.pages} page(s), ${e.chars} chars, ${e.layoutBlocks} layout blocks` };
+          if (e.kind === 'ocr') return { glyph: '○', color: '#1F5A4C', label: `OCR page ${e.page}`, detail: `${e.lines} line(s), mean confidence ${Math.round(e.meanConfidence)}%` };
+          if (e.kind === 'ocr-failed') return { glyph: '⊘', color: '#A3592B', label: 'OCR failed', detail: e.error };
+          return { glyph: '○', color: '#A39D91', label: e.kind, detail: '' };
+        });
+      })(),
+      readerPDFHasLayout: readerType === 'pdf' && S.readerPDFLayout && S.readerPDFLayout[S.readerSourceName],
+      readerPDFLayoutRows: (() => {
+        const layout = S.readerPDFLayout && S.readerPDFLayout[S.readerSourceName];
+        if (!layout) return [];
+        return layout.map(p => ({ page: p.page, blocks: p.blocks.length, dims: `${Math.round(p.width)}×${Math.round(p.height)}` }));
+      })(),
       closeReader: () => this.closeReader(),
       docOutline,
-      readerModeScroll: readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && S.readerViewMode !== 'paginated',
-      readerModePaginated: readerType !== 'video' && readerType !== 'spreadsheet' && S.readerViewMode === 'paginated',
+      readerModeScroll: readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && readerType !== 'pdf' && S.readerViewMode !== 'paginated',
+      readerModePaginated: readerType !== 'video' && readerType !== 'spreadsheet' && readerType !== 'pdf' && S.readerViewMode === 'paginated',
       setReaderScroll: () => this.setState({ readerViewMode: 'scroll' }),
       setReaderPaginated: () => this.setState({ readerViewMode: 'paginated' }),
       readerScrollColor: S.readerViewMode !== 'paginated' ? '#1F5A4C' : '#8C877C',
@@ -3505,10 +4492,70 @@ class Component extends DCLogic {
       selectedEntityMentions: selectedCastEntity ? selectedCastEntity.mentions : 0,
       selectedEntityRelations,
       selectedEntityAnchors,
+      selectedEntityProvenance,
       selectedEntityNoRelations: !!S.selectedEntity && selectedEntityRelations.length === 0,
       selectedEntityNoAnchors: !!S.selectedEntity && selectedEntityAnchors.length === 0,
       clearSelectedEntity: () => this.setState({ selectedEntity: null }),
-      entityCountLabel: castEntities.length + ' entities',
+      entityCountLabel: `${castEntities.length} entit${castEntities.length === 1 ? 'y' : 'ies'}`,
+      // Surf passage panel for a selected turn
+      surfPassageRows: (() => {
+        const activeTurn = (S.activeTurnId ? (active.turns || []).find(t => t.id === S.activeTurnId) : null) || null;
+        const g = activeTurn ? activeTurn.grounding : null;
+        if (!g || g.empty) return [];
+        const citedNums = new Set((activeTurn.citations || []).filter(c => c.resolved).map(c => c.num));
+        const fullText = new Map((g.citations || []).map(c => [c.span_id, c.text]));
+        const retrieved = (g.retrieved && g.retrieved.length)
+          ? g.retrieved
+          : (g.citations || []).map(c => ({ span_id: c.span_id, source_id: c.source_id, byte_start: c.byte_start, byte_end: c.byte_end, citation: c.index, rank: c.index, kept: true, coverage: null, phrase: null }));
+        return retrieved.slice(0, 30).map(r => {
+          const text = fullText.get(r.span_id) || r.preview || '';
+          const num = r.citation !== null ? String(r.citation) : '·';
+          const cited = r.citation !== null && citedNums.has(String(r.citation));
+          const openable = r.source_id ? !!this._sourceForCitation(r.source_id) : false;
+          return {
+            num,
+            source: this._shortSource(r.source_id),
+            rank: `#${r.rank}`,
+            quote: (text || '').slice(0, 350),
+            meta: [
+              r.byte_start !== undefined ? `bytes ${r.byte_start}–${r.byte_end}` : null,
+              r.coverage ? `${Math.round(r.coverage * 100)}%` : null,
+              r.phrase ? `phrase ${Math.round(r.phrase * 100)}%` : null,
+            ].filter(Boolean).join(' · '),
+            cited,
+            dropped: r.kept === false,
+            border: cited ? '#DDEAE6' : (r.kept === false ? '#F0E0CE' : '#EBE6DC'),
+            rail: cited ? '#1F5A4C' : (r.kept === false ? '#A3592B' : '#E0DACE'),
+            openable,
+            openColor: openable ? '#1F5A4C' : '#A39D91',
+            openCursor: openable ? 'pointer' : 'default',
+            openIcon: openable ? 'ph ph-arrow-square-out' : 'ph ph-prohibit',
+            openLabel: openable ? 'open' : 'not in room',
+            open: () => {
+              if (!openable) { this.logAdd('⊘', `[${num}] "${this._shortSource(r.source_id)}" is not bonded to this room`, 'reader'); return; }
+              this.openCitation({ num, resolved: true, sourceId: r.source_id, spanId: r.span_id, byteStart: r.byte_start, byteEnd: r.byte_end, quote: text, source: this._shortSource(r.source_id) });
+            },
+          };
+        });
+      })(),
+      hasSurfPassages: (() => {
+        const activeTurn = (S.activeTurnId ? (active.turns || []).find(t => t.id === S.activeTurnId) : null) || null;
+        const g = activeTurn ? activeTurn.grounding : null;
+        return !!(activeTurn && g && !g.empty && ((g.retrieved && g.retrieved.length) || (g.citations && g.citations.length)));
+      })(),
+      noSurfPassages: (() => {
+        const activeTurn = (S.activeTurnId ? (active.turns || []).find(t => t.id === S.activeTurnId) : null) || null;
+        return !activeTurn;
+      })(),
+      surfMeta: (() => {
+        const activeTurn = (S.activeTurnId ? (active.turns || []).find(t => t.id === S.activeTurnId) : null) || null;
+        const g = activeTurn ? activeTurn.grounding : null;
+        if (!g || g.empty) return '';
+        const retrievedCount = (g.retrieved && g.retrieved.length) ? g.retrieved.length : (g.citations || []).length;
+        const sourceN = new Set((g.retrieved || g.citations || []).map(c => c.source_id)).size;
+        return `${retrievedCount} passage${retrievedCount === 1 ? '' : 's'} · ${sourceN} source${sourceN === 1 ? '' : 's'}${g.foldedCount !== undefined ? ` · ${g.foldedCount} kept` : ''}${g.tokens ? ` · ${g.tokens} tokens` : ''}`;
+      })(),
+      clearSurfSelection: () => this.setState({ activeTurnId: null }),
       // Priors group by what they are ABOUT, from the `scope` each artifact
       // declares (proxy-side, priors-source.js::scopeOf) — not by schema family
       // and not by filename. A prior scoped to one text only applies while
@@ -3528,16 +4575,8 @@ class Component extends DCLogic {
         });
         return [...groups.entries()]
           .sort((a, b) => (ORDER[a[1].kind] - ORDER[b[1].kind]) || a[1].label.localeCompare(b[1].label))
-          .map(([key, g]) => ({
-            name: g.kind === 'text' ? `Per-text — ${this._textTitle(g.label)}`
-              : g.kind === 'corpus' ? 'Corpus-wide'
-              : g.kind === 'prior' ? 'Derived from another prior'
-              : 'Scope not declared',
-            count: String(g.items.length),
-            expanded: !!S.priorGenreOpen[key],
-            chevronClass: S.priorGenreOpen[key] ? 'ph ph-caret-down' : 'ph ph-caret-right',
-            toggle: () => this.togglePriorGenre(key),
-            items: g.items.slice().sort((a, b) => a.id.localeCompare(b.id)).map(p => {
+          .map(([key, g]) => {
+            const items = g.items.slice().sort((a, b) => a.id.localeCompare(b.id)).map(p => {
               const sc = p.scope || {};
               // Scope detail first — it says what this prior covers. The family
               // and size follow; they say what shape it is.
@@ -3546,16 +4585,57 @@ class Component extends DCLogic {
               // is what the engine could not ingest, sc.gap is why the artifact
               // itself declares no scope. Show both rather than picking one.
               const gaps = [p.gap, sc.gap].filter(Boolean);
+              const disabled = !!p.disabled;
+              const contentName = 'prior:' + p.id;
+              const opened = !!S.priorItemOpen[p.id];
+              const content = S.readerContent[contentName];
               return {
+                id: p.id,
                 name: p.id,
                 prior: (detail ? detail + ' · ' : '') + `${p.family} · ${(p.bytes / 1024).toFixed(0)} KB`,
                 surprising: !!gaps.length,
                 notSurprising: !gaps.length,
                 gapLabel: gaps.join(' — '),
-                openInExplorer: () => this.openPrior(p.id)
+                disabled,
+                rowOpacity: disabled ? 0.5 : 1,
+                switchBg: disabled ? '#E0DACE' : '#1F5A4C',
+                knobLeft: disabled ? '2px' : '13px',
+                toggleEnabled: (e) => { e.stopPropagation(); this.setPriorsEnabled([p.id], disabled); },
+                // Inline content — the primary way to read a prior now. Click
+                // the row to expand it right here; the fetch is cached by id
+                // so re-collapsing and re-expanding costs nothing.
+                expanded: opened,
+                chevronClass: opened ? 'ph ph-caret-down' : 'ph ph-caret-right',
+                toggleContent: () => this.togglePriorItem(p.id),
+                hasContent: opened && !!content,
+                contentLoading: opened && !content,
+                contentText: content || '',
+                openInReader: (e) => { e.stopPropagation(); this.openPrior(p.id); },
               };
-            })
-          }));
+            });
+            const enabledCount = items.filter(it => !it.disabled).length;
+            const allDisabled = items.length > 0 && enabledCount === 0;
+            return {
+              name: g.kind === 'text' ? `Per-text — ${this._textTitle(g.label)}`
+                : g.kind === 'corpus' ? 'Corpus-wide'
+                : g.kind === 'prior' ? 'Derived from another prior'
+                : 'Scope not declared',
+              count: String(items.length),
+              onCount: `${enabledCount}/${items.length} on`,
+              expanded: !!S.priorGenreOpen[key],
+              chevronClass: S.priorGenreOpen[key] ? 'ph ph-caret-down' : 'ph ph-caret-right',
+              toggle: () => this.togglePriorGenre(key),
+              // Bucket switch is a master toggle over every item in the group:
+              // off only when the whole bucket is off, and clicking it flips
+              // every item to the opposite of that — so a mixed bucket's first
+              // click always turns everything ON rather than guessing which
+              // half the user meant to flip.
+              bucketSwitchBg: allDisabled ? '#E0DACE' : '#1F5A4C',
+              bucketKnobLeft: allDisabled ? '2px' : '13px',
+              toggleBucket: (e) => { e.stopPropagation(); this.setPriorsEnabled(items.map(it => it.id), allDisabled); },
+              items,
+            };
+          });
       })(),
       noPriors: !(S._priors || []).length,
       priorsMessage: S._priorsError
@@ -3601,7 +4681,29 @@ class Component extends DCLogic {
       logCount: filteredLog.length === S.log.length
         ? `${S.log.length} events`
         : `${filteredLog.length} of ${S.log.length} events`,
-      categoryChips
+      categoryChips,
+      // Projects
+      showingProjects: S.view === 'projects',
+      notShowingProjects: S.view !== 'projects',
+      noProjects: !S.projects.length,
+      projectCount: S.projects.length,
+      newProject: () => this.setState({ modal: { title: 'New project', label: 'Project name', placeholder: 'e.g. Research Notes', initialValue: '', submitLabel: 'Create project', onSubmit: (v) => this.createProject(v) }, modalValue: '' }),
+      goToApp: () => this.goToProjects(),
+      goToProjects: () => this.goToProjects(),
+      activeProject: !!S.activeProjectId,
+      activeProjectName: (S.projects.find(p => p.id === S.activeProjectId) || {}).name || 'No project',
+      projectList: S.projects.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description || '',
+        sourceCount: p.sourceCount || 0,
+        conversationCount: p.conversationCount || 0,
+        active: p.id === S.activeProjectId,
+        bg: p.id === S.activeProjectId ? '#F2EFE8' : 'transparent',
+        marker: p.id === S.activeProjectId ? '●' : '○',
+        select: () => this.switchProject(p.id),
+        delete: (e) => { e.stopPropagation(); this.deleteProject(p.id); },
+      })),
     };
   }
 }
