@@ -16,6 +16,8 @@
 // Depends on nothing in proxy.js, so proxy.js can import this without a cycle.
 
 import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
+import { describeStopReason, streamAnthropicChat, describeApiError } from "./anthropic-provider.js";
+import { normalizeOllamaUsage, summarizeUsage } from "./token-tally.js";
 
 const HISTORY_TURNS = 6;
 
@@ -61,11 +63,14 @@ function resolveCitationBrackets(text, citations) {
  * @param {(messages: object[]) => string} deps.heuristicModel - cold-start model choice, latency/shape based (not EO/keyword classification)
  * @param {number} deps.latencyBudgetMs
  * @param {() => boolean} deps.isWarming - true while the corpus is still ingesting at boot
+ * @param {import('./settings-store.js').SettingsStore} [deps.settings] - which model answers, and the key for it. Omitted ⇒ local only.
+ * @param {typeof streamAnthropicChat} [deps.anthropicStream] - injected in tests
  */
 export function createTurnController(deps) {
   const {
     conversationStore, groundQuery, target, numCtx,
     modelRouter, heuristicModel, latencyBudgetMs, isWarming,
+    settings = null, anthropicStream = streamAnthropicChat,
   } = deps;
 
   // One in-flight generation per (conversation, turn) at a time — stop/regenerate
@@ -118,7 +123,17 @@ export function createTurnController(deps) {
     return out;
   }
 
-  async function callModelStreaming(messages, { signal, onDelta }) {
+  // ── The talker, one call, either provider ────────────────────────────────
+  //
+  // Both branches return the same shape — { text, model, usage, provider,
+  // stopReason, stopDetails } — so everything downstream (citation checking,
+  // fidelity, persistence, events) is provider-blind, exactly as it was when
+  // there was only one provider. The differences that DO matter to the reader
+  // (which model answered, what it cost, whether the answer was cut short)
+  // travel as data rather than as branches in the pipeline.
+
+  /** The local Ollama path — unchanged, except that it now keeps the counts. */
+  async function callOllamaStreaming(messages, { signal, onDelta, onUsage }) {
     let model, routerCtx;
     if (modelRouter) {
       ({ model, ctx: routerCtx } = modelRouter.pick(messages));
@@ -142,7 +157,7 @@ export function createTurnController(deps) {
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
-    let buf = "", text = "";
+    let buf = "", text = "", usage = null;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -155,6 +170,12 @@ export function createTurnController(deps) {
         let j;
         try { j = JSON.parse(t); } catch { continue; }
         if (j.error) throw new Error(`Ollama: ${j.error}`);
+        // Ollama reports its counts once, on the final chunk. A stream cut
+        // short by a stop therefore has none — which is why this is null
+        // rather than zero on that path: nothing was measured, and saying
+        // "0 tokens" would be a measurement.
+        const chunkUsage = normalizeOllamaUsage(j);
+        if (chunkUsage) { usage = chunkUsage; if (onUsage) onUsage(usage, model); }
         const delta = j.message?.content || "";
         if (delta) { text += delta; onDelta(delta, text); }
       }
@@ -164,7 +185,75 @@ export function createTurnController(deps) {
       const outcome = elapsedMs > latencyBudgetMs ? "failure" : "success";
       try { await modelRouter.reveal(routerCtx, outcome); } catch { /* best-effort */ }
     }
-    return { text, model };
+    return { text, model, usage, provider: "local", stopReason: null, stopDetails: null };
+  }
+
+  /**
+   * Route the turn to whichever provider the reader has configured.
+   *
+   * A configured-but-unusable provider (Anthropic selected, key removed) does
+   * not fail the turn: it answers locally and returns the reason, which the
+   * caller reports as a gap. Refusing to answer would be worse than answering
+   * with the other model — but answering with the other model SILENTLY would
+   * be worse than both.
+   */
+  async function callModelStreaming(messages, { signal, onDelta, onThinking, onUsage }) {
+    const { provider, fallbackReason } = settings
+      ? settings.effectiveProvider()
+      : { provider: "local", fallbackReason: null };
+
+    if (provider !== "anthropic") {
+      const result = await callOllamaStreaming(messages, { signal, onDelta, onUsage });
+      return { ...result, fallbackReason };
+    }
+
+    const model = settings.anthropicModel();
+    try {
+      const result = await anthropicStream({
+        apiKey: settings.anthropicKey(),
+        model,
+        messages,
+        signal,
+        onDelta,
+        onThinking,
+        onUsage: (usage) => { if (onUsage) onUsage(usage, model); },
+      });
+      return { ...result, provider: "anthropic", fallbackReason: null };
+    } catch (err) {
+      if (err?.name === "AbortError" || err?.name === "APIUserAbortError") throw err;
+      // An API error is this host's failure to reach the model the reader
+      // chose, not a fact about their sources — say which, in the message the
+      // failure surfaces with, rather than letting a raw SDK error through.
+      throw new Error(describeApiError(err));
+    }
+  }
+
+  /**
+   * Write this call's token tally to the record and tell the client.
+   *
+   * Called on every exit from a turn — completed, stopped, failed — because
+   * all three can have spent tokens, and a tally that only counted clean
+   * completions would be a tally of the good days. Never throws: a bookkeeping
+   * failure must not turn a delivered answer into an error.
+   */
+  async function persistUsage({ conv, turn, answerId, controller, model, sendEvent }) {
+    const usage = controller._usage;
+    if (!usage) return null;
+    const usageModel = controller._usageModel || model || null;
+    try {
+      const conversationUsage = await conversationStore.recordUsage(
+        conv.id, turn.id, answerId, usage, usageModel,
+      );
+      sendEvent("usage", {
+        turnId: turn.id, answerId,
+        answer: summarizeUsage(usage, usageModel),
+        conversation: conversationUsage,
+      });
+      return conversationUsage;
+    } catch (err) {
+      console.error(`[turn-controller] could not record usage for ${conv.id}/${answerId}: ${err.message}`);
+      return null;
+    }
   }
 
   // The core pipeline shared by a fresh turn and a regenerate — both already
@@ -231,9 +320,34 @@ export function createTurnController(deps) {
       const messages = [systemMsg, ...history, { role: "user", content: question }];
 
       let sawStart = false;
-      const { text: rawText, model } = await callModelStreaming(messages, {
+      // Held on the controller so the stop path can persist the tokens the
+      // reader actually spent before they pressed stop — a stopped turn is
+      // still a billed turn, and a tally that quietly forgot it would drift
+      // below the real bill exactly when someone is watching the number.
+      controller._usage = null;
+      controller._usageModel = null;
+      let thinkingBuf = "";
+      const flushThinking = () => {
+        if (!thinkingBuf.trim()) { thinkingBuf = ""; return; }
+        sendEvent("thinking_delta", { turnId: turn.id, answerId, text: thinkingBuf.trim() });
+        thinkingBuf = "";
+      };
+
+      const { text: rawText, model, stopReason, stopDetails, provider, fallbackReason } = await callModelStreaming(messages, {
         signal: controller.signal,
+        onUsage: (usage, usageModel) => {
+          controller._usage = usage;
+          controller._usageModel = usageModel || controller._usageModel;
+        },
+        // Summarized reasoning, batched into readable fragments rather than
+        // per-token: this feeds an activity log, not a transcript, and one
+        // SSE frame per token would cost more than the signal is worth.
+        onThinking: (delta) => {
+          thinkingBuf += delta;
+          if (thinkingBuf.length > 160 || /[.!?]\s$|\n/.test(thinkingBuf)) flushThinking();
+        },
         onDelta: (delta, text) => {
+          flushThinking();
           // Captured on the controller itself so a stop mid-stream can persist
           // exactly what the reader already saw, not an empty answer.
           controller._partialText = text;
@@ -260,6 +374,15 @@ export function createTurnController(deps) {
       for (const u of fidelity.unverified) {
         gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited passage." });
       }
+      // An answer cut off at the output ceiling, or declined outright, is a
+      // fact about the answer the reader must be told (LAWS.md L3) — not
+      // something to leave looking like a complete reply that happens to end
+      // abruptly.
+      const stopGap = describeStopReason(stopReason, stopDetails);
+      if (stopGap) gaps.push(stopGap);
+      // Likewise a provider downgrade: answered locally when a hosted model
+      // was selected is a different answer than the one that was asked for.
+      if (fallbackReason) gaps.push({ type: "provider_fallback", reason: fallbackReason });
       for (const g of groundResult.gaps || []) gaps.push(g);
       if (!groundResult.context) {
         gaps.push({
@@ -272,27 +395,33 @@ export function createTurnController(deps) {
       for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-        text: finalText, model, citations: brackets, gaps,
+        text: finalText, model, provider, citations: brackets, gaps,
         fidelity, status: "completed", completedAt: new Date().toISOString(),
       });
+      await persistUsage({ conv, turn, answerId, controller, model, sendEvent });
       sendEvent("completed", {
         turnId: turn.id, answerId, status: "completed", text: finalText,
-        citations: brackets, gaps, model,
+        citations: brackets, gaps, model, provider,
         summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
       });
     } catch (err) {
-      if (err.name === "AbortError") {
+      if (err.name === "AbortError" || err.name === "APIUserAbortError") {
         // Whatever streamed before the stop is a valid, honest partial turn —
         // not an error. Persist and report it as interrupted, not failed.
         const partial = controller._partialText || "";
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           text: partial, status: "interrupted", completedAt: new Date().toISOString(),
         }).catch(() => {});
+        // Tokens spent before the stop were still spent.
+        await persistUsage({ conv, turn, answerId, controller, model: controller._usageModel, sendEvent });
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           status: "failed", completedAt: new Date().toISOString(), error: err.message,
         }).catch(() => {});
+        // A call that died mid-stream may already have been billed for what
+        // it produced; tally it before reporting the failure.
+        await persistUsage({ conv, turn, answerId, controller, model: controller._usageModel, sendEvent });
         sendEvent("failed", { turnId: turn.id, answerId, message: err.message });
       }
     } finally {

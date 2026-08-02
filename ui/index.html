@@ -83,6 +83,13 @@
       </sc-if>
     </div>
     <div style="display:flex; align-items:center; gap:12px;">
+      <sc-if value="{{ hasUsageTotal }}">
+        <span title="{{ usageTotalTitle }}" style="display:flex; align-items:center; gap:5px; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#8C877C; letter-spacing:.02em;"><i class="ph ph-coin" style="font-size:12px;"></i>{{ usageTotalLabel }}</span>
+      </sc-if>
+      <button type="button" aria-label="Model settings" onClick="{{ openSettings }}" title="{{ providerButtonTitle }}" style="display:flex; align-items:center; gap:6px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; padding:5px 10px; cursor:pointer; font-family:inherit;">
+        <i class="ph ph-gear-six" style="font-size:12px; color:#8C877C;"></i>
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#4A463E;">{{ providerButtonLabel }}</span>
+      </button>
       <sc-if value="{{ proxyLive }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91; letter-spacing:.04em;">{{ proxyStatusText }}</span>
       </sc-if>
@@ -308,6 +315,9 @@
                     </sc-if>
                     <sc-if value="{{ turn.hasRaw }}">
                       <button type="button" onClick="{{ turn.toggleRaw }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.rawColor }}; cursor:pointer; padding:0;"><i class="{{ turn.rawChevron }}"></i>raw</button>
+                    </sc-if>
+                    <sc-if value="{{ turn.hasUsage }}">
+                      <span title="{{ turn.usageTitle }}" style="display:flex; align-items:center; gap:5px; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;"><i class="ph ph-coin"></i>{{ turn.usageLabel }}</span>
                     </sc-if>
                     <button type="button" aria-label="Fork" onClick="{{ turn.fork }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-git-fork"></i>fork</button>
                     <sc-if value="{{ turn.canRegenerate }}">
@@ -851,6 +861,81 @@
     </div>
   </div>
   </sc-if>
+
+  <sc-if value="{{ settingsOpen }}">
+  <div onClick="{{ closeSettingsPanel }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:12vh 24px 24px; z-index:60;">
+    <div onClick="{{ stopModalClick }}" class="eo-fade-in" style="width:100%; max-width:460px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 18px 16px; display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#8C877C;">Model &amp; usage</span>
+        <button type="button" aria-label="Close" onClick="{{ closeSettingsPanel }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Answering with</span>
+        <div style="display:flex; gap:8px;">
+          <button type="button" onClick="{{ selectLocalProvider }}" style="flex:1; border:1px solid {{ localProviderBorder }}; background:{{ localProviderBg }}; border-radius:9px; padding:9px 11px; font-family:inherit; font-size:12.5px; color:{{ localProviderColor }}; cursor:pointer; text-align:left;">
+            <div style="font-weight:500;">Local model</div>
+            <div style="font-size:11px; color:#A39D91; margin-top:2px;">Runs on this machine · free</div>
+          </button>
+          <button type="button" onClick="{{ selectAnthropicProvider }}" style="flex:1; border:1px solid {{ anthropicProviderBorder }}; background:{{ anthropicProviderBg }}; border-radius:9px; padding:9px 11px; font-family:inherit; font-size:12.5px; color:{{ anthropicProviderColor }}; cursor:{{ anthropicProviderCursor }}; text-align:left;">
+            <div style="font-weight:500;">Anthropic (Claude)</div>
+            <div style="font-size:11px; color:#A39D91; margin-top:2px;">{{ anthropicProviderHint }}</div>
+          </button>
+        </div>
+        <sc-if value="{{ settingsFallbackNote }}">
+          <span style="font-size:11.5px; color:#A3592B; line-height:1.5;">{{ settingsFallbackNote }}</span>
+        </sc-if>
+      </div>
+
+      <sc-if value="{{ hasAnthropicKey }}">
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Model</span>
+          <select onChange="{{ onAnthropicModelChange }}" value="{{ anthropicModelValue }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:8px 10px; font-family:inherit; font-size:13px; color:#1B1A17; outline:none;">
+            <sc-for list="{{ anthropicModelOptions }}" as="opt">
+              <option value="{{ opt.id }}">{{ opt.label }}</option>
+            </sc-for>
+          </select>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; background:#FAF8F4; border:1px solid #EBE6DC; border-radius:9px;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#4A463E;">Key {{ anthropicKeyHint }} ({{ anthropicKeySourceLabel }})</span>
+            <sc-if value="{{ anthropicKeyRemovable }}">
+              <button type="button" onClick="{{ removeAnthropicKey }}" style="border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A3592B; cursor:pointer; padding:0;">remove</button>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ showAnthropicKeyForm }}">
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ anthropicKeyFormLabel }}</span>
+          <input type="password" placeholder="sk-ant-…" value="{{ settingsKeyInput }}" onChange="{{ onSettingsKeyInput }}" onKeyDown="{{ onSettingsKeyKey }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:inherit; font-size:13.5px; color:#1B1A17; outline:none;" />
+          <span style="font-size:11.5px; color:#A39D91; line-height:1.5;">Stored on this machine only, never shown again after saving. Get a key at console.anthropic.com.</span>
+          <sc-if value="{{ settingsError }}">
+            <span style="font-size:11.5px; color:#A3592B; line-height:1.5;">{{ settingsError }}</span>
+          </sc-if>
+          <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px;">
+            <button type="button" onClick="{{ saveAnthropicKey }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:{{ settingsSaveCursor }};">{{ settingsSaveLabel }}</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ hasUsageBreakdown }}">
+        <div style="display:flex; flex-direction:column; gap:6px; padding-top:4px; border-top:1px solid #EBE6DC;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91; padding-top:8px;">Usage across all conversations</span>
+          <sc-for list="{{ usageBreakdownRows }}" as="row">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#4A463E;">{{ row.model }}</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#8C877C;">{{ row.label }}</span>
+            </div>
+          </sc-for>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding-top:4px; border-top:1px solid #EBE6DC; margin-top:2px;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#1B1A17; font-weight:500;">Total</span>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#1B1A17; font-weight:500;">{{ usageTotalRowLabel }}</span>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+  </sc-if>
 </div>
 </div>
 </x-dc>
@@ -935,6 +1020,14 @@ class Component extends DCLogic {
     folds: {}, outlines: {}, foldPending: {},
     _recycleBin: [],
     recycleBinOpen: false,
+    // Which model answers, and the running token tally — server-owned state,
+    // mirrored here from GET /api/settings and GET /api/usage plus the
+    // `usage` SSE event each turn emits. `settings: null` means "not fetched
+    // yet", not "no key" — the panel must not flash a false "no key" state
+    // while the real answer is still in flight.
+    settings: null, settingsOpen: false, settingsSaving: false, settingsError: null,
+    settingsKeyInput: '', settingsVerified: null,
+    usageTotal: null,
   };
 
   proxyUrl() { return this.props.proxyUrl || 'http://localhost:11435'; }
@@ -947,6 +1040,8 @@ class Component extends DCLogic {
     this.fetchSources();
     this.fetchPriors();
     this.fetchRecycleBin();
+    this.fetchSettings();
+    this.fetchUsageTotal();
     // Escape closes the dialog from anywhere inside it, not just while the
     // input holds focus.
     this._onWindowKeyDown = (e) => { if (e.key === 'Escape' && this.state.modal) this.closeModal(); };
@@ -1041,6 +1136,93 @@ class Component extends DCLogic {
     });
   }
 
+  // ── Settings: which model answers, and the key that reaches it ──────────
+  //
+  // The panel reads exactly what the server is willing to say about the key
+  // — a hint, never the key itself (see server/settings-store.js). Nothing
+  // here ever holds the full key in state longer than the single input box
+  // the reader is typing into.
+
+  async fetchSettings() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/settings', { signal: AbortSignal.timeout(5000) });
+      if (res.ok) this.setState({ settings: await res.json() });
+    } catch {}
+  }
+
+  openSettings() { this.setState({ settingsOpen: true, settingsError: null, settingsVerified: null, settingsKeyInput: '' }); }
+  closeSettingsPanel() { this.setState({ settingsOpen: false, settingsSaving: false, settingsError: null, settingsKeyInput: '' }); }
+
+  async saveAnthropicKey() {
+    if (this.state.settingsSaving) return;
+    const key = (this.state.settingsKeyInput || '').trim();
+    if (!key) return;
+    this.setState({ settingsSaving: true, settingsError: null });
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/settings/anthropic-key', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        this.setState({ settingsSaving: false, settingsError: data.error || 'Could not verify that key.' });
+        return;
+      }
+      this.setState({ settings: data, settingsSaving: false, settingsKeyInput: '', settingsVerified: true });
+      this.logAdd('⋈', `Anthropic API key added (${data.anthropic.keyHint}) — now answering with ${data.anthropic.model}`, 'chat');
+    } catch (err) {
+      this.setState({ settingsSaving: false, settingsError: 'Could not reach the proxy — ' + err.message });
+    }
+  }
+
+  async removeAnthropicKey() {
+    this.setState({ settingsSaving: true, settingsError: null });
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/settings/anthropic-key', { method: 'DELETE' });
+      const data = await res.json();
+      this.setState({ settings: data, settingsSaving: false, settingsVerified: null });
+      this.logAdd('○', 'Anthropic API key removed', 'chat');
+    } catch (err) {
+      this.setState({ settingsSaving: false, settingsError: 'Could not reach the proxy — ' + err.message });
+    }
+  }
+
+  async setProvider(provider) {
+    this.setState({ settingsSaving: true, settingsError: null });
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/settings', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      });
+      const data = await res.json();
+      if (!res.ok) { this.setState({ settingsSaving: false, settingsError: data.error }); return; }
+      this.setState({ settings: data, settingsSaving: false });
+    } catch (err) {
+      this.setState({ settingsSaving: false, settingsError: 'Could not reach the proxy — ' + err.message });
+    }
+  }
+
+  async setAnthropicModel(model) {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/settings', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ anthropicModel: model }),
+      });
+      if (res.ok) this.setState({ settings: await res.json() });
+    } catch {}
+  }
+
+  // Refreshed on boot and after every completed turn (see the `usage` SSE
+  // event in askConversation) rather than polled — the number only ever
+  // changes because a turn just finished, so there is no reason to guess at
+  // an interval.
+  async fetchUsageTotal() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/usage', { signal: AbortSignal.timeout(5000) });
+      if (res.ok) this.setState({ usageTotal: (await res.json()).total });
+    } catch {}
+  }
+
   async fetchRecycleBin() {
     try {
       const res = await fetch(this.proxyUrl() + '/api/recycle-bin', { signal: AbortSignal.timeout(5000) });
@@ -1122,6 +1304,32 @@ class Component extends DCLogic {
   }
 
   _baseName(name) { return String(name || '').replace(/^.*[/\\]/, ''); }
+
+  // "12.4k" / "812" — mirrors server/token-tally.js formatTokens() so a
+  // number never reads differently in the header chip than in the tooltip
+  // that quotes the same underlying count.
+  _formatTokenCount(count) {
+    const v = Number(count) || 0;
+    if (v < 1000) return String(v);
+    if (v < 1_000_000) return `${(v / 1000).toFixed(v < 10000 ? 1 : 0)}k`;
+    return `${(v / 1_000_000).toFixed(2)}M`;
+  }
+
+  // "$0.0031" for a real estimate, "free" for a local model, "" when this
+  // host has no price for the model that answered — never "$0.00" for
+  // "unknown", which would read as a claim this host cannot make.
+  _formatCost(usage) {
+    if (!usage) return '';
+    if (usage.costUsd === null || usage.costUsd === undefined) return '';
+    if (usage.costUsd === 0) return 'free';
+    return usage.costUsd < 0.01 ? `$${usage.costUsd.toFixed(4)}` : `$${usage.costUsd.toFixed(2)}`;
+  }
+
+  _usageChipLabel(usage) {
+    if (!usage || !usage.totalTokens) return '';
+    const cost = this._formatCost(usage);
+    return `${this._formatTokenCount(usage.totalTokens)} tok${cost ? ' · ' + cost : ''}`;
+  }
 
   // The rail lists everything a question can be answered FROM, not just what
   // this room attached. The engine's corpus (texts the proxy auto-ingests at
@@ -1644,6 +1852,16 @@ class Component extends DCLogic {
           if (type === 'gap') {
             this.logAdd('⊘', `Gap: ${data.reason || data.type}`, 'sources');
           }
+          if (type === 'thinking_delta') {
+            this.setState(s => ({ thinkingLog: s.thinkingLog.concat([{ glyph: '◔', text: data.text }]) }));
+          }
+          if (type === 'usage') {
+            // The bill for THIS answer, and the running total for the whole
+            // conversation — both arrive already priced (or honestly null if
+            // this host can't price the model), never recomputed client-side.
+            patchTurn({ usage: data.answer });
+            this.setState({ usageTotal: data.conversation });
+          }
           if (type === 'failed') {
             throw new Error(data.message || 'turn failed');
           }
@@ -1652,7 +1870,7 @@ class Component extends DCLogic {
             const retrieval = grounding ? this._retrievalSummary(grounding, resolved) : null;
             patchTurn({
               a: data.text, citations: citations.length ? citations.slice() : null,
-              model: data.model, retrieval, answerStatus: data.status,
+              model: data.model, provider: data.provider, retrieval, answerStatus: data.status,
               trace: this._answerTrace({ grounding, gaps: data.gaps, model: data.model }),
             });
             if (retrieval) {
@@ -1661,7 +1879,7 @@ class Component extends DCLogic {
               }));
               this.logAdd('⋈', `${retrieval.summary}`, 'sources');
             }
-            this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null, thinkingLog: [] });
+            this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
           }
 
           const phase = this._phaseForEvent(type, data);
@@ -1719,11 +1937,15 @@ class Component extends DCLogic {
             citations = citations.filter(c => c.num !== data.num).concat([this._clientCitation(data, grounding)]);
             patchTurn({ citations: citations.slice() });
           }
+          if (type === 'usage') {
+            patchTurn({ usage: data.answer });
+            this.setState({ usageTotal: data.conversation });
+          }
           if (type === 'failed') throw new Error(data.message || 'regenerate failed');
           if (type === 'completed') {
             const resolved = citations.filter(c => c.resolved);
             const retrieval = grounding ? this._retrievalSummary(grounding, resolved) : null;
-            patchTurn({ a: data.text, citations: citations.length ? citations.slice() : null, model: data.model, retrieval, answerStatus: data.status });
+            patchTurn({ a: data.text, citations: citations.length ? citations.slice() : null, model: data.model, provider: data.provider, retrieval, answerStatus: data.status });
             this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
           }
           const phase = this._phaseForEvent(type, data);
@@ -2455,6 +2677,77 @@ class Component extends DCLogic {
   //   0 answer prose · 1 citation pills · 2 passages · 3 trace · 4 raw prompt
   // A level with no evidence shows no control, so an empty panel is never a
   // thing you can open.
+  // Everything the settings panel and the header chip render from —
+  // computed once per render, same pattern as turnVals(), so the template
+  // only ever reads flat strings/booleans and never branches on raw server
+  // shape itself.
+  settingsVals() {
+    const s = this.state.settings; // null until fetchSettings() resolves
+    const a = s ? s.anthropic : null;
+    const providerIsAnthropic = s ? s.effectiveProvider === 'anthropic' : false;
+    const total = this.state.usageTotal;
+
+    const usageBreakdownRows = (total && total.byModel || [])
+      .filter(m => m.totalTokens > 0)
+      .map(m => ({
+        model: m.model,
+        label: `${this._formatTokenCount(m.totalTokens)} tok${m.costUsd ? ' · ' + this._formatCost(m) : ''}`,
+      }));
+
+    return {
+      openSettings: () => this.openSettings(),
+      closeSettingsPanel: () => this.closeSettingsPanel(),
+      settingsOpen: this.state.settingsOpen,
+
+      hasUsageTotal: !!(total && total.totalTokens > 0),
+      usageTotalLabel: total ? `${this._formatTokenCount(total.totalTokens)} tok${total.costUsd ? ' · ' + this._formatCost(total) : ''}` : '',
+      usageTotalTitle: total ? `${total.inputTokens} in · ${total.outputTokens} out across every conversation${total.pricedAt ? ' · priced as of ' + total.pricedAt : ''}` : '',
+      providerButtonLabel: s ? (providerIsAnthropic ? a.model : 'local model') : '…',
+      providerButtonTitle: s && s.fallbackReason ? s.fallbackReason : 'Choose which model answers your questions',
+
+      localProviderBorder: !providerIsAnthropic ? '#1F5A4C' : '#E0DACE',
+      localProviderBg: !providerIsAnthropic ? '#E5EDE9' : '#FFFDFA',
+      localProviderColor: !providerIsAnthropic ? '#1F5A4C' : '#4A463E',
+      selectLocalProvider: () => this.setProvider('local'),
+
+      anthropicProviderBorder: providerIsAnthropic ? '#1F5A4C' : '#E0DACE',
+      anthropicProviderBg: providerIsAnthropic ? '#E5EDE9' : '#FFFDFA',
+      anthropicProviderColor: providerIsAnthropic ? '#1F5A4C' : (a && a.hasKey ? '#4A463E' : '#A39D91'),
+      anthropicProviderCursor: a && a.hasKey ? 'pointer' : 'default',
+      anthropicProviderHint: a && a.hasKey ? `Hosted · ${a.model}` : 'Add an API key below to enable',
+      selectAnthropicProvider: () => { if (a && a.hasKey) this.setProvider('anthropic'); },
+
+      settingsFallbackNote: s && s.fallbackReason ? s.fallbackReason : '',
+
+      hasAnthropicKey: !!(a && a.hasKey),
+      anthropicKeyHint: a ? a.keyHint : '',
+      anthropicKeySourceLabel: a && a.keySource === 'env' ? 'from environment' : 'saved here',
+      anthropicKeyRemovable: !!(a && a.keyRemovable),
+      removeAnthropicKey: () => this.removeAnthropicKey(),
+      anthropicModelValue: a ? a.model : '',
+      anthropicModelOptions: a ? a.models : [],
+      onAnthropicModelChange: (e) => this.setAnthropicModel(e.target.value),
+
+      // The key-entry form stays visible even after a key exists, so a
+      // reader can rotate a leaked or expired key without removing the old
+      // one first — "add a new key" always replaces, never appends.
+      showAnthropicKeyForm: !!s,
+      anthropicKeyFormLabel: a && a.hasKey ? 'Replace API key' : 'Anthropic API key',
+      settingsKeyInput: this.state.settingsKeyInput,
+      onSettingsKeyInput: (e) => this.setState({ settingsKeyInput: e.target.value, settingsError: null }),
+      onSettingsKeyKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); this.saveAnthropicKey(); } },
+      settingsError: this.state.settingsError,
+      settingsSaving: this.state.settingsSaving,
+      settingsSaveCursor: this.state.settingsSaving ? 'default' : 'pointer',
+      settingsSaveLabel: this.state.settingsSaving ? 'Verifying…' : 'Save key',
+      saveAnthropicKey: () => this.saveAnthropicKey(),
+
+      hasUsageBreakdown: usageBreakdownRows.length > 0,
+      usageBreakdownRows,
+      usageTotalRowLabel: total ? `${this._formatTokenCount(total.totalTokens)} tok${total.costUsd !== null ? ' · ' + this._formatCost(total) : (total.totalTokens ? ' · cost unknown' : '')}` : '',
+    };
+  }
+
   turnVals(turn, i) {
     const panels = this.state.turnPanels[turn.id] || {};
     const cits = turn.citations || [];
@@ -2624,6 +2917,13 @@ class Component extends DCLogic {
       traceColor: panels.trace ? '#1F5A4C' : '#8C877C',
       traceLabel: `trace (${trace.length})`,
       traceHeading: turn.model ? `retrieval + verification · ${turn.model}` : 'retrieval + verification',
+      hasUsage: !!(turn.usage && turn.usage.totalTokens > 0),
+      usageLabel: this._usageChipLabel(turn.usage),
+      usageTitle: turn.usage
+        ? `${turn.usage.inputTokens} in · ${turn.usage.outputTokens} out`
+          + (turn.usage.cacheReadInputTokens ? ` · ${turn.usage.cacheReadInputTokens} cached` : '')
+          + (turn.usage.pricedAt ? ` · priced as of ${turn.usage.pricedAt}` : '')
+        : '',
       traceRows: trace.map(t => ({
         glyph: t.kind === 'call' ? '→' : (t.kind === 'gap' ? '⊘' : (t.kind === 'ground' ? '⋈' : '←')),
         color: t.kind === 'call' ? '#1F5A4C' : (t.kind === 'gap' ? '#A3592B' : (t.kind === 'ground' ? '#1F5A4C' : '#A39D91')),
@@ -3114,6 +3414,7 @@ class Component extends DCLogic {
       submitModal: () => this.submitModal(),
       closeModal: () => this.closeModal(),
       stopModalClick: (e) => e.stopPropagation(),
+      ...this.settingsVals(),
       // Newest first, same convention webHistoryRows renders with. `source`
       // can be a comma-joined set (a turn citing more than one document at
       // once) — the row opens the first of them, best-effort, matching how a

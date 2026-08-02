@@ -12,10 +12,12 @@
     "test:affordances": "node scripts/test-affordances.mjs",
     "test:conversation-store": "node scripts/test-conversation-store.mjs",
     "test:turn-controller": "node scripts/test-turn-controller.mjs",
+    "test:token-tally": "node scripts/test-token-tally.mjs",
     "check:laws": "node scripts/check-laws.mjs",
     "postinstall": "git submodule update --init --recursive || true"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "@eoreader/engine": "file:../eoreader6/packages/engine",
     "@eoreader/host": "file:../eoreader6/packages/host",
     "@eoreader/spec": "file:../eoreader6/packages/spec"

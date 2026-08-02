@@ -55,6 +55,9 @@ import * as priorsSource from "./priors-source.js";
 import { HolonicTask } from "./holonic-task.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
 import { createTurnController } from "./turn-controller.js";
+import { settingsStore } from "./settings-store.js";
+import { verifyAnthropicKey } from "./anthropic-provider.js";
+import { addUsage, rollUpUsage } from "./token-tally.js";
 import { runSessionMessage } from "./code-longform-session.js";
 
 // ── CLI args with validation ──
@@ -156,6 +159,13 @@ try {
 // ── Conversations — the new conversational surface's durable state + turn coordinator ──
 
 const conversationStore = new ConversationStore();
+
+// Read before the first request rather than lazily: whether a turn goes to a
+// local model or to Anthropic is decided per turn, and a settings file that
+// had not finished loading would answer the first question of a session with
+// the wrong model and no way to tell.
+settingsStore.loadSync();
+
 const turnController = createTurnController({
   conversationStore,
   groundQuery: engineGroundQuery,
@@ -165,6 +175,7 @@ const turnController = createTurnController({
   heuristicModel: selectModel,
   latencyBudgetMs: LATENCY_BUDGET_MS,
   isWarming: () => corpusWarmup.started && !corpusWarmup.ready,
+  settings: settingsStore,
 });
 
 // ── Retry helper ──
@@ -2744,7 +2755,10 @@ const server = http.createServer((req, res) => {
 
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  // PATCH and DELETE are advertised because this server already answers both
+  // (conversations, recycle bin, settings) — a preflight that omitted them
+  // failed those requests in the browser for no reason.
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") { res.writeHead(200); res.end(); return; }
@@ -2774,6 +2788,103 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/v1/router") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(modelRouter ? modelRouter.describe() : { error: "model-router unavailable" }));
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Settings — which model answers, and the key that makes it reachable
+  //
+  // The key crosses this boundary exactly once, inbound. Every response here
+  // carries a hint ("sk-ant-…4f2a") and never the secret, so no client can
+  // display, log, or re-transmit it (see settings-store.js).
+  // ══════════════════════════════════════════════════════════════
+  if (req.url === "/api/settings" || req.url.startsWith("/api/settings/")) {
+    const readJson = () => new Promise((resolve, reject) => {
+      let body = "", size = 0;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > MAX_BODY) { req.destroy(new Error("Request body too large")); reject(new Error("body too large")); return; }
+        body += c.toString("utf8");
+      });
+      req.on("end", () => {
+        if (!body.trim()) return resolve({});
+        try { resolve(JSON.parse(body)); } catch (err) { reject(err); }
+      });
+      req.on("error", reject);
+    });
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+    (async () => {
+      try {
+        if (req.method === "GET" && req.url === "/api/settings") {
+          return sendJson(200, settingsStore.publicView());
+        }
+
+        // Add (or replace) the Anthropic key. The key is checked against the
+        // real API before it is stored: a typo becomes an error here, in the
+        // dialog where it can be fixed, instead of a 401 three seconds into
+        // someone's next question. `verify: false` stores it unchecked, for
+        // an offline machine that will reach the API later.
+        if (req.method === "POST" && req.url === "/api/settings/anthropic-key") {
+          const data = await readJson();
+          const key = String(data.key || "").trim();
+          if (!key) return sendJson(400, { error: "An API key is required." });
+          if (data.verify !== false) {
+            const check = await verifyAnthropicKey({ apiKey: key, model: data.model || settingsStore.anthropicModel() });
+            if (!check.ok) return sendJson(400, { error: check.error, verified: false });
+          }
+          const view = await settingsStore.setAnthropicKey(key);
+          if (data.model) await settingsStore.setAnthropicModel(data.model);
+          console.error(`[settings] Anthropic key set (${view.anthropic.keyHint}), provider=anthropic model=${settingsStore.anthropicModel()}`);
+          return sendJson(200, { ...settingsStore.publicView(), verified: data.verify !== false });
+        }
+
+        if (req.method === "DELETE" && req.url === "/api/settings/anthropic-key") {
+          const view = await settingsStore.clearAnthropicKey();
+          console.error(`[settings] Anthropic key cleared, provider=${view.provider}`);
+          return sendJson(200, view);
+        }
+
+        if (req.method === "PATCH" && req.url === "/api/settings") {
+          const data = await readJson();
+          if (data.provider !== undefined) await settingsStore.setProvider(data.provider);
+          if (data.anthropicModel !== undefined) await settingsStore.setAnthropicModel(data.anthropicModel);
+          return sendJson(200, settingsStore.publicView());
+        }
+
+        return sendJson(404, { error: "no such settings route" });
+      } catch (err) {
+        sendJson(400, { error: err.message });
+      }
+    })();
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Token usage — the running tally, per conversation and in total
+  // ══════════════════════════════════════════════════════════════
+  if (req.method === "GET" && req.url.startsWith("/api/usage")) {
+    (async () => {
+      try {
+        const conversations = await conversationStore.list();
+        const byModel = {};
+        for (const conv of conversations) {
+          for (const m of conv.usage?.byModel || []) {
+            byModel[m.model] = addUsage(byModel[m.model], m);
+          }
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          total: rollUpUsage(byModel),
+          conversations: conversations.map((c) => ({
+            id: c.id, title: c.title, turnCount: c.turnCount, usage: c.usage,
+          })),
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    })();
     return;
   }
 
@@ -4001,6 +4112,10 @@ async function start() {
   server.listen(PORT, () => {
     console.error(`[proxy] Ready on port ${PORT} (target: ${TARGET}, store: ${store.size}/${STORE_MAX})`);
     console.error(`[proxy] Tool calling: ${Object.keys(toolHandlers).length} tools loaded`);
+    const view = settingsStore.publicView();
+    console.error(view.effectiveProvider === "anthropic"
+      ? `[proxy] Talker: Anthropic ${view.anthropic.model} (key ${view.anthropic.keyHint} from ${view.anthropic.keySource})`
+      : `[proxy] Talker: local Ollama models${view.fallbackReason ? ` — ${view.fallbackReason}` : ""}`);
     // Print ready message on stdout for consumers
     process.stdout.write(`EO_PROXY_READY:${PORT}\n`);
   });
