@@ -46,7 +46,7 @@ import path from "path";
 // home-directory absolutes, no walking up out of the source tree.
 import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies } from "./paths.js";
 import { createModelRouter } from "./model-router.js";
-import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource } from "./engine-ground.js";
+import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
 import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // Static, not dynamic: the request handler is synchronous, and the module only
@@ -2469,14 +2469,7 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
       // answer text (observed: "According to the source material, I don't
       // currently possess direct knowledge about..." — echoing this prompt's
       // own wording back to the reader).
-      const ungroundedSystem = warming
-        ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
-          `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
-          `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
-        : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
-          `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
-          `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
-          `there are no source passages, and a bracket would look like a citation that does not exist.`;
+      const ungroundedSystem = buildUngroundedSystemPrompt({ warming });
 
       if (groundedSystemMsg) {
         groundedSystemMsg.content = ungroundedSystem;
@@ -2504,24 +2497,7 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
       return groundResult;
     }
 
-    const citationRange = groundResult.citations.length > 0
-      ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
-        `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
-      : "";
-
-    const systemContext =
-      `Answer the reader's question using the material below, citing the passages you draw on ` +
-      `with bracketed numbers like [1], [2], etc. ` +
-      citationRange +
-      `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
-      `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
-      `"the provided text", "your sources", or similar; just answer directly.\n\n` +
-      `IMPORTANT: You have access to tools. If the material above is ` +
-      `insufficient, use verbatim_search to find more exact passages from ` +
-      `ingested documents, or search_memory for relevant context. Do NOT say ` +
-      `"no information" without first trying these tools.\n\n` +
-      `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
-      `${groundResult.context}`;
+    const systemContext = buildGroundedSystemPrompt(groundResult);
 
     if (groundedSystemMsg) {
       // Re-ground in place — the model must not see two competing tables.
@@ -2988,6 +2964,83 @@ const server = http.createServer((req, res) => {
         sendSSE("error", { message: err.message });
       }
       res.end();
+    });
+    return;
+  }
+
+  // Grounding with no generation step — retrieval + the same citation-
+  // instruction prompt the tool-calling talker gets (buildGroundedSystemPrompt,
+  // shared with the /api/conversations turn handler so the wording can never
+  // drift between the two), minus any call to Ollama. Exists for a client
+  // that runs its own model over this evidence instead of the server's — the
+  // eochat UI's browser-local WebLLM path (webllm-client.js) is the first
+  // caller: it has no tool loop of its own, so it asks for toolsAvailable:false.
+  if (req.method === "POST" && req.url === "/api/ground") {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+      const query = String(data.query || "").trim();
+      if (!query) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "query is required" }));
+        return;
+      }
+      try {
+        const groundResult = engineGroundQuery(query, {
+          budget: data.groundBudget ?? 2400,
+          maxUnits: data.groundMaxUnits ?? 5,
+          limit: data.groundLimit ?? 30,
+          source: data.groundSource,
+          pool: data.pool,
+        });
+
+        if (!groundResult.context) {
+          const warming = corpusWarmup.started && !corpusWarmup.ready;
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            grounded: false,
+            warming,
+            systemPrompt: buildUngroundedSystemPrompt({ warming }),
+            gaps: groundResult.gaps || [],
+            note: warming
+              ? "Document index still loading — this answer is not grounded in your sources yet."
+              : "No matching passage in your sources. Answering from general knowledge, uncited.",
+          }));
+          return;
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          grounded: true,
+          systemPrompt: buildGroundedSystemPrompt(groundResult, { toolsAvailable: false }),
+          total: groundResult.total,
+          folded: groundResult.folded,
+          tokens: groundResult.tokens,
+          budget: groundResult.budget,
+          dropped: groundResult.dropped,
+          citations: groundResult.citations.map((c, i) => ({
+            index: i + 1,
+            span_id: c.span_id,
+            source_id: c.source_id,
+            byte_start: c.byte_start,
+            byte_end: c.byte_end,
+            score: Math.round(c.score * 100) / 100,
+            text: c.text,
+          })),
+          gaps: groundResult.gaps || [],
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
     });
     return;
   }

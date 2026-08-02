@@ -17,6 +17,12 @@
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="./support.js"></script>
+<!-- Local mode: a browser-only WebLLM engine, wired through window.EOWebLLM
+     since the dc-runtime Component below is eval'd as a plain script and
+     cannot `import` this module directly. Defining the class here costs
+     nothing at load — the model itself is only fetched once init() is
+     called (toggling "Local" on). -->
+<script type="module" src="./webllm-client.js"></script>
 </head>
 <body>
 <x-dc>
@@ -405,6 +411,7 @@
           <input type="file" multiple="{{ true }}" ref="{{ setFileInput }}" onChange="{{ onFilesSelected }}" style="display:none;" />
           <input type="text" placeholder="Ask across your sources" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
+          <button type="button" aria-label="{{ localLabel }}" aria-pressed="{{ localModel }}" title="{{ localLabel }}" onClick="{{ toggleLocalModel }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ localBorder }}; border-radius:8px; background:{{ localBg }}; color:{{ localColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ localIcon }}" style="font-size:12px;"></i>Local</button>
           <sc-if value="{{ streamingLoading }}">
             <button type="button" aria-label="Stop generating" onClick="{{ stopGeneration }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:#26241F; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-stop" style="font-size:13px;"></i></button>
           </sc-if>
@@ -414,6 +421,14 @@
         </div>
         <sc-if value="{{ composerHint }}">
           <span style="font-size:11px; color: {{ composerHintColor }};">{{ composerHint }}</span>
+        </sc-if>
+        <sc-if value="{{ localStatusText }}">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-size:11px; color: {{ localStatusColor }};">{{ localStatusText }}</span>
+            <sc-if value="{{ localShowRetry }}">
+              <button type="button" onClick="{{ retryLocalModel }}" style="border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry download</button>
+            </sc-if>
+          </div>
         </sc-if>
       </div>
       </sc-if>
@@ -876,6 +891,13 @@ class Component extends DCLogic {
   state = {
     tab: 'chat', draft: '',
     webSearch: false,
+    // Local mode: answer entirely in this tab via WebLLM (see
+    // webllm-client.js / window.EOWebLLM), no proxy generation call.
+    // `localModel` is the reader's intent (toggle on); `localModelStatus`
+    // mirrors window.EOWebLLM's own state machine, so the toggle can want
+    // local mode before the download is ready — or after it has failed —
+    // without those two facts being confused with each other.
+    localModel: false, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
     spacesOpen: false, activeSpaceId: 'default', leftCollapsed: false, selectedEntity: null,
     renamingSpaceId: null, renameSpaceValue: '',
     webHistoryOpen: false,
@@ -951,11 +973,21 @@ class Component extends DCLogic {
     // input holds focus.
     this._onWindowKeyDown = (e) => { if (e.key === 'Escape' && this.state.modal) this.closeModal(); };
     document.addEventListener('keydown', this._onWindowKeyDown);
+    // window.EOWebLLM (webllm-client.js) exists as soon as its module script
+    // runs, independent of React mount order — but guard anyway in case this
+    // page is ever loaded without it.
+    if (window.EOWebLLM) {
+      this.setState({ localModelStatus: window.EOWebLLM.status, localModelProgress: window.EOWebLLM.progress, localModelError: window.EOWebLLM.error });
+      this._unsubLocalModel = window.EOWebLLM.subscribe((snap) => {
+        this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error });
+      });
+    }
   }
   componentWillUnmount() {
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this._healthTimer) clearInterval(this._healthTimer);
     if (this._onWindowKeyDown) document.removeEventListener('keydown', this._onWindowKeyDown);
+    if (this._unsubLocalModel) this._unsubLocalModel();
   }
 
   openModal(cfg) { this.setState({ modal: cfg, modalValue: cfg.initialValue || '' }); }
@@ -1859,7 +1891,166 @@ class Component extends DCLogic {
     const q = this.state.draft.trim();
     if (!q && !this.state.draftAttachments.length) return;
     this.setState({ draft: '', draftAttachments: [] });
-    await this.askConversation(q);
+    // "iff it downloaded stably": local mode is only ever actually used once
+    // window.EOWebLLM reports ready. Wanting it on while it's still
+    // downloading (or after it failed) silently falls back to the normal
+    // grounded proxy pipeline rather than blocking the reader's question on
+    // a background download — the toggle's own status line is what tells
+    // them why this particular answer didn't run locally.
+    if (this.state.localModel && this.state.localModelStatus === 'ready') {
+      await this.localAskConversation(q);
+    } else {
+      await this.askConversation(q);
+    }
+  }
+
+  toggleLocalModel() {
+    const turningOn = !this.state.localModel;
+    this.setState({ localModel: turningOn });
+    if (turningOn && window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
+      window.EOWebLLM.init();
+    }
+  }
+  retryLocalModel() {
+    if (window.EOWebLLM) window.EOWebLLM.init();
+  }
+
+  // Render-time facts about the toggle: wanting local mode (`localModel`,
+  // the reader's own choice) is a different fact from whether it can
+  // currently be used (`localModelStatus`, mirrored from window.EOWebLLM) —
+  // collapsing them would hide "still downloading" and "failed" behind the
+  // same look as "on".
+  _localModelProps(S) {
+    const status = S.localModelStatus;
+    const on = S.localModel && status === 'ready';
+    const label = status === 'unsupported'
+      ? 'Local model unavailable — this browser has no WebGPU'
+      : status === 'error'
+        ? 'Local model download failed — click to retry'
+        : status === 'loading'
+          ? 'Local model downloading…'
+          : on
+            ? 'Local model on — click to turn off'
+            : 'Local model off — click to download and use it for this reply';
+    const active = on;
+    return {
+      localModel: S.localModel,
+      localLabel: label,
+      localBg: active ? '#1F5A4C' : 'none',
+      localColor: active ? '#FFFDFA' : (status === 'unsupported' ? '#C9C4B8' : '#8C877C'),
+      localBorder: status === 'error' ? '#c0341a' : (active ? '#1F5A4C' : '#E0DACE'),
+      localIcon: status === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
+      toggleLocalModel: status === 'unsupported' ? () => {} : () => this.toggleLocalModel(),
+      retryLocalModel: () => this.retryLocalModel(),
+      localShowRetry: status === 'error',
+      localStatusText: !S.localModel ? null
+        : status === 'unsupported' ? S.localModelError
+        : status === 'loading' ? `${S.localModelProgress.text} ${S.localModelProgress.percent}%`.trim()
+        : status === 'error' ? `Local model: ${S.localModelError}`
+        : status === 'ready' ? `Local model ready — ${window.EOWebLLM ? window.EOWebLLM.modelId : ''} (answers stay in this tab, not saved)`
+        : null,
+      localStatusColor: (status === 'error' || status === 'unsupported') ? '#c0341a' : '#8C877C',
+    };
+  }
+
+  // Local mode: retrieval only through the proxy (POST /api/ground —
+  // engineGroundQuery with no generation step, see server/proxy.js), then
+  // generation entirely in this tab via window.EOWebLLM. Reuses the exact
+  // same turn shape and the exact same citation-instruction wording
+  // (buildGroundedSystemPrompt) as the server-driven path, so the turn
+  // renders through the SAME template code as any other — but it is NOT
+  // sent to /api/conversations, so it does not persist across a reload, and
+  // its citation numbers are only checked against retrieved passages, never
+  // against the source text: the mechanical fidelity check in
+  // server/citation-check.js only runs inside the server's own tool loop.
+  // Both gaps are disclosed in the turn's own trace, not just here.
+  async localAskConversation(question) {
+    const localId = 'local-' + Date.now();
+    this.updateActiveSpace(sp => ({
+      ...sp,
+      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
+    }));
+    const patchTurn = (patch) => this.updateActiveSpace(sp => ({
+      ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
+    }));
+
+    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: 'Reading your sources…', thinkingMeta: 'local model' });
+    this.logAdd('◱', `Asked (local model): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
+
+    let groundData;
+    try {
+      const gres = await fetch(this.proxyUrl() + '/api/ground', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: question, groundSource: this.groundSourceFilter() }),
+      });
+      if (!gres.ok) throw new Error('proxy returned ' + gres.status);
+      groundData = await gres.json();
+      if (groundData.error) throw new Error(groundData.error);
+    } catch (err) {
+      this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
+      patchTurn({ a: '(Could not reach your sources — ' + err.message + ')', streaming: false });
+      this.logAdd('⊘', `Local ground failed — ${err.message}`, 'chat');
+      return;
+    }
+
+    this.setState({ thinkingPhase: null, thinkingMeta: null });
+    const grounding = {
+      empty: !groundData.grounded, warming: !!groundData.warming,
+      citations: groundData.citations || [], gaps: groundData.gaps || [],
+      sourceCount: groundData.total, foldedCount: groundData.folded,
+      tokens: groundData.tokens, budget: groundData.budget, dropped: groundData.dropped,
+    };
+    patchTurn({ grounding });
+
+    const messages = [
+      { role: 'system', content: groundData.systemPrompt },
+      { role: 'user', content: question },
+    ];
+
+    let answer = '';
+    try {
+      for await (const delta of window.EOWebLLM.stream(messages)) {
+        answer += delta;
+        patchTurn({ a: answer });
+      }
+    } catch (err) {
+      this.setState({ streamingLoading: false, streamingTurnId: null });
+      patchTurn({ a: answer || ('(Local model failed — ' + err.message + ')'), streaming: false });
+      this.logAdd('⊘', `Local generation failed — ${err.message}`, 'chat');
+      return;
+    }
+
+    // "resolved" here means only "this bracket number matches a passage the
+    // engine retrieved" — the same check server turns run before the
+    // mechanical fidelity pass, never the fidelity pass itself. That gap is
+    // named explicitly in the trace row below, not left for the reader to
+    // notice on their own.
+    const citedNums = [...new Set((answer.match(/\[(\d+)\]/g) || []).map(m => Number(m.slice(1, -1))))];
+    const citations = citedNums.map(num => {
+      const gc = (groundData.citations || []).find(c => c.index === num);
+      return {
+        num: String(num), resolved: !!gc,
+        source: gc ? this._shortSource(gc.source_id) : ('⊘ unresolved — no engine passage for [' + num + ']'),
+        sourceId: gc ? gc.source_id : null,
+        byteStart: gc ? gc.byte_start : undefined, byteEnd: gc ? gc.byte_end : undefined, score: gc ? gc.score : undefined,
+        quote: gc ? String(gc.text || '').slice(0, 300) : '',
+      };
+    });
+
+    patchTurn({
+      a: answer, citations: citations.length ? citations : null, streaming: false,
+      model: `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
+      trace: [
+        { kind: 'ground', name: 'Retrieval', detail: grounding.empty
+          ? (grounding.warming ? 'Corpus still warming — no evidence yet.' : 'No matching passage found.')
+          : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}` },
+        { kind: 'model', name: 'Model', detail: `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
+        { kind: 'gap', name: 'Citation check', detail: 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
+        { kind: 'gap', name: 'Persistence', detail: 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
+      ],
+    });
+    this.setState({ streamingLoading: false, streamingTurnId: null });
+    this.logAdd('◱', 'Local reply done', 'chat');
   }
 
   addSource() {
@@ -2956,6 +3147,7 @@ class Component extends DCLogic {
       webColor: S.webSearch ? '#FFFDFA' : '#8C877C',
       webBorder: S.webSearch ? '#1F5A4C' : '#E0DACE',
       toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch })),
+      ...this._localModelProps(S),
       proxyLive: live, proxyDead: !live,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
       retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
