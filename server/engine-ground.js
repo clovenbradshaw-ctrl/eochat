@@ -1340,6 +1340,51 @@ export const FOLD_PROJECTION_VERSION = "fold-projection@1";
 
 const GATED_TYPES = new Set(INDIVIDUATION_TYPES);
 
+// A display name that is layout, not a being. Section numbers ("II", "III"),
+// page figures ("1987"), and standalone structural headings ("Section",
+// "Appendix") recur in running headers and tables of contents, and the
+// perceiver's capitalisation detector dutifully casts them as referents.
+// They are not entities in any sense a reader can act on, so the fold never
+// surfaces them — not in the cast, not in the withheld audit, not as
+// highlightable surfaces. Roman numerals are validated (not a character-set
+// test) so real words spelled only from Roman letters — "Civil", "Mild",
+// "Vivid" — survive.
+const STRUCTURAL_HEADINGS = new Set([
+  "section", "sections", "chapter", "chapters", "part", "parts", "act", "acts",
+  "scene", "scenes", "stave", "movement", "movements", "canto", "cantos",
+  "book", "books", "volume", "volumes", "preface", "introduction",
+  "prologue", "epilogue", "epigraph", "contents", "appendix", "appendices",
+  "bibliography", "index", "glossary", "notes", "footnotes", "endnotes",
+  "references", "acknowledgements", "acknowledgments", "dedication", "cover",
+  "abstract", "summary", "conclusion", "afterword", "foreword", "title",
+]);
+
+const ROMAN_NUMERAL = /^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/i;
+const BARE_NUMBER = /^\d[\d.,]*$/;
+const WORD_NUMBER = /^(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)$/i;
+
+// "SECTION II", "Chapter 3", "Part One" — a structural heading carrying a
+// position marker is one token, not a name. The marker must be a numeral or
+// spelled-out number, never an arbitrary word ("Section Chief" is a title).
+const isHeadingPosition = (s) => {
+  const at = s.indexOf(" ");
+  if (at <= 0) return false;
+  const heading = s.slice(0, at).toLowerCase();
+  const rest = s.slice(at + 1);
+  if (!STRUCTURAL_HEADINGS.has(heading)) return false;
+  return ROMAN_NUMERAL.test(rest) || BARE_NUMBER.test(rest) || WORD_NUMBER.test(rest);
+};
+
+export function isStructuralName(name) {
+  if (!name || typeof name !== "string") return false;
+  // Trailing punctuation ("II.") is the surface's, not the name's.
+  const s = name.trim().replace(/[.,;:]\s*$/, "");
+  if (!s) return false;
+  if (ROMAN_NUMERAL.test(s) || BARE_NUMBER.test(s) || isHeadingPosition(s) || WORD_NUMBER.test(s)) return true;
+  // A bare structural heading is layout; a heading inside a title is not.
+  return STRUCTURAL_HEADINGS.has(s.toLowerCase());
+}
+
 // `tier` says who would have to supply the missing thing: "engine" — an organ
 // exists but is unwired; "model" — witness knowledge, only a prior can supply
 // it; "host" — this bridge or its caller.
@@ -1613,6 +1658,9 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
   let sightings = 0;
 
   for (const r of read.referents || []) {
+    // Section numbers and structural headings are not entities; the cast
+    // (and the withheld audit, below) drop them before anything reads the fold.
+    if (isStructuralName(r.display ?? r.name ?? r.id)) continue;
     sightings += r.mentions || 0;
     const entry = ambiguousDisplay.has(r.display) ? null : priorByDisplay.get(r.display);
     const asserted = entry && typeof entry.individuation === "string" ? entry.individuation : null;
@@ -1689,6 +1737,7 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
       continue;
     }
     // Withheld: prior asserted a type but no evidence found, or truly empty.
+    if (isStructuralName(r.display ?? r.name ?? r.id)) continue;
     withheld.push({
       ...base,
       individuation_type: null,

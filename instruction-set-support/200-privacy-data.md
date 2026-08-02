@@ -3,7 +3,7 @@ id: privacy-data
 title: Privacy and Data Requests
 always: false
 weight: 50
-signals: [privacy, data, personal data, gdpr, gdpr, "data deletion", "delete my data", "right to be forgotten", "erase", personal information, "what data", collect, store, share, third party, consent, policy, cookie, "data request", "copy of my data", ccpa, "data subject"]
+signals: [privacy, data, personal data, gdpr, "data deletion", "delete my data", "right to be forgotten", erase, "delete my account", personal information, "what data", collect, store, share, third party, consent, cookie, "data request", "copy of my data", ccpa, "data subject", données, "mes données", supprimé, supprimées, supprimer, "mon compte", daten, löschen, "meine daten", datos, borrar, "mis datos", "dati", cancellare]
 fingerprint: What we collect, why, GDPR/CCPA rights; deletion and export via the privacy desk.
 ---
 

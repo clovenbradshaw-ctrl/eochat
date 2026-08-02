@@ -3,7 +3,7 @@ id: shipping-policy
 title: Shipping and Delivery
 always: false
 weight: 55
-signals: [shipping, delivery, tracking, "track", ship, delivered, "where is my", lost, stolen, customs, import, international, "expected delivery", dispatch, courier, signature]
+signals: [shipping, delivery, tracking, "track", ship, shipped, delivered, "where is my", lost, stolen, customs, import, international, "expected delivery", dispatch, courier, signature, replacement, "get here", arrive, arrived, arrives, "how long will", "take to arrive", "delivery time", turnaround, backorder, "back order"]
 fingerprint: Shipping times, tracking, delivery issues; tracking steps before any replacement.
 ---
 

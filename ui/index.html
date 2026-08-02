@@ -881,6 +881,12 @@
           </sc-if>
         </div>
         <div style="display:flex; align-items:center; gap:10px; flex:none;">
+          <sc-if value="{{ readerOverviewSupported }}">
+          <div style="display:flex; gap:2px; background:#F2EFE8; border-radius:7px; padding:2px;">
+            <button type="button" onClick="{{ setReaderOverview }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background: {{ readerOverviewBg }}; color: {{ readerOverviewColor }}; font-size:11px; padding:5px 9px; cursor:pointer;"><i class="ph ph-books"></i>Overview</button>
+            <button type="button" onClick="{{ setReaderRead }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background: {{ readerReadBg }}; color: {{ readerReadColor }}; font-size:11px; padding:5px 9px; cursor:pointer;"><i class="ph ph-file-text"></i>Read</button>
+          </div>
+          </sc-if>
           <sc-if value="{{ readerShowModeToggle }}">
           <div style="display:flex; gap:2px; background:#F2EFE8; border-radius:7px; padding:2px;">
             <button type="button" onClick="{{ setReaderScroll }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background: {{ readerScrollBg }}; color: {{ readerScrollColor }}; font-size:11px; padding:5px 9px; cursor:pointer;"><i class="ph ph-text-align-left"></i>Scroll</button>
@@ -912,6 +918,48 @@
       </sc-if>
       <div style="flex:1; overflow-y:auto; padding:32px 0; display:flex; justify-content:center;" class="eo-scrollbar">
         <div style="width:100%; max-width:100%; padding:0 24px;">
+
+          <sc-if value="{{ readerOverviewMode }}">
+            <div style="max-width:680px; margin:0 auto; display:flex; flex-direction:column; gap:22px;">
+
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:13px; color:#1F5A4C; flex:none;">{{ readerGlyph }}</span>
+                  <span style="font-size:21px; font-weight:500; color:#26241F; line-height:1.3;">{{ readerOverviewTitle }}</span>
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; text-transform:uppercase; letter-spacing:.08em; border:1px solid #E4DFD5; border-radius:5px; padding:2px 6px; flex:none;">{{ readerTypeLabel }}</span>
+                </div>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ readerOverviewStats }}</span>
+              </div>
+
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Structure</span>
+                <sc-if value="{{ readerHasOutline }}">
+                  <div style="display:flex; flex-direction:column; gap:2px; border:1px solid #EBE6DC; border-radius:10px; background:#FAF8F4; padding:6px;">
+                    <sc-for list="{{ readerOutlineRows }}" as="it">
+                      <button type="button" onClick="{{ it.seek }}" style="display:flex; align-items:baseline; gap:10px; text-align:left; border:0; background:none; border-radius:7px; padding:7px 9px; cursor:pointer; font-family:inherit; color:#26241F;">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; flex:none; width:24px;">{{ it.num }}</span>
+                        <span style="flex:1; min-width:0; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ it.label }}</span>
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C; flex:none;">open →</span>
+                      </button>
+                    </sc-for>
+                  </div>
+                  <span style="font-size:11px; color:#A39D91;">click a section to jump to it in the text</span>
+                </sc-if>
+                <sc-if value="{{ readerNoOutline }}">
+                  <span style="font-size:11.5px; color:#A39D91; line-height:1.6;">{{ readerOutlineStatus }}</span>
+                </sc-if>
+              </div>
+
+              <sc-if value="{{ readerHasOverviewPreview }}">
+              <div style="display:flex; flex-direction:column; gap:8px; border-top:1px solid #EBE6DC; padding-top:16px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">Beginning</span>
+                <span style="font-family:Georgia, 'Times New Roman', serif; font-size:15px; line-height:1.8; color:#3A372F; text-wrap:pretty;">{{ readerOverviewPreview }}…</span>
+                <span style="font-size:11px; color:#A39D91;">read the full text in the Read view above</span>
+              </div>
+              </sc-if>
+
+            </div>
+          </sc-if>
 
           <sc-if value="{{ readerIsVideo }}">
             <video src="{{ readerVideoSrc }}" controls="{{ true }}" style="width:100%; border-radius:10px; background:#000; display:block; margin-bottom:16px;"></video>
@@ -1063,6 +1111,27 @@
     <sc-if value="{{ notShowingProjects }}">
     <div style="background:#FAF8F4; border-left:1px solid #EBE6DC; padding:18px 16px; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; overflow-y:auto;" class="eo-scrollbar">
 
+      <sc-if value="{{ readerPreviewVisible }}">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Preview</span>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">{{ readerPreviewMeta }}</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; min-width:0;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C; flex:none;">{{ readerGlyph }}</span>
+          <span style="font-size:12.5px; font-weight:500; color:#26241F; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ readerName }}</span>
+        </div>
+        <sc-if value="{{ readerPreviewLoading }}">
+          <span style="font-size:11.5px; color:#A39D91; line-height:1.6;">{{ readerPreviewStatus }}</span>
+        </sc-if>
+        <sc-if value="{{ readerPreviewReady }}">
+          <div style="max-height:46vh; overflow-y:auto; background:#FFFDFA; border:1px solid #EBE6DC; border-radius:8px; padding:10px 12px;" class="eo-scrollbar">
+            <span style="font-family:Georgia, 'Times New Roman', serif; font-size:12px; line-height:1.65; color:#3A372F; white-space:pre-wrap; word-break:break-word;">{{ readerPreviewText }}</span>
+          </div>
+          <span style="font-size:11px; color:#A39D91; line-height:1.5;">raw text — the reader&rsquo;s Read view shows the whole document</span>
+        </sc-if>
+      </sc-if>
+
+      <sc-if value="{{ readerPreviewHidden }}">
       <sc-if value="{{ hasSurfPassages }}">
         <div style="display:flex; align-items:center; justify-content:space-between;">
           <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Surf passages</span>
@@ -1134,7 +1203,6 @@
           <sc-for list="{{ entityRows }}" as="ent">
             <button type="button" onClick="{{ ent.select }}" style="display:flex; align-items:center; gap:9px; border:0; background:none; padding:6px 4px; cursor:pointer; font-family:inherit; text-align:left; border-radius:6px;">
               <span style="font-size:12.5px; color:#26241F; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ ent.name }}</span>
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ ent.type }}</span>
               <span style="width: {{ ent.barWidth }}; height:3px; border-radius:2px; background: {{ ent.color }}; flex:none;"></span>
             </button>
           </sc-for>
@@ -1157,6 +1225,7 @@
           <span style="font-size:11px; color:#A39D91;">folded from your enabled sources · click a name for its profile</span>
         </div>
         </sc-if>
+      </sc-if>
       </sc-if>
     </div>
     </sc-if>
@@ -1282,6 +1351,41 @@
 const TYPE_GLYPH = { pdf: '●', video: '●', audio: '○', spreadsheet: '▦', link: '○', binary: '◱' };
 const TYPE_LABEL = { pdf: 'Text', video: 'Video', audio: 'Audio', spreadsheet: 'Sheet', link: 'Article', binary: 'File' };
 
+// A display name that is layout, not a being. Section numbers ("II", "III"),
+// page figures ("1987"), and standalone structural headings ("Section",
+// "Appendix") recur in running headers and tables of contents, and the fold's
+// capitalisation detector can cast them as referents. They are structure, not
+// entities — never shown in the index, orbit, or highlights. Roman numerals
+// are validated (not a character-set test) so real words spelled only from
+// Roman letters — "Civil", "Mild", "Vivid" — survive. Mirrors the guard on
+// the fold in server/engine-ground.js.
+const STRUCTURAL_HEADINGS = new Set([
+  "section", "sections", "chapter", "chapters", "part", "parts", "act", "acts",
+  "scene", "scenes", "stave", "movement", "movements", "canto", "cantos",
+  "book", "books", "volume", "volumes", "preface", "introduction",
+  "prologue", "epilogue", "epigraph", "contents", "appendix", "appendices",
+  "bibliography", "index", "glossary", "notes", "footnotes", "endnotes",
+  "references", "acknowledgements", "acknowledgments", "dedication", "cover",
+  "abstract", "summary", "conclusion", "afterword", "foreword", "title",
+]);
+const ROMAN_NUMERAL = /^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/i;
+const BARE_NUMBER = /^\d[\d.,]*$/;
+const WORD_NUMBER = /^(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)$/i;
+const isHeadingPosition = (s) => {
+  const at = s.indexOf(" ");
+  if (at <= 0) return false;
+  if (!STRUCTURAL_HEADINGS.has(s.slice(0, at).toLowerCase())) return false;
+  const rest = s.slice(at + 1);
+  return ROMAN_NUMERAL.test(rest) || BARE_NUMBER.test(rest) || WORD_NUMBER.test(rest);
+};
+const isStructuralName = (name) => {
+  if (!name || typeof name !== 'string') return false;
+  const s = name.trim().replace(/[.,;:]\s*$/, '');
+  if (!s) return false;
+  if (ROMAN_NUMERAL.test(s) || BARE_NUMBER.test(s) || isHeadingPosition(s) || WORD_NUMBER.test(s)) return true;
+  return STRUCTURAL_HEADINGS.has(s.toLowerCase());
+};
+
 // Where rooms — and with them the sources rail — persist between visits.
 //
 // Versioned because the rail reads from two places: the engine's corpus pool
@@ -1315,6 +1419,11 @@ class Component extends DCLogic {
     retrievedOpen: false,
     readerOpen: false, readerSourceName: null,
     readerViewMode: 'scroll', readerSectionIndex: 0,
+    // Clicking a document defaults to the structural OVERVIEW in the center
+    // panel with the raw-text PREVIEW in the side rail; "Read" switches the
+    // center to the full text. Citation opens force the text view so the cited
+    // span lands visible, which is why this is set per-open, never globally.
+    readerOverview: true,
     // Set when the reader was opened *by* a citation rather than by picking a
     // source. Carries the span the answer actually leaned on, so the reader can
     // mark it: { num, quote, byteStart, byteEnd, source }.
@@ -1415,12 +1524,14 @@ class Component extends DCLogic {
         this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error });
       });
     }
+    this.bindEntityClicks();
   }
   componentWillUnmount() {
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this._healthTimer) clearInterval(this._healthTimer);
     if (this._onWindowKeyDown) document.removeEventListener('keydown', this._onWindowKeyDown);
     if (this._unsubLocalModel) this._unsubLocalModel();
+    if (this._onEntitySpanClick) document.removeEventListener('click', this._onEntitySpanClick);
   }
 
   openModal(cfg) { this._modalProjectId = cfg.projectId || null; this.setState({ modal: cfg, modalValue: cfg.initialValue || '' }); }
@@ -1689,6 +1800,7 @@ class Component extends DCLogic {
   async openPrior(id) {
     this.setState({
       readerOpen: true, readerSourceName: 'prior:' + id, readerViewMode: 'scroll', readerSectionIndex: 0,
+      readerOverview: false,
       readerSortCol: null, readerSortDir: 'asc',
       readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
     });
@@ -1927,6 +2039,10 @@ class Component extends DCLogic {
       const fold = this.state.folds[s.name];
       if (!fold || fold.error) return;
       (fold.referents || []).forEach(r => {
+        // Structure, not entities: section numbers and headings are layout, and
+        // the entity panel must not read them as beings. The fold already drops
+        // these, but a cached fold must not resurrect them for the rail.
+        if (isStructuralName(r.name || r.canonicalLabel)) return;
         const prev = byId[r.id];
         // The same referent can be typed in more than one source; mentions add,
         // surfaces union. Identity is the referent id, never the display string.
@@ -1986,7 +2102,7 @@ class Component extends DCLogic {
       if (entity) {
         return React.createElement('span', {
           key: keyPrefix + '-' + i, onClick: () => onSelect(entity.id),
-          title: entity.type ? `${entity.label} · ${entity.type}` : entity.label,
+          title: entity.label,
           style: { color: '#1F5A4C', cursor: 'pointer', borderBottom: '1px dotted #1F5A4C' }
         }, part);
       }
@@ -1998,6 +2114,63 @@ class Component extends DCLogic {
     if (!text) return '';
     if (typeof marked === 'undefined') return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return marked.parse(text, { breaks: true, gfm: true });
+  }
+
+  // The chat answer, as clickable HTML. Markdown renders first, then every
+  // entity surface in the resulting text is wrapped so a reader can click a
+  // name to open its profile — the same act the reader's prose supports. The
+  // wrap happens on real text nodes (never inside tags), so a surface inside
+  // a bold/emphasis run still highlights without breaking the markup.
+  renderAnswerEntities(text) {
+    const html = this.renderMarkdown(text);
+    if (!html) return html;
+    const { regex, surfaceMap } = this.buildSurfaceMatcher();
+    if (!regex) return html;
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        return (node.nodeValue || '').match(regex) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(node => {
+      const parts = node.nodeValue.split(regex);
+      if (parts.length === 1) return;
+      const frag = document.createDocumentFragment();
+      parts.forEach((part, i) => {
+        if (!part) return;
+        const entity = surfaceMap[String(part).toLowerCase()];
+        if (entity) {
+          const span = document.createElement('span');
+          span.className = 'eo-ent';
+          span.setAttribute('data-eo-entity', entity.id);
+          span.title = entity.label;
+          span.style.color = '#1F5A4C';
+          span.style.cursor = 'pointer';
+          span.style.borderBottom = '1px dotted #1F5A4C';
+          span.textContent = part;
+          frag.appendChild(span);
+        } else {
+          frag.appendChild(document.createTextNode(part));
+        }
+      });
+      node.parentNode.replaceChild(frag, node);
+    });
+    return host.innerHTML;
+  }
+
+  // One delegated listener for every decorated answer, so re-rendered chat
+  // bubbles never leak handlers. Bound in componentDidMount, removed on teardown.
+  bindEntityClicks() {
+    this._onEntitySpanClick = (e) => {
+      const el = e.target && e.target.closest ? e.target.closest('.eo-ent') : null;
+      if (!el) return;
+      const id = el.getAttribute('data-eo-entity');
+      if (id) this.setState({ selectedEntity: id });
+    };
+    document.addEventListener('click', this._onEntitySpanClick);
   }
 
   // Fold and outline for one source. Both are engine projections keyed by
@@ -3300,12 +3473,17 @@ class Component extends DCLogic {
   openReader(name, highlight = null) {
     this.setState({
       readerOpen: true, readerSourceName: name, readerViewMode: 'scroll', readerSectionIndex: 0,
+      readerOverview: !highlight,
       readerHighlight: highlight,
       readerSortCol: null, readerSortDir: 'asc',
       readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
     });
     this.logAdd('◱', highlight ? `Opened "${name}" at [${highlight.num}]` : `Opened "${name}" in reader`, 'reader');
     if (!this.state.readerContent[name]) this.fetchSourceContent(name);
+    // The overview's structure comes from the engine's boundary detector, the
+    // same one the Outline tab reads — fetch it up front so the panel isn't
+    // blank on the first open.
+    if (!this.state.outlines[name]) this.fetchOutline(name);
   }
   // Open the reader at a byte offset the engine measured (an outline heading,
   // a citation anchor). A whole book does not fit in one read, so this pulls a
@@ -3315,7 +3493,7 @@ class Component extends DCLogic {
     if (byteStart == null) { this.openReader(name, highlight); return; }
     this.setState({
       readerOpen: true, readerSourceName: name, readerViewMode: 'scroll',
-      readerSectionIndex: 0, readerHighlight: highlight || null,
+      readerSectionIndex: 0, readerOverview: false, readerHighlight: highlight || null,
       readerContent: { ...this.state.readerContent, [name]: 'Loading…' }
     });
     try {
@@ -3437,7 +3615,20 @@ class Component extends DCLogic {
     const ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    const cx = w / 2, cy = h / 2, scale = Math.min(w, h) / 300;
+    const cx = w / 2, cy = h / 2;
+    // TWO SCALES, because they answer different questions.
+    //
+    // `layout` spreads the orbit to fill whatever panel it is given: the radii
+    // computeOrbit assigns run 70–130, so dividing the short side by ~300
+    // seats the widest orbit inside the frame with margin.
+    //
+    // `ink` sizes what is DRAWN — glyphs and discs. It used to be `layout`, and
+    // that is the bug this panel actually had: in a 1040×680 panel layout is
+    // 2.27, so an 11px label was drawn at 25px and a 9px disc at 20px. Labels
+    // ran into their neighbours' bodies and the graph read as broken. Type size
+    // is a legibility constant, not a function of how much room the graph got.
+    const layout = Math.min(w, h) / 300;
+    const ink = Math.max(0.85, Math.min(layout, 1.15));
     const cache = {}, ids = Object.keys(this.orbitBodies);
     if (!this.orbitEdges.length) {
       ctx.fillStyle = '#D5DFD9'; ctx.font = '14px "Instrument Sans", sans-serif';
@@ -3448,27 +3639,44 @@ class Component extends DCLogic {
     ids.forEach(id => { positions[id] = this.getPos(id, this.t || 0, cache); });
     const focus = positions[this.state.orbitFocus] || { x: 0, y: 0 };
     const screen = {};
-    ids.forEach(id => { screen[id] = { x: cx + (positions[id].x - focus.x) * scale, y: cy + (positions[id].y - focus.y) * scale }; });
+    ids.forEach(id => { screen[id] = { x: cx + (positions[id].x - focus.x) * layout, y: cy + (positions[id].y - focus.y) * layout }; });
     this.nodeScreen = screen;
     ctx.strokeStyle = '#E4DFD5'; ctx.lineWidth = 1;
     this.orbitEdges.forEach(([a, b]) => {
       ctx.beginPath(); ctx.moveTo(screen[a].x, screen[a].y); ctx.lineTo(screen[b].x, screen[b].y); ctx.stroke();
     });
     // The room is the frame everything else orbits, not a thing inside the
-    // frame — it anchors the math (getPos parent-chain, the edges above) but
-    // is never itself a body a reader can see or click.
+    // frame — it anchors the math (getPos parent-chain, the edges above) but is
+    // never a body a reader can click. It was also not drawn at all, which left
+    // eight edges converging on blank paper: the centre read as a rendering
+    // failure rather than as the room. A hairline ring is the frame showing
+    // where it is without becoming an object in it.
+    const hub = screen.room;
+    if (hub) {
+      ctx.strokeStyle = '#D5DFD9'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(hub.x, hub.y, 4 * ink, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.font = `${11 * ink}px 'Instrument Sans', sans-serif`;
+    ctx.textAlign = 'center';
     ids.filter(id => id !== 'room').forEach(id => {
       const n = this.orbitBodies[id], p = screen[id], focused = id === this.state.orbitFocus;
+      const radius = n.size * ink;
       if (focused) {
         ctx.strokeStyle = '#1F5A4C'; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(p.x, p.y, (n.size + 8) * scale, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(p.x, p.y, radius + 7, 0, Math.PI * 2); ctx.stroke();
         ctx.setLineDash([]);
       }
-      ctx.fillStyle = focused ? '#1F5A4C' : (n.parent ? '#7FA396' : '#1F5A4C');
-      ctx.beginPath(); ctx.arc(p.x, p.y, n.size * scale, 0, Math.PI * 2); ctx.fill();
-      ctx.font = `${11 * scale}px 'Instrument Sans', sans-serif`;
-      ctx.fillStyle = '#26241F'; ctx.textAlign = 'center';
-      ctx.fillText(n.label, p.x, p.y - (n.size + 8) * scale);
+      ctx.fillStyle = focused ? '#1F5A4C' : '#7FA396';
+      ctx.beginPath(); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); ctx.fill();
+      // The label sits clear of its own disc AND of the focus ring, so
+      // selecting a body never hides its name behind the ring.
+      const label = n.label.length > 22 ? n.label.slice(0, 21) + '…' : n.label;
+      const above = p.y - radius - (focused ? 14 : 8);
+      // A body near the top edge would print its label off-canvas; flip it
+      // under the disc rather than clip it.
+      ctx.fillStyle = focused ? '#1F5A4C' : '#26241F';
+      if (above < 12) ctx.fillText(label, p.x, p.y + radius + 14 * ink);
+      else ctx.fillText(label, p.x, above);
     });
   }
 
@@ -3531,7 +3739,14 @@ class Component extends DCLogic {
     const { entities } = this.castOfEnabledSources();
     const bodies = { room: { parent: null, r: 0, omega: 0, phase: 0, size: 18, label: active.name || 'Room' } };
     const edges = [];
-    const shown = entities.slice(0, 8);
+    // Twelve bodies is what this frame holds before labels start colliding.
+    // The cut is recorded rather than absorbed (L3): a cast of 108 rendered as
+    // eight, with nothing saying so, reads as "this document has eight
+    // entities" — which is a wrong answer, not a small view.
+    const ORBIT_CAP = 12;
+    const shown = entities.slice(0, ORBIT_CAP);
+    this.orbitTotal = entities.length;
+    this.orbitShown = shown.length;
     const angleStep = (Math.PI * 2) / Math.max(shown.length, 1);
     const maxMentions = Math.max(1, ...shown.map(e => e.mentions || 0));
     shown.forEach((e, i) => {
@@ -3759,7 +3974,7 @@ class Component extends DCLogic {
       rawPrompt: turn.prompt || 'The proxy did not report an injected prompt for this turn. Nothing is reconstructed here — use “copy json” for everything the client actually received.',
 
       ungroundedNotice,
-      answerHtml: turn.a ? this.renderMarkdown(turn.a) : null,
+      answerHtml: turn.a ? this.renderAnswerEntities(turn.a) : null,
       streamingAnswerHtml: null,
       selectForSurf: () => this.setState({ activeTurnId: turn.id, selectedEntity: null }),
       surfOutline: this.state.activeTurnId === turn.id ? '2px solid #1F5A4C' : '0',
@@ -3882,7 +4097,6 @@ class Component extends DCLogic {
     const entityColors = ['#1F5A4C', '#3D7A6A', '#5FA08E', '#8CBBB0', '#B5D3CA', '#D5E3DE', '#EBE6DC'];
     const entityRows = castEntities.map((e, i) => ({
       name: e.label,
-      type: e.type || '',
       mentions: e.mentions,
       color: entityColors[i % entityColors.length],
       barWidth: Math.max(4, Math.round(((e.mentions || 0) / maxCount) * 28)) + 'px',
@@ -3924,6 +4138,69 @@ class Component extends DCLogic {
     const readerPipelineLabel = { video: 'no video perceiver · bytes stored, not decoded', audio: 'no audio perceiver · bytes stored, not transcribed', spreadsheet: 'parsed into rows · cols' }[readerType] || null;
     const contentText = S.readerSourceName ? (S.readerContent[S.readerSourceName] || 'Loading content…') : '';
     const contentLines = contentText.split('\n').filter(l => l.trim());
+
+    // `inferType` buckets .txt/.md/prior cards as 'pdf', but only a PDF this
+    // client actually parsed (PDF.js) has a layout. That distinction is what
+    // the render gates need: a real PDF takes the rendered/extracted/split
+    // reader; everything else text-shaped renders as plain text.
+    const readerIsPDFKind = readerType === 'pdf' && !!(S.readerPDFLayout && S.readerPDFLayout[S.readerSourceName]);
+
+    // ── Reader OVERVIEW — the default surface for a plain text document.
+    // Center panel shows the document's structure (title, stats, the engine's
+    // boundary-detected headings) and the side rail shows the raw-text PREVIEW.
+    // "Read" switches the center to the full text. Only text-shaped sources get
+    // an overview; a real PDF keeps its own rendered/extracted/split modes and
+    // video/audio/spreadsheet have no structure to show.
+    const readerOverviewMode = S.readerOverview && readerType === 'pdf' && !readerIsPDFKind && !!S.readerSourceName;
+    const outlineObj = S.readerSourceName ? (S.outlines[S.readerSourceName] || null) : null;
+    const outlineHasHeadings = !!(outlineObj && !outlineObj.error && !outlineObj.gap && (outlineObj.headings || []).length);
+    const readerOutlineRows = outlineHasHeadings
+      ? outlineObj.headings.map((h, i) => ({
+          num: String(i + 1).padStart(2, '0'),
+          label: h.label || `Section ${i + 1}`,
+          // Byte-addressed seek, same as the Outline tab — jumps into the text
+          // at exactly where the engine measured the heading to start.
+          seek: () => this.openReaderAtByte(S.readerSourceName, h.byte_start),
+        }))
+      : [];
+    const readerOverviewContentLoaded = !!contentText && contentText !== 'Loading content…';
+    const readerOverviewTitle = readerOverviewContentLoaded
+      ? this._extractTitle(contentText.replace(/\s+/g, ' ').trim(), S.readerSourceName || '')
+      : (S.readerSourceName || '');
+    const readerOverviewStats = !readerOverviewContentLoaded
+      ? 'loading structure…'
+      : (() => {
+          const words = contentText.trim().split(/\s+/).filter(Boolean).length;
+          const lines = contentText.split('\n').filter(l => l.trim()).length;
+          const sections = outlineHasHeadings ? outlineObj.headings.length : 1;
+          return `${words.toLocaleString()} word${words === 1 ? '' : 's'} · ${lines.toLocaleString()} line${lines === 1 ? '' : 's'} · ${sections} section${sections === 1 ? '' : 's'}`;
+        })();
+    const readerOverviewPreview = readerOverviewContentLoaded
+      ? contentText.replace(/\s+/g, ' ').slice(0, 600).trim()
+      : '';
+    const readerOutlineStatus = !outlineObj
+      ? 'Detecting structure…'
+      : (outlineObj.error || outlineObj.gap)
+        ? `No structure — ${outlineObj.error || outlineObj.gap}`
+        : outlineHasHeadings
+          ? ''
+          : 'No headings detected by the boundary detector — read the full text in Read view.';
+
+    // ── Side-rail PREVIEW — the raw source text. Default while a document is
+    // open; a selected turn's surf passages or an entity profile take over.
+    const readerPreviewContent = S.readerSourceName ? (S.readerContent[S.readerSourceName] || '') : '';
+    const readerPreviewReady = !!readerPreviewContent
+      && readerPreviewContent !== 'Loading content…' && readerPreviewContent !== 'Loading prior…'
+      && !String(readerPreviewContent).startsWith('(Content not available');
+    const readerPreviewText = readerPreviewReady
+      ? (readerPreviewContent.length > 12000
+          ? readerPreviewContent.slice(0, 12000) + '\n\n… (preview cut at 12,000 chars — the reader\u2019s Read view shows the whole document)'
+          : readerPreviewContent)
+      : '';
+    const readerPreviewMeta = readerPreviewReady
+      ? `${readerPreviewContent.trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words`
+      : '';
+
 
     // Locating a cited span: prefer its verbatim text, not its byte offsets.
     // byte_start/byte_end are UTF-8 offsets and this string is UTF-16, so the
@@ -4205,7 +4482,7 @@ class Component extends DCLogic {
         : 'Answers cite only what your sources say.',
       composerHintColor: enabledSourceCount === 0 && roomSources.length ? '#A3592B' : '#A39D91',
       turns: active.turns.map((turn, i) => this.turnVals(turn, i, selectEntity)),
-      streamingAnswer: S.streamingAnswer, streamingAnswerHtml: S.streamingAnswer ? this.renderMarkdown(S.streamingAnswer) : null, streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
+      streamingAnswer: S.streamingAnswer, streamingAnswerHtml: S.streamingAnswer ? this.renderAnswerEntities(S.streamingAnswer) : null, streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
       thinkingPhase: S.thinkingPhase,
       // Once the answer's own prose starts arriving, thinkingPhase is cleared —
       // the top-of-chat indicator has nothing left to say, so it disappears
@@ -4384,9 +4661,7 @@ class Component extends DCLogic {
           : 'click empty space to come back',
       orbitStatus: !orbitEdges.length
         ? ` · ${this.orbitEmptyReason().toLowerCase()}`
-        : orbitKids.length
-          ? ` · ${orbitKids.map(k => orbitBodies[k].label).join(', ')} orbit${orbitKids.length > 1 ? '' : 's'} it`
-          : ` · ${orbitEdges.length} entit${orbitEdges.length === 1 ? 'y' : 'ies'} in this room`,
+        : ` · ${this.orbitShown} of ${this.orbitTotal} entit${this.orbitTotal === 1 ? 'y' : 'ies'}, most-mentioned first${this.orbitTotal > this.orbitShown ? ' — the rest are in the rail' : ''}`,
       // The reader sits *beside* the chat, never on top of it. Checking a
       // source used to cost you the conversation, which is why nobody checked.
       readerOpen: S.readerOpen, showTabs: true,
@@ -4418,7 +4693,7 @@ class Component extends DCLogic {
       readerVideoSrc: readerType === 'video' && S.readerSourceName
         ? ((this._uploadBlobUrls && this._uploadBlobUrls.get(S.readerSourceName)) || S.readerSourceName)
         : '',
-      readerShowModeToggle: readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && readerType !== 'pdf',
+      readerShowModeToggle: !readerOverviewMode && readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && !readerIsPDFKind,
       // PDF reader — rendered / extracted / split modes with page navigation
       readerIsPDF: readerType === 'pdf' && S.readerPDFLayout && S.readerPDFLayout[S.readerSourceName],
       readerPDFRenderedBg: S.readerPDFView === 'rendered' || S.readerPDFView === 'split' ? '#1F5A4C' : 'transparent',
@@ -4458,8 +4733,44 @@ class Component extends DCLogic {
       })(),
       closeReader: () => this.closeReader(),
       docOutline,
-      readerModeScroll: readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && readerType !== 'pdf' && S.readerViewMode !== 'paginated',
-      readerModePaginated: readerType !== 'video' && readerType !== 'spreadsheet' && readerType !== 'pdf' && S.readerViewMode === 'paginated',
+      // Reader overview — the default surface for a text document. Center
+      // panel shows structure (title/stats/headings); the side rail shows the
+      // raw-text preview. The toggle flips between Overview and the full text.
+      readerOverviewMode, readerOverviewSupported: readerType === 'pdf' && !readerIsPDFKind,
+      setReaderOverview: () => this.setState({ readerOverview: true }),
+      setReaderRead: () => this.setState({ readerOverview: false }),
+      readerOverviewBg: S.readerOverview && readerOverviewMode ? '#1F5A4C' : 'transparent',
+      readerOverviewColor: S.readerOverview && readerOverviewMode ? '#FFFDFA' : '#8C877C',
+      readerReadBg: !S.readerOverview || !readerOverviewMode ? '#E5EDE9' : 'transparent',
+      readerReadColor: !S.readerOverview || !readerOverviewMode ? '#1F5A4C' : '#8C877C',
+      readerOverviewTitle, readerOverviewStats, readerOverviewPreview,
+      readerHasOverviewPreview: !!readerOverviewPreview,
+      readerOutlineRows,
+      readerHasOutline: readerOverviewMode && outlineHasHeadings,
+      readerNoOutline: readerOverviewMode && !outlineHasHeadings,
+      readerOutlineStatus,
+      // Side-rail preview of the open document's raw text.
+      readerPreviewVisible: (() => {
+        if (!S.readerOpen || !S.readerSourceName) return false;
+        const activeTurn = (S.activeTurnId ? (active.turns || []).find(t => t.id === S.activeTurnId) : null) || null;
+        const g = activeTurn ? activeTurn.grounding : null;
+        const surf = !!(activeTurn && g && !g.empty && ((g.retrieved && g.retrieved.length) || (g.citations && g.citations.length)));
+        return !surf && !S.selectedEntity;
+      })(),
+      readerPreviewHidden: (() => {
+        if (!S.readerOpen || !S.readerSourceName) return true;
+        const activeTurn = (S.activeTurnId ? (active.turns || []).find(t => t.id === S.activeTurnId) : null) || null;
+        const g = activeTurn ? activeTurn.grounding : null;
+        const surf = !!(activeTurn && g && !g.empty && ((g.retrieved && g.retrieved.length) || (g.citations && g.citations.length)));
+        return surf || !!S.selectedEntity;
+      })(),
+      readerPreviewReady, readerPreviewLoading: S.readerOpen && S.readerSourceName && !readerPreviewReady,
+      readerPreviewText, readerPreviewMeta,
+      readerPreviewStatus: readerPreviewReady
+        ? ''
+        : ((S.readerSourceName ? S.readerContent[S.readerSourceName] : '') || 'Loading preview…'),
+      readerModeScroll: !readerOverviewMode && readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && !readerIsPDFKind && S.readerViewMode !== 'paginated',
+      readerModePaginated: !readerOverviewMode && readerType !== 'video' && readerType !== 'spreadsheet' && !readerIsPDFKind && S.readerViewMode === 'paginated',
       setReaderScroll: () => this.setState({ readerViewMode: 'scroll' }),
       setReaderPaginated: () => this.setState({ readerViewMode: 'paginated' }),
       readerScrollColor: S.readerViewMode !== 'paginated' ? '#1F5A4C' : '#8C877C',

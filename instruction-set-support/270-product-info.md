@@ -3,7 +3,7 @@ id: product-info
 title: Product Specs and Comparison
 always: false
 weight: 40
-signals: [spec, specifications, battery life, "how long does the battery", waterproof, "ip rating", ipx, "what is the", dimensions, weight, colors, colour, "aurora one", "aurora buds", "which should i buy", "compare", "better", "difference between", "does it have", features]
+signals: [spec, specifications, battery life, "how long does the battery", waterproof, "ip rating", ipx, dimensions, weight, colors, colour, "aurora one", "aurora buds", "which should i buy", "compare", "better", "difference between", "does it have", features]
 fingerprint: Aurora One and Aurora Buds specs, IP ratings, battery, and which-model guidance.
 ---
 
