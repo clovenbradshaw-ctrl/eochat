@@ -978,8 +978,14 @@ class Component extends DCLogic {
     recycleBinOpen: false,
   };
 
-  proxyUrl() { return this.props.proxyUrl || 'http://localhost:11435'; }
-  sessionId() { return this.props.sessionId || 'eochat'; }
+  proxyUrl() {
+    const fromQuery = new URLSearchParams(window.location.search).get('proxyUrl');
+    return fromQuery || this.props.proxyUrl || 'http://localhost:11435';
+  }
+  sessionId() {
+    const fromQuery = new URLSearchParams(window.location.search).get('sessionId');
+    return fromQuery || this.props.sessionId || 'eochat';
+  }
 
   componentDidMount() {
     this.tick = this.tick.bind(this);
