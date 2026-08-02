@@ -2,6 +2,12 @@ node_modules/
 memory/
 chats/
 audit-output/
+
+# Runtime state the server writes as it is used — one reader's deleted sources
+# and fetched pages. Committing these ships someone else's browsing history as
+# this repo's default data, which is exactly what a fresh clone must not have.
+server/recycle-bin.json
+server/web-history.jsonl
 .DS_Store
 sonata.mid
 *.mid

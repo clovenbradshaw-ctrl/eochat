@@ -25,6 +25,16 @@
  *   --max-body=<n>    Max request body in bytes (default: 5242880)
  *   --store-ttl=<n>   Store entry TTL in ms (default: 3600000 = 1hr)
  *   --store-max=<n>   Max store entries (default: 10000)
+ *
+ * `npm start` sets UV_THREADPOOL_SIZE=16 (Node's default is 4). This process
+ * fans out a lot of concurrent fs work under load — per-ingest attachment
+ * sidecars, discourse JSONL appends, web-page snapshots — all of which share
+ * libuv's threadpool with everything else, admission included (see
+ * ingest-worker.js). Four threads queue behind each other exactly the way a
+ * blocked main thread does, just less severely; must be set before Node
+ * starts (a same-process assignment here would be too late — the pool
+ * initializes on first use), hence the launch-time env var rather than a
+ * line in this file.
  */
 
 import http from "http";
@@ -36,7 +46,8 @@ import path from "path";
 // home-directory absolutes, no walking up out of the source tree.
 import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies } from "./paths.js";
 import { createModelRouter } from "./model-router.js";
-import { ensureSession, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource } from "./engine-ground.js";
+import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource } from "./engine-ground.js";
+import { terminateIngestWorker } from "./ingest-worker-client.js";
 import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // Static, not dynamic: the request handler is synchronous, and the module only
 // catalogs on import — ingest stays lazy behind ensurePriorsIngested().
@@ -44,6 +55,7 @@ import * as priorsSource from "./priors-source.js";
 import { HolonicTask } from "./holonic-task.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
 import { createTurnController } from "./turn-controller.js";
+import { runSessionMessage } from "./code-longform-session.js";
 
 // ── CLI args with validation ──
 
@@ -64,11 +76,16 @@ const MAX_BODY = parseArg("max-body", 5_242_880, Number);
 const STORE_TTL = parseArg("store-ttl", 3_600_000, Number);
 const STORE_MAX = parseArg("store-max", 10_000, Number);
 
-// Boot-time corpus ingest runs in the background so the server can listen
-// immediately. Until it finishes, the engine holds only part of the corpus — a
-// query in that window returned the ordinary `no_evidence_matched` gap, which
-// is indistinguishable from "your sources genuinely do not say this". They are
-// different facts and must not read alike, so warmup is tracked and reported.
+// Tracks a background corpus ingest so "still loading" stays distinguishable
+// from "your sources genuinely do not say this" — a query landing mid-ingest
+// returned the ordinary `no_evidence_matched` gap, which reads identically to
+// real silence. Two different facts; they must not read alike.
+//
+// Nothing sets these today: the boot-time ingest that did was removed (see
+// start()), so the corpus is only ever what the reader attached, and it is
+// never half-loaded behind their back. The flags stay because any future
+// background ingest needs exactly this distinction — `started` false means
+// every empty result is honest silence, which is the correct reading now.
 const corpusWarmup = { started: false, ready: false };
 
 // ── Model routing ──
@@ -1016,7 +1033,7 @@ const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "verbatim_search",
-      description: "Search the engine for EXACT verbatim spans from ingested source texts. Returns byte-offset anchored passages with exact text — no model hallucination. Use this when you need to retrieve EXACT quotes from ingested documents like War and Peace.",
+      description: "Search the engine for EXACT verbatim spans from ingested source texts. Returns byte-offset anchored passages with exact text — no model hallucination. Use this when you need to retrieve EXACT quotes from documents the reader has attached. Naming a specific work here would be a lie about what is loaded: the corpus holds only what this reader attached, and may be empty.",
       parameters: {
         type: "object",
         properties: {
@@ -2571,7 +2588,11 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
           const u = new URL(url);
           label = (u.hostname.replace(/^www\./, "") + u.pathname).replace(/\/+$/, "").replace(/\//g, "_");
         } catch { label = url.replace(/\//g, "_"); }
-        engineIngestText(fetched.text.slice(0, 500000), `source:${label}`, label);
+        // Async/worker-backed (see ingest-worker.js): a fetched page can run
+        // to 500,000 chars, and admitting that synchronously is exactly the
+        // L1d failure mode LAWS.md documents — one chat turn's web ingest
+        // could block every other concurrent request's SSE handshake.
+        await engineIngestTextAsync(fetched.text.slice(0, 500000), `source:${label}`, label);
         admitted.push({ url, label });
         const record = {
           name: label, url, size: fetched.text.length,
@@ -2627,6 +2648,88 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
     sendSSE("error", { message: err.message });
   }
   res.end();
+}
+
+// ── Ingest ──
+//
+// Shared by both /api/ingest response modes (plain JSON and SSE, below):
+// admission itself runs off the main thread (engineIngestTextAsync/
+// engineIngestFileAsync — see ingest-worker.js for why), so this only
+// decides which of url/content/path was sent and shapes the result.
+async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }) {
+  // URL ingestion — fetch, strip markup, then fall through the same
+  // content path so a page becomes a first-class citable source, not a
+  // one-turn context injection.
+  if (ingestUrl && !content) {
+    const fetched = await fetchAndSaveUrl(ingestUrl);
+    if (!fetched.text) {
+      const err = new Error(`Fetch failed for ${ingestUrl} — ${fetched.error || "no text"}`);
+      err.status = 502;
+      throw err;
+    }
+    // The engine derives a display name by stripping everything up to the
+    // last slash, so a raw URL would come back "(unnamed)". Flatten
+    // host+path into one slash-free label; the URL rides alongside it.
+    let label;
+    try {
+      const u = new URL(ingestUrl);
+      label = (u.hostname.replace(/^www\./, "") + u.pathname).replace(/\/+$/, "").replace(/\//g, "_");
+    } catch { label = ingestUrl.replace(/\//g, "_"); }
+    const srcName = name || label || ingestUrl;
+    const sourceId = `source:${srcName}`;
+    const result = await engineIngestTextAsync(fetched.text.slice(0, 500000), sourceId, srcName);
+    const att = await discourse.addAttachment(sessionId, {
+      name: srcName,
+      content: fetched.text,
+      type: "url",
+      size: fetched.text.length,
+      ingestedAt: new Date().toISOString(),
+    });
+    return {
+      ...result, name: srcName, url: ingestUrl,
+      attachment: { name: att.name, type: att.type, size: att.size },
+    };
+  }
+
+  // Content-based ingestion (from browser file picker)
+  if (content) {
+    const sourceId = `source:${name || "upload"}:${Date.now()}`;
+    const result = await engineIngestTextAsync(content.slice(0, 500000), sourceId, name || "upload");
+
+    // Register as attachment in discourse
+    const att = await discourse.addAttachment(sessionId, {
+      name: name || `upload_${Date.now()}.txt`,
+      content,
+      type: name ? (name.endsWith(".txt") ? "text" : name.endsWith(".json") ? "json" : name.endsWith(".js") ? "javascript" : name.endsWith(".py") ? "python" : "file") : "text",
+      size: content.length,
+      ingestedAt: new Date().toISOString(),
+    });
+
+    return { ...result, name: name || "upload", attachment: { name: att.name, type: att.type, size: att.size } };
+  }
+
+  // Path-based ingestion (from server filesystem)
+  if (!ingestPath) {
+    const err = new Error("Missing 'url', 'path' or 'content' field");
+    err.status = 400;
+    throw err;
+  }
+  try {
+    return await engineIngestFileAsync(ingestPath);
+  } catch (err) {
+    // Idempotent: if already ingested, return success with existing source info
+    if (err.message?.includes("duplicate")) {
+      const existing = engineListSources().find(s => s.path === ingestPath);
+      return {
+        path: ingestPath,
+        alreadyIngested: true,
+        chunks: existing?.chunks || 0,
+        pool: existing?.pool || "corpus",
+        note: "Source already ingested",
+      };
+    }
+    throw err;
+  }
 }
 
 // ── Server ──
@@ -2813,102 +2916,78 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Ingest a file or text content into the engine session for grounded search
   if (req.method === "POST" && req.url === "/api/ingest") {
     let body = "";
     req.on("data", (c) => { body += c; });
     req.on("end", async () => {
+      let data;
       try {
-        const { path: ingestPath, url: ingestUrl, content, name, session } = JSON.parse(body);
-        const sessionId = session || "default";
-
-        // URL ingestion — fetch, strip markup, then fall through the same
-        // content path so a page becomes a first-class citable source, not a
-        // one-turn context injection.
-        if (ingestUrl && !content) {
-          const fetched = await fetchAndSaveUrl(ingestUrl);
-          if (!fetched.text) {
-            res.writeHead(502, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: `Fetch failed for ${ingestUrl} — ${fetched.error || "no text"}` }));
-            return;
-          }
-          // The engine derives a display name by stripping everything up to the
-          // last slash, so a raw URL would come back "(unnamed)". Flatten
-          // host+path into one slash-free label; the URL rides alongside it.
-          let label;
-          try {
-            const u = new URL(ingestUrl);
-            label = (u.hostname.replace(/^www\./, "") + u.pathname).replace(/\/+$/, "").replace(/\//g, "_");
-          } catch { label = ingestUrl.replace(/\//g, "_"); }
-          const srcName = name || label || ingestUrl;
-          const sourceId = `source:${srcName}`;
-          const { engineIngestText } = await import("./engine-ground.js");
-          const result = engineIngestText(fetched.text.slice(0, 500000), sourceId, srcName);
-          const att = await discourse.addAttachment(sessionId, {
-            name: srcName,
-            content: fetched.text,
-            type: "url",
-            size: fetched.text.length,
-            ingestedAt: new Date().toISOString(),
-          });
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({
-            ...result, name: srcName, url: ingestUrl,
-            attachment: { name: att.name, type: att.type, size: att.size },
-          }));
-          return;
-        }
-
-        // Content-based ingestion (from browser file picker)
-        if (content) {
-          const sourceId = `source:${name || "upload"}:${Date.now()}`;
-          const { engineIngestText } = await import("./engine-ground.js");
-          const result = engineIngestText(content.slice(0, 500000), sourceId, name || "upload");
-
-          // Register as attachment in discourse
-          const att = await discourse.addAttachment(sessionId, {
-            name: name || `upload_${Date.now()}.txt`,
-            content,
-            type: name ? (name.endsWith(".txt") ? "text" : name.endsWith(".json") ? "json" : name.endsWith(".js") ? "javascript" : name.endsWith(".py") ? "python" : "file") : "text",
-            size: content.length,
-            ingestedAt: new Date().toISOString(),
-          });
-
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ ...result, name: name || "upload", attachment: { name: att.name, type: att.type, size: att.size } }));
-          return;
-        }
-
-        // Path-based ingestion (from server filesystem)
-        if (!ingestPath) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Missing 'url', 'path' or 'content' field" }));
-          return;
-        }
-        try {
-          const result = engineIngestFile(ingestPath);
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(result));
-        } catch (err) {
-          // Idempotent: if already ingested, return success with existing source info
-          if (err.message?.includes("duplicate")) {
-            const existing = engineListSources().find(s => s.path === ingestPath);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({
-              path: ingestPath,
-              alreadyIngested: true,
-              chunks: existing?.chunks || 0,
-              pool: existing?.pool || "corpus",
-              note: "Source already ingested",
-            }));
-          } else {
-            throw err;
-          }
-        }
+        data = JSON.parse(body);
       } catch (err) {
         res.writeHead(400, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
+        return;
       }
+
+      const { path: ingestPath, url: ingestUrl, content, name, session } = data;
+      const sessionId = session || "default";
+      const wantsStream = data.stream === true || (req.headers.accept || "").includes("text/event-stream");
+
+      if (!wantsStream) {
+        try {
+          const result = await performIngest({ ingestPath, ingestUrl, content, name, sessionId });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+        } catch (err) {
+          res.writeHead(err.status || 400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+        return;
+      }
+
+      // Streaming path (LAWS.md L1c/L1a) — same SSE transport handleToolStream
+      // uses. The acknowledgement is written HERE, before performIngest does
+      // anything: L1a requires the first signal on receipt of the trigger, not
+      // on completion. What describes it (name/bytes) comes only from what the
+      // caller sent, never from the ingest result, so it is honest to emit
+      // before any engine work has run.
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      const sendSSE = (event, payload) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+      };
+      const label = name || ingestUrl || (ingestPath ? ingestPath.replace(/^.*[/\\]/, "") : null) || "upload";
+      const startedAt = Date.now();
+      sendSSE("started", {
+        name: label,
+        bytes: content != null ? Buffer.byteLength(content, "utf8") : null,
+        path: ingestPath || null,
+        url: ingestUrl || null,
+      });
+
+      // L1c: admission itself is one atomic call in the worker (see
+      // ingest-worker.js) with no midpoint to report chunk-by-chunk progress
+      // from — but it no longer blocks this thread either, so a heartbeat
+      // tied to THIS request's outstanding promise is a real signal ("still
+      // working, Nms so far"), not decoration: it stops the instant the
+      // ingest settles, and never fires for one that already returned.
+      const heartbeat = setInterval(() => {
+        sendSSE("progress", { name: label, elapsedMs: Date.now() - startedAt });
+      }, 300);
+
+      try {
+        const result = await performIngest({ ingestPath, ingestUrl, content, name, sessionId });
+        clearInterval(heartbeat);
+        sendSSE("done", result);
+      } catch (err) {
+        clearInterval(heartbeat);
+        sendSSE("error", { message: err.message });
+      }
+      res.end();
     });
     return;
   }
@@ -3253,12 +3332,18 @@ const server = http.createServer((req, res) => {
 
     // Read context around a span: expand before/after
     if (url.pathname === "/api/verbatim/context") {
-      const id = url.searchParams.get("id");
+      // Same documented-vs-implemented split that /api/verbatim/read carried:
+      // UX-DESIGN.md publishes `span_id`, this route only ever read `id`, so
+      // following a citation to its surrounding text — the second hop of the
+      // audit round trip — returned 400 for every caller written against the
+      // documentation. Accept both names here too. Found by check-laws.mjs as
+      // an L2b violation: an audit path that breaks at a hop is not a path.
+      const id = url.searchParams.get("id") || url.searchParams.get("span_id");
       const before = parseInt(url.searchParams.get("before") || "0", 10);
       const after = parseInt(url.searchParams.get("after") || "0", 10);
       if (!id) {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Missing 'id' parameter" }));
+        res.end(JSON.stringify({ error: "Missing 'id' (or 'span_id') parameter" }));
         return;
       }
       try {
@@ -3607,6 +3692,78 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Long-form code generation ACROSS messages — the sessionful build. The
+  // first POST to a directory builds the project from scratch; every later
+  // POST to the SAME directory is a revision of what earlier messages built.
+  // Mirrors /api/holonic's SSE shape: progress events stream per-file, and a
+  // final "done" carries the measured residual so the UI can show what the
+  // next message must still fix.
+  if (req.method === "POST" && req.url === "/api/code-longform/session") {
+    let body = "";
+    let bodySize = 0;
+    req.on("data", chunk => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(new Error("Request body too large")); return; }
+      body += chunk.toString("utf8");
+    });
+    req.on("end", async () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
+        return;
+      }
+
+      const message = data.message || "";
+      if (!message) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "'message' is required" }));
+        return;
+      }
+      const dir = data.dir || null;
+      if (!dir) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "'dir' is required" }));
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      const sendSSE = (event, payload) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+      };
+
+      try {
+        const result = await runSessionMessage({
+          dir,
+          request: message,
+          model: data.model || "llama3.2:latest",
+          onProgress: (msg) => sendSSE("progress", { msg }),
+        });
+        const session = result.session;
+        sendSSE("done", {
+          kind: result.kind,
+          files: session.files.map((f) => f.path),
+          messages: session.messages.length,
+          verifications: session.verifications,
+          continuityFlags: session.continuityFlags,
+          assetGaps: session.assetGaps,
+          dir,
+        });
+      } catch (err) {
+        sendSSE("error", { message: err.message });
+      }
+      res.end();
+    });
+    return;
+  }
+
   // Chat completions (with tool calling)
   if (req.method === "POST" && (req.url === "/v1/chat/completions" || req.url === "/api/chat")) {
     let body = "";
@@ -3805,7 +3962,8 @@ async function shutdown(signal) {
   shuttingDown = true;
   console.error(`\n[proxy] ${signal}: draining connections (${connections.size} active)...`);
 
-  server.close(() => {
+  server.close(async () => {
+    await terminateIngestWorker();
     console.error("[proxy] Server closed");
     process.exit(0);
   });
@@ -3863,78 +4021,29 @@ async function start() {
     });
   });
 
-  // Auto-ingest large files AFTER server is listening (non-blocking)
-  // These run in the background and don't prevent the server from accepting requests
-  setImmediate(async () => {
-    corpusWarmup.started = true;
-    // Auto-ingest War and Peace (pg2600.txt) for verbatim span retrieval
-    const WAR_AND_PEACE_PATHS = [
-      path.resolve(REPO_PATH, "pg2600.txt"),
-      path.resolve(REPO_PATH, "..", "pg2600.txt"),
-      path.resolve(process.env.HOME || "/Users/mlacy", "Downloads", "pg2600.txt"),
-      path.resolve(process.env.HOME || "/Users/mlacy", "Desktop", "pg2600.txt"),
-    ];
-    for (const wpPath of WAR_AND_PEACE_PATHS) {
-      try {
-        if (fs.existsSync(wpPath)) {
-          const wpResult = engineIngestFile(wpPath);
-          console.error(`[proxy] Ingested War and Peace: ${wpPath} (${wpResult.chunks} chunks)`);
-          break;
-        }
-      } catch (err) {
-        if (!err.message?.includes("duplicate")) {
-          console.error(`[proxy] War and Peace ingest skipped at ${wpPath}: ${err.message}`);
-        }
-      }
-    }
+  // No boot-time corpus ingest. Three Gutenberg texts — War and Peace
+  // (pg2600.txt), Frankenstein (pg84.txt), the King James Bible (pg10.txt) —
+  // used to be scanned for and ingested here, off whichever of four hardcoded
+  // paths happened to exist. They arrived in the sources rail on every boot
+  // without the reader having attached anything, so the rail described a
+  // corpus nobody chose and every ungrounded answer had three books to be
+  // wrong about. The corpus now holds exactly what this reader attached.
+  //
+  // Priors are unaffected: eoPriors lives in its own pool (see
+  // priors-source.js) and is deliberately excluded from the sources rail, so
+  // wiping the corpus does not thin what steers retrieval.
+  //
+  // To read one of these texts again, attach it like any other source. To
+  // restore an automatic ingest, do it behind an explicit opt-in env var
+  // rather than a filesystem scan, and set corpusWarmup.started/ready around
+  // it so the "still loading" gap stays distinguishable from "sources are
+  // silent" (see corpusWarmup at the top of this file).
 
-    // Also look for Frankenstein (pg84.txt) in the repo dir
-    const FRANKENSTEIN_PATHS = [
-      path.resolve(REPO_PATH, "pg84.txt"),
-      path.resolve(REPO_PATH, "..", "pg84.txt"),
-      path.resolve(process.env.HOME || "/Users/mlacy", "Downloads", "pg84.txt"),
-    ];
-    for (const frPath of FRANKENSTEIN_PATHS) {
-      try {
-        if (fs.existsSync(frPath)) {
-          const frResult = engineIngestFile(frPath);
-          console.error(`[proxy] Ingested Frankenstein: ${frPath} (${frResult.chunks} chunks)`);
-          break;
-        }
-      } catch (err) {
-        if (!err.message?.includes("duplicate")) {
-          console.error(`[proxy] Frankenstein ingest skipped at ${frPath}: ${err.message}`);
-        }
-      }
-    }
-
-    // Also look for the King James Bible (pg10.txt)
-    const BIBLE_PATHS = [
-      path.resolve(REPO_PATH, "pg10.txt"),
-      path.resolve(REPO_PATH, "..", "pg10.txt"),
-      path.resolve(process.env.HOME || "/Users/mlacy", "Downloads", "pg10.txt"),
-    ];
-    for (const bibPath of BIBLE_PATHS) {
-      try {
-        if (fs.existsSync(bibPath)) {
-          const bibResult = engineIngestFile(bibPath);
-          console.error(`[proxy] Ingested King James Bible: ${bibPath} (${bibResult.chunks} chunks)`);
-          break;
-        }
-      } catch (err) {
-        if (!err.message?.includes("duplicate")) {
-          console.error(`[proxy] Bible ingest skipped at ${bibPath}: ${err.message}`);
-        }
-      }
-    }
-
-    corpusWarmup.ready = true;
-    console.error(`[proxy] Corpus warm — grounding is now complete`);
-  });
-
-  // Verify upstream is reachable — retry with backoff because the
-  // concurrent engine ingest of large texts (War and Peace, Bible) may
-  // temporarily make Ollama unresponsive during embedding.
+  // Verify upstream is reachable — retry with backoff because a large
+  // concurrent ingest may temporarily make Ollama unresponsive during
+  // embedding. Boot no longer ingests anything, so this is now about a
+  // reader attaching a big text right as the server comes up; the backoff
+  // costs nothing when idle and still covers that.
   for (let attempt = 1; attempt <= 4; attempt++) {
     const ok = await safeFetch(`${TARGET}/api/tags`, {}, attempt < 4 ? 5000 : 10000).then(r => true).catch(() => false);
     if (ok) {

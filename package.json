@@ -5,13 +5,14 @@
   "description": "A chat that answers from your actual documents, with [1] citations to real passages — not hallucinated.",
   "license": "MIT",
   "scripts": {
-    "start": "node server/proxy.js",
+    "start": "UV_THREADPOOL_SIZE=16 node server/proxy.js",
     "ui": "python3 -m http.server 8899 --directory ui",
     "probe:retrieval": "node scripts/probe-retrieval.mjs",
     "probe:order": "node scripts/probe-prompt-order.mjs",
     "test:affordances": "node scripts/test-affordances.mjs",
     "test:conversation-store": "node scripts/test-conversation-store.mjs",
     "test:turn-controller": "node scripts/test-turn-controller.mjs",
+    "check:laws": "node scripts/check-laws.mjs",
     "postinstall": "git submodule update --init --recursive || true"
   },
   "dependencies": {

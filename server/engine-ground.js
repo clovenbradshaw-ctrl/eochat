@@ -37,6 +37,7 @@ import {
 import * as corpusFacade from "@eoreader/host/corpus";
 import { INDIVIDUATION_TYPES } from "@eoreader/engine/referents";
 import { loadCorefPrior, surfaceMatcher, activatePriors } from "./priors-bridge.js";
+import { runIngestInWorker } from "./ingest-worker-client.js";
 
 // v2 is additive over v1 — it adds documentIds/documentText/sessionOutline/
 // sessionReferents/sessionPivot and changes no signature this bridge calls
@@ -103,6 +104,53 @@ export function engineIngestText(text, sourceId, displayName, { pool: poolName =
     chunks,
     pool: p.name,
     entries: admitted.map((a, i) => ({ id: `chunk-${i}`, size: a.byteEnd - a.byteStart })),
+  };
+}
+
+// Splices the ingest worker's admission result into a real, persistent pool
+// session — the counterpart to ingest-worker.js running admitChunked/
+// ingestFile against a throwaway one. Mirrors admitChunked's own merge
+// behavior exactly (see @eoreader/host/corpus.js): a fresh docId is set
+// outright, a docId that already exists gets its chunks/pieces concatenated
+// (not its `text`, which is what the real function does too — a quirk this
+// preserves rather than "fixes", since fixing it here would mean this host
+// diverging from what re-running admitChunked on the main thread would have
+// produced).
+function mergeIngestResult(p, result) {
+  for (const [spanId, span] of result.spans) p.session.spans.set(spanId, span);
+  const existingDoc = p.session.documents.get(result.docId);
+  if (existingDoc && result.doc) {
+    existingDoc.chunks = existingDoc.chunks.concat(result.doc.chunks);
+    existingDoc.pieces = existingDoc.pieces.concat(result.doc.pieces);
+  } else if (result.doc) {
+    p.session.documents.set(result.docId, result.doc);
+  }
+  for (const [refId, entry] of result.provenance) {
+    if (!p.session.provenance.has(refId)) {
+      p.session.provenance.set(refId, entry);
+      p.session.provenance.tick++;
+    }
+  }
+}
+
+// Off-main-thread counterpart to engineIngestText — see ingest-worker.js for
+// why this exists (LAWS.md L1d: a large admitChunked call blocks the whole
+// event loop, so no concurrent request, including an unrelated chat turn's
+// SSE handshake, can be acknowledged until it returns). Same signature, same
+// return shape, same bookkeeping — just awaited, and the expensive part runs
+// in a worker thread instead of this one.
+export async function engineIngestTextAsync(text, sourceId, displayName, { pool: poolName = DEFAULT_POOL, kind = "corpus" } = {}) {
+  const p = pool(poolName);
+  const result = await runIngestInWorker({ kind: "text", text, sourceId });
+  mergeIngestResult(p, result);
+  p.chunkCount += result.chunks;
+  const name = displayName || sourceId?.replace(/^.*[/\\]/, "") || "(unnamed)";
+  p.sources.set(sourceId || name, { name, chunks: result.chunks, kind, pool: p.name, ingestedAt: Date.now() });
+  return {
+    sourceId,
+    chunks: result.chunks,
+    pool: p.name,
+    entries: result.admitted.map((a, i) => ({ id: `chunk-${i}`, size: a.byteEnd - a.byteStart })),
   };
 }
 
@@ -444,13 +492,12 @@ function resolveSourcePath(sourceId) {
 // slices the Buffer and decodes after, never the decoded string.
 const lineIndexCache = new Map();
 
-function fileIndex(filePath) {
-  const stat = fs.statSync(filePath);
-  const key = `${stat.mtimeMs}:${stat.size}`;
-  const hit = lineIndexCache.get(filePath);
-  if (hit && hit.key === key) return hit;
-
-  const buf = fs.readFileSync(filePath);
+// The index itself, over a Buffer whose provenance is the caller's business.
+// Shared by the on-disk and in-memory paths so both produce byte-identical
+// offsets — if these two ever diverge, a citation read from memory and the
+// same citation read from disk would disagree, which is the one thing a
+// verbatim engine may never do.
+function bufferIndex(buf, key) {
   const lines = buf.toString("utf8").split("\n");
   // starts[i] is the byte offset of line i. Measured with byteLength, not
   // string length, so it stays true across multi-byte characters.
@@ -460,8 +507,56 @@ function fileIndex(filePath) {
     starts[i] = at;
     at += Buffer.byteLength(lines[i], "utf8") + 1; // +1 for the \n
   }
-  const rec = { key, buf, lines, starts, bytes: buf.length };
+  return { key, buf, lines, starts, bytes: buf.length };
+}
+
+function fileIndex(filePath) {
+  const stat = fs.statSync(filePath);
+  const key = `${stat.mtimeMs}:${stat.size}`;
+  const hit = lineIndexCache.get(filePath);
+  if (hit && hit.key === key) return hit;
+
+  const rec = bufferIndex(fs.readFileSync(filePath), key);
   lineIndexCache.set(filePath, rec);
+  return rec;
+}
+
+// Byte index for one ingested document — from disk when the source really is a
+// file, from the engine's retained text when it is not.
+//
+// The byte readers were written when the corpus arrived by file ingest, so they
+// indexed doc.path directly. But every source a reader attaches through the UI
+// is ingested as *content* — an upload, or a fetched URL — and carries a
+// synthetic `source:name:timestamp` id that no filesystem can stat. Reading a
+// citation's raw bytes therefore failed with ENOENT for exactly the sources
+// readers actually create, while working for the bundled books nobody chose.
+// Removing the boot-time file ingest made that universal rather than merely
+// common. A quote you cannot follow to its source is an unfalsifiable citation,
+// which is the failure this application exists to prevent (LAWS.md L2f).
+//
+// Caching is by document id and text length: retained text for an id does not
+// change without a re-ingest, and a re-ingest mints a new id.
+const retainedIndexCache = new Map();
+
+function docByteIndex(session, doc) {
+  if (doc?.path) {
+    try {
+      if (fs.statSync(doc.path).isFile()) return fileIndex(doc.path);
+    } catch { /* not a real file — fall through to retained text */ }
+  }
+
+  const retained = corpusFacade.documentText(session, doc.id);
+  const text = retained?.text;
+  if (typeof text !== "string") {
+    return {
+      error: `no readable body for "${doc.base || doc.id}" — not a file on disk, and the engine retained no text for it`,
+    };
+  }
+  const key = `${doc.id}:${text.length}`;
+  const hit = retainedIndexCache.get(doc.id);
+  if (hit && hit.key === key) return hit;
+  const rec = bufferIndex(Buffer.from(text, "utf8"), key);
+  retainedIndexCache.set(doc.id, rec);
   return rec;
 }
 
@@ -783,9 +878,10 @@ export function engineReadSourceBytes(sourceRef, { pool: poolName = DEFAULT_POOL
   const doc = resolved.doc;
 
   let idx;
-  try { idx = fileIndex(doc.path); } catch (e) {
+  try { idx = docByteIndex(session, doc); } catch (e) {
     return { error: `Cannot read ${doc.path}: ${e.message}` };
   }
+  if (idx.error) return { error: idx.error };
 
   const total = idx.bytes;
   const from = Math.max(0, Math.min(Number.isFinite(start) ? start : 0, total));
@@ -812,7 +908,7 @@ export function engineReadSourceBytes(sourceRef, { pool: poolName = DEFAULT_POOL
 // before and M bytes after from the source file.
 export function engineReadContext(spanRef, { beforeBytes = 0, afterBytes = 0, maxTotal = 50000 } = {}) {
   // Resolve the span: either a span_id (look up across pools) or a direct ref
-  let sourceId, byteStart, byteEnd;
+  let sourceId, byteStart, byteEnd, session;
   if (typeof spanRef === "string") {
     const p = poolForSpan(spanRef);
     const rec = p?.session.spans.get(spanRef);
@@ -820,10 +916,14 @@ export function engineReadContext(spanRef, { beforeBytes = 0, afterBytes = 0, ma
     sourceId = rec.source_id;
     byteStart = rec.byte_start;
     byteEnd = rec.byte_end;
+    // The span told us which pool it lives in; reading its context from a
+    // different pool's session would resolve the wrong document or none.
+    session = p.session;
   } else {
     sourceId = spanRef.source;
     byteStart = spanRef.byte_start;
     byteEnd = spanRef.byte_end;
+    session = ensureSession(DEFAULT_POOL);
   }
 
   if (byteStart == null || byteEnd == null) {
@@ -833,10 +933,17 @@ export function engineReadContext(spanRef, { beforeBytes = 0, afterBytes = 0, ma
   const sourcePath = resolveSourcePath(sourceId);
   if (!sourcePath) return { error: `Cannot resolve source from "${sourceId}"` };
 
+  // Same content-vs-file split as engineReadSourceBytes: a span from an
+  // uploaded document has no file behind it, and reading its surroundings is
+  // the second hop of the audit round trip (LAWS.md L2b).
+  const resolved = resolveDocument(session, sourceId);
   let idx;
-  try { idx = fileIndex(sourcePath); } catch (e) {
+  try {
+    idx = resolved.doc ? docByteIndex(session, resolved.doc) : fileIndex(sourcePath);
+  } catch (e) {
     return { error: `Cannot read ${sourcePath}: ${e.message}` };
   }
+  if (idx.error) return { error: idx.error };
 
   const readStart = Math.max(0, byteStart - beforeBytes);
   const readEnd = Math.min(idx.bytes, byteEnd + afterBytes);
@@ -867,6 +974,24 @@ export function engineIngestFile(filePath, { pool: poolName = DEFAULT_POOL, kind
     chunks,
     pool: p.name,
     entries: admitted.map((a, i) => ({ id: `chunk-${i}`, size: a.byteEnd - a.byteStart })),
+  };
+}
+
+// Off-main-thread counterpart to engineIngestFile — see engineIngestTextAsync
+// just above for why. The worker derives `source:<path>` itself (ingestFile's
+// own convention); this only needs the resulting docId back to merge it.
+export async function engineIngestFileAsync(filePath, { pool: poolName = DEFAULT_POOL, kind = "corpus", displayName } = {}) {
+  const p = pool(poolName);
+  const result = await runIngestInWorker({ kind: "file", filePath });
+  mergeIngestResult(p, result);
+  p.chunkCount += result.chunks;
+  const name = displayName || filePath.replace(/^.*[/\\]/, "");
+  p.sources.set(filePath, { name, chunks: result.chunks, kind, pool: p.name, ingestedAt: Date.now() });
+  return {
+    path: filePath,
+    chunks: result.chunks,
+    pool: p.name,
+    entries: result.admitted.map((a, i) => ({ id: `chunk-${i}`, size: a.byteEnd - a.byteStart })),
   };
 }
 
@@ -1214,7 +1339,14 @@ function documentCatalog(session) {
 // candidates, never a silent pick of the first match: serving one book's cast
 // under another book's name is the failure this endpoint exists to end.
 function resolveDocument(session, ref) {
-  const wanted = String(ref ?? "").trim();
+  // A span's `source` is the CHUNK it came from — "source:book.txt:1699:chunk-7"
+  // — while the catalog holds the document, "source:book.txt:1699". Handing a
+  // citation's own source straight back to the resolver therefore matched
+  // nothing, and every attempt to read a quote's bytes or its surrounding text
+  // failed with an ENOENT for a file that never existed. The chunk suffix is a
+  // position within a document, not a different document; strip it here, in the
+  // one resolver every reader shares, rather than at each call site.
+  const wanted = String(ref ?? "").trim().replace(/:chunk-\d+$/, "");
   if (!wanted) return { error: "missing 'source'" };
   const catalog = documentCatalog(session);
   if (!catalog.length) return { error: "no documents ingested in this pool" };

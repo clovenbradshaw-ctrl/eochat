@@ -862,6 +862,16 @@
 const TYPE_GLYPH = { pdf: '●', video: '●', audio: '○', spreadsheet: '▦', link: '○', binary: '◱' };
 const TYPE_LABEL = { pdf: 'Text', video: 'Video', audio: 'Audio', spreadsheet: 'Sheet', link: 'Article', binary: 'File' };
 
+// Where rooms — and with them the sources rail — persist between visits.
+//
+// Versioned because the rail reads from two places: the engine's corpus pool
+// AND this browser copy. Clearing the server alone leaves the rail listing
+// sources the engine no longer holds — rows that can't be read, cited, or
+// meaningfully switched off. The suffix retires the old copy so a corpus wipe
+// is actually a wipe. Bump it again on any future wipe, or on a shape change
+// to a space; the orphaned key is inert, not migrated.
+const SPACES_KEY = 'eochat.spaces.v2';
+
 class Component extends DCLogic {
   state = {
     tab: 'chat', draft: '',
@@ -1006,8 +1016,29 @@ class Component extends DCLogic {
           src => (src.pool || 'corpus') === 'corpus' && (src.kind || 'corpus') === 'corpus'
         );
         this.setState({ _proxySources: corpus });
+        // Warm the entity panel and orbit on load instead of waiting for a
+        // source to be expanded. fetchFold is one-shot per source, so the
+        // 15s health poll re-runs this harmlessly.
+        this.warmFolds(corpus);
       }
     } catch {}
+  }
+
+  // Fold-warm for every enabled source. The entity panel and orbit render
+  // from state.folds; without this they stay empty until the reader happens
+  // to expand a source in the rail. Enabled means the same thing here as in
+  // roomSources(): room-attached rows carry their own flag, engine-tier rows
+  // are off only when the room recorded it in sourcesOff.
+  warmFolds(corpus) {
+    const active = this.activeSpace();
+    const off = active.sourcesOff || {};
+    const room = new Map(active.sources.map(s => [this._baseName(s.name), s]));
+    corpus.forEach(src => {
+      const base = this._baseName(src.name);
+      const attached = room.get(base);
+      const enabled = attached ? attached.enabled !== false : off[base] !== true;
+      if (enabled) this.fetchFold(src.name);
+    });
   }
 
   async fetchRecycleBin() {
@@ -1202,14 +1233,14 @@ class Component extends DCLogic {
   updateActiveSpace(fn) {
     this.setState(
       s => ({ spaces: s.spaces.map(sp => (sp.id === s.activeSpaceId ? fn(sp) : sp)) }),
-      () => this._saveLocal('eochat.spaces', this.state.spaces)
+      () => this._saveLocal(SPACES_KEY, this.state.spaces)
     );
   }
 
   setSpaces(fn, extra) {
     this.setState(
       s => ({ ...(extra || {}), spaces: fn(s.spaces) }),
-      () => this._saveLocal('eochat.spaces', this.state.spaces)
+      () => this._saveLocal(SPACES_KEY, this.state.spaces)
     );
   }
 
@@ -1371,7 +1402,7 @@ class Component extends DCLogic {
     // asked. The full descriptors (glyph, chunk count, enabled state) stay a
     // client concern, recovered here from localStorage by conversation id so
     // reattaching sources survives a reload.
-    const localSpaces = this._loadLocal('eochat.spaces') || [];
+    const localSpaces = this._loadLocal(SPACES_KEY) || [];
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations');
       if (!res.ok) throw new Error('proxy returned ' + res.status);
@@ -2047,6 +2078,9 @@ class Component extends DCLogic {
       this.updateActiveSpace(sp => ({ ...sp, sources: sp.sources.map(src => src.name === name ? { ...src, enabled: nowEnabled } : src) }));
     }
     this.logAdd('○', `Source "${name}" ${nowEnabled ? 'enabled' : 'disabled'}`, 'sources');
+    // A source that was off at load never got its fold warmed; fetching it on
+    // re-enable keeps the panel in step with what the rail says is enabled.
+    if (nowEnabled) this.fetchFold(name);
   }
 
   deleteSource(name) {
@@ -2350,7 +2384,10 @@ class Component extends DCLogic {
     this.orbitEdges.forEach(([a, b]) => {
       ctx.beginPath(); ctx.moveTo(screen[a].x, screen[a].y); ctx.lineTo(screen[b].x, screen[b].y); ctx.stroke();
     });
-    ids.forEach(id => {
+    // The room is the frame everything else orbits, not a thing inside the
+    // frame — it anchors the math (getPos parent-chain, the edges above) but
+    // is never itself a body a reader can see or click.
+    ids.filter(id => id !== 'room').forEach(id => {
       const n = this.orbitBodies[id], p = screen[id], focused = id === this.state.orbitFocus;
       if (focused) {
         ctx.strokeStyle = '#1F5A4C'; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
@@ -2371,7 +2408,7 @@ class Component extends DCLogic {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
     let best = null, bestD = 26;
-    Object.keys(this.nodeScreen).forEach(id => {
+    Object.keys(this.nodeScreen).filter(id => id !== 'room').forEach(id => {
       const p = this.nodeScreen[id], d = Math.hypot(p.x - x, p.y - y);
       if (d < bestD) { bestD = d; best = id; }
     });
