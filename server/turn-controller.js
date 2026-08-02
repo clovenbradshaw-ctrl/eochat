@@ -16,6 +16,7 @@
 // Depends on nothing in proxy.js, so proxy.js can import this without a cycle.
 
 import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
+import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 
 const HISTORY_TURNS = 6;
 
@@ -253,6 +254,17 @@ export function createTurnController(deps) {
       for (const c of brackets) {
         sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
       }
+
+      // The verbatim excerpt for every citation this answer actually used —
+      // sliced straight from lastCitations, never re-typed by the model.
+      // Sent as its own event, right alongside citation_verified, so a
+      // reader sees the summary's proof arrive with the citation, not on a
+      // separate click.
+      const snippets = buildVerbatimSnippets(brackets, lastCitations);
+      for (const s of snippets) {
+        sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
+      }
+
       const gaps = [];
       if (unresolvedNums.length) {
         gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no engine passage matches this bracket.` });
@@ -272,12 +284,12 @@ export function createTurnController(deps) {
       for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-        text: finalText, model, citations: brackets, gaps,
+        text: finalText, model, citations: brackets, gaps, snippets,
         fidelity, status: "completed", completedAt: new Date().toISOString(),
       });
       sendEvent("completed", {
         turnId: turn.id, answerId, status: "completed", text: finalText,
-        citations: brackets, gaps, model,
+        citations: brackets, gaps, snippets, model,
         summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
       });
     } catch (err) {

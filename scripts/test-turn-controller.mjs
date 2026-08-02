@@ -199,6 +199,49 @@ async function testRegenerateCreatesVariant(dir) {
   console.log("  ok: regenerate retains the user turn and adds a new assistant variant");
 }
 
+async function testVerbatimSnippets(dir) {
+  const { controller, conversationStore } = await withController(
+    dir,
+    makeFetchMock([{ message: { content: "The creature demands a companion [1]." } }, { done: true }]),
+    GROUNDED_RESULT,
+  );
+  const conv = await conversationStore.create({ title: "Snippets" });
+  const { events, sendEvent } = collectEvents();
+  const { turnId, answerId, done } = await controller.startTurn({ conversationId: conv.id, question: "What does the creature demand?" }, sendEvent);
+  await done;
+
+  const snippet = events.find(e => e.type === "verbatim_snippet");
+  assert.ok(snippet, "a resolved [1] must produce a verbatim_snippet event");
+  assert.equal(snippet.data.num, "1");
+  assert.equal(snippet.data.text, GROUNDED_RESULT.citations[0].text, "the snippet text must be byte-identical to the engine's own citation record, never model prose");
+  assert.equal(snippet.data.sourceId, GROUNDED_RESULT.citations[0].source_id);
+  assert.equal(snippet.data.byteStart, GROUNDED_RESULT.citations[0].byte_start);
+
+  const completed = events.find(e => e.type === "completed");
+  assert.equal(completed.data.snippets.length, 1);
+  assert.equal(completed.data.snippets[0].text, GROUNDED_RESULT.citations[0].text);
+
+  const stored = await conversationStore.get(conv.id);
+  const answer = stored.turns.find(t => t.id === turnId).answers.find(a => a.id === answerId);
+  assert.equal(answer.snippets.length, 1, "the verbatim snippet must be persisted on the answer");
+  assert.equal(answer.snippets[0].text, GROUNDED_RESULT.citations[0].text);
+  console.log("  ok: a resolved citation produces a byte-identical verbatim snippet, streamed and persisted");
+}
+
+async function testUnresolvedCitationProducesNoSnippet(dir) {
+  const { controller, conversationStore } = await withController(
+    dir,
+    makeFetchMock([{ message: { content: "This cites a fake [9]." } }, { done: true }]),
+    GROUNDED_RESULT,
+  );
+  const conv = await conversationStore.create({ title: "No snippet for fake citation" });
+  const { events, sendEvent } = collectEvents();
+  await (await controller.startTurn({ conversationId: conv.id, question: "Q" }, sendEvent)).done;
+
+  assert.equal(events.filter(e => e.type === "verbatim_snippet").length, 0, "an unresolved bracket must never produce a snippet card");
+  console.log("  ok: an unresolved citation produces no verbatim snippet");
+}
+
 async function main() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "eochat-turn-test-"));
   try {
@@ -207,6 +250,8 @@ async function main() {
     await testUnresolvedCitationGap(dir);
     await testStopInterrupts(dir);
     await testRegenerateCreatesVariant(dir);
+    await testVerbatimSnippets(dir);
+    await testUnresolvedCitationProducesNoSnippet(dir);
     console.log("ALL TURN-CONTROLLER TESTS PASSED");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });

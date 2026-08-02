@@ -259,6 +259,7 @@ export class ConversationStore {
         text: "",
         citations: [],
         gaps: [],
+        snippets: [],
         grounding: null,
         trace: [],
         model: null,
