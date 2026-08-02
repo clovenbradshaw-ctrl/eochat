@@ -146,7 +146,7 @@
       <div style="display:flex; align-items:center; justify-content:space-between; width:100%;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">{{ leftPanelHeader }}</span>
         <div style="display:flex; gap:6px;">
-          <sc-if value="{{ activeProject }}">
+          <sc-if value="{{ insideProject }}">
           <button type="button" aria-label="Search the web" onClick="{{ searchWeb }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-magnifying-glass" style="font-size:13px;"></i></button>
           <button type="button" aria-label="Add source" onClick="{{ addSource }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-plus" style="font-size:13px;"></i></button>
           </sc-if>
@@ -183,7 +183,7 @@
           </sc-if>
         </div>
 
-        <sc-if value="{{ activeProject }}">
+        <sc-if value="{{ insideProject }}">
         <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
           <div style="display:flex; align-items:center; gap:4px;">
             <button type="button" onClick="{{ toggleSourcesOpen }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
@@ -327,7 +327,7 @@
         </sc-if>
       </div>
 
-      <sc-if value="{{ activeProject }}">
+      <sc-if value="{{ insideProject }}">
       <div style="padding-top:12px; border-top:1px solid #EBE6DC; display:flex; flex-direction:column; gap:3px; width:100%;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#6E6A60;">{{ sourceCount }} sources</span>
         <span style="font-size:11px; color:#A39D91;">{{ sourceFooterNote }}</span>
@@ -4307,8 +4307,9 @@ class Component extends DCLogic {
       leftAlign: S.leftCollapsed ? 'center' : 'stretch',
       leftColWidth: S.leftCollapsed ? '52px' : '232px',
       toggleLeftCollapsed: () => this.setState(s => ({ leftCollapsed: !s.leftCollapsed })),
-      leftPanelHeader: S.activeProjectId ? 'Workspace' : 'Projects',
-      leftPanelCountLabel: S.activeProjectId ? `${roomSources.length} sources` : `${S.projects.length} projects`,
+      insideProject: S.view !== 'projects' && !!S.activeProjectId,
+      leftPanelHeader: S.view !== 'projects' && S.activeProjectId ? 'Workspace' : 'Projects',
+      leftPanelCountLabel: S.view !== 'projects' && S.activeProjectId ? `${roomSources.length} sources` : `${S.projects.length} projects`,
       projectsOpen: S.projectsOpen,
       sourcesOpen: S.sourcesOpen,
       chatsOpen: S.chatsOpen,
@@ -4690,7 +4691,6 @@ class Component extends DCLogic {
       newProject: () => this.setState({ modal: { title: 'New project', label: 'Project name', placeholder: 'e.g. Research Notes', initialValue: '', submitLabel: 'Create project', onSubmit: (v) => this.createProject(v) }, modalValue: '' }),
       goToApp: () => this.goToProjects(),
       goToProjects: () => this.goToProjects(),
-      activeProject: !!S.activeProjectId,
       activeProjectName: (S.projects.find(p => p.id === S.activeProjectId) || {}).name || 'No project',
       projectList: S.projects.map(p => ({
         id: p.id,
