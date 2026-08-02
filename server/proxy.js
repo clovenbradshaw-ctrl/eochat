@@ -46,7 +46,7 @@ import path from "path";
 // home-directory absolutes, no walking up out of the source tree.
 import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies } from "./paths.js";
 import { createModelRouter } from "./model-router.js";
-import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
+import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource } from "./engine-ground.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
 import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // Static, not dynamic: the request handler is synchronous, and the module only
@@ -55,7 +55,9 @@ import * as priorsSource from "./priors-source.js";
 import { HolonicTask } from "./holonic-task.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
 import { createTurnController } from "./turn-controller.js";
-import { webSearchAndFetch } from "./web-search.js";
+import { settingsStore } from "./settings-store.js";
+import { verifyAnthropicKey } from "./anthropic-provider.js";
+import { addUsage, rollUpUsage } from "./token-tally.js";
 import { runSessionMessage } from "./code-longform-session.js";
 
 // ── CLI args with validation ──
@@ -72,8 +74,6 @@ function parseArg(name, def, parse = (v) => v) {
 const REPO_PATH = parseArg("repo", REPO_ROOT);
 const PORT = parseArg("port", 11435, Number);
 const TARGET = parseArg("target", "http://localhost:11434");
-let ANTHROPIC_KEY = parseArg("anthropic-key", process.env.ANTHROPIC_API_KEY || "");
-let ANTHROPIC_MODEL = parseArg("anthropic-model", "claude-sonnet-4-20250514");
 const TOKEN_LIMIT = parseArg("limit", 3000, Number);
 const MAX_BODY = parseArg("max-body", 5_242_880, Number);
 const STORE_TTL = parseArg("store-ttl", 3_600_000, Number);
@@ -111,30 +111,10 @@ const LATENCY_BUDGET_MS = parseArg("latency-budget-ms", 8000, Number);
 // the GPU — see the num_ctx comment at the /api/chat call site.
 const NUM_CTX = parseArg("num-ctx", 8192, Number);
 
-let PROVIDERS = [
-  { id: "ollama", label: "Ollama", defaultModel: TINY_MODEL },
-  ...(ANTHROPIC_KEY ? [{ id: "anthropic", label: "Anthropic", defaultModel: ANTHROPIC_MODEL }] : []),
-];
-function rebuildProviders() {
-  PROVIDERS = [
-    { id: "ollama", label: "Ollama", defaultModel: TINY_MODEL },
-    ...(ANTHROPIC_KEY ? [{ id: "anthropic", label: "Anthropic", defaultModel: ANTHROPIC_MODEL }] : []),
-  ];
-}
-
 function selectModel(messages) {
   const text = (messages || []).map(m => m.content || "").join(" ");
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const charCount = text.length;
-
-  // When the system message includes grounding passages ("CITED PASSAGES" or
-  // "--- Material"), the talker must bracket its answer with [1], [2], etc.
-  // The tiny model routinely ignores this instruction and writes plain prose
-  // with no references — every source ends up in the gap list, none in the
-  // answer. Force the medium model for any turn with grounding.
-  if (/CITED PASSAGES|--- Material\b/.test(text)) {
-    return MEDIUM_MODEL;
-  }
 
   // Complex signals → medium model
   const codePatterns = [/```/, /function\s/, /class\s/, /import\s/, /export\s/, /=>/, /\(\)\s*=>/];
@@ -179,18 +159,23 @@ try {
 // ── Conversations — the new conversational surface's durable state + turn coordinator ──
 
 const conversationStore = new ConversationStore();
+
+// Read before the first request rather than lazily: whether a turn goes to a
+// local model or to Anthropic is decided per turn, and a settings file that
+// had not finished loading would answer the first question of a session with
+// the wrong model and no way to tell.
+settingsStore.loadSync();
+
 const turnController = createTurnController({
   conversationStore,
   groundQuery: engineGroundQuery,
   target: TARGET,
-  anthropicKey: ANTHROPIC_KEY,
-  anthropicModel: ANTHROPIC_MODEL,
   numCtx: NUM_CTX,
   modelRouter,
   heuristicModel: selectModel,
   latencyBudgetMs: LATENCY_BUDGET_MS,
   isWarming: () => corpusWarmup.started && !corpusWarmup.ready,
-  webSearchFn: webSearchAndFetch,
+  settings: settingsStore,
 });
 
 // ── Retry helper ──
@@ -2495,7 +2480,14 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
       // answer text (observed: "According to the source material, I don't
       // currently possess direct knowledge about..." — echoing this prompt's
       // own wording back to the reader).
-      const ungroundedSystem = buildUngroundedSystemPrompt({ warming });
+      const ungroundedSystem = warming
+        ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+          `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
+          `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
+        : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+          `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
+          `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
+          `there are no source passages, and a bracket would look like a citation that does not exist.`;
 
       if (groundedSystemMsg) {
         groundedSystemMsg.content = ungroundedSystem;
@@ -2523,7 +2515,24 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
       return groundResult;
     }
 
-    const systemContext = buildGroundedSystemPrompt(groundResult);
+    const citationRange = groundResult.citations.length > 0
+      ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
+        `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
+      : "";
+
+    const systemContext =
+      `Answer the reader's question using the material below, citing the passages you draw on ` +
+      `with bracketed numbers like [1], [2], etc. ` +
+      citationRange +
+      `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
+      `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
+      `"the provided text", "your sources", or similar; just answer directly.\n\n` +
+      `IMPORTANT: You have access to tools. If the material above is ` +
+      `insufficient, use verbatim_search to find more exact passages from ` +
+      `ingested documents, or search_memory for relevant context. Do NOT say ` +
+      `"no information" without first trying these tools.\n\n` +
+      `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
+      `${groundResult.context}`;
 
     if (groundedSystemMsg) {
       // Re-ground in place — the model must not see two competing tables.
@@ -2734,10 +2743,6 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
   }
 }
 
-// ── Project store ──
-
-import { ProjectStore, projectStore } from "./project-store.js";
-
 // ── Server ──
 
 let connections = new Set();
@@ -2750,7 +2755,10 @@ const server = http.createServer((req, res) => {
 
   // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+  // PATCH and DELETE are advertised because this server already answers both
+  // (conversations, recycle bin, settings) — a preflight that omitted them
+  // failed those requests in the browser for no reason.
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
   if (req.method === "OPTIONS") { res.writeHead(200); res.end(); return; }
@@ -2776,50 +2784,107 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Available providers and models for the frontend model picker
-  if (req.method === "GET" && req.url === "/api/models") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      providers: PROVIDERS,
-      defaultProvider: "ollama",
-      defaultModel: MEDIUM_MODEL,
-      anthropicAvailable: !!ANTHROPIC_KEY,
-    }));
-    return;
-  }
-
-  // Accept API key updates from the frontend settings panel at runtime.
-  // Keys are held in memory only — they do not persist across a proxy restart.
-  if (req.method === "POST" && req.url === "/api/settings") {
-    let body = "";
-    req.on("data", chunk => { body += chunk; if (body.length > MAX_BODY) req.destroy(); });
-    req.on("end", () => {
-      try {
-        const data = JSON.parse(body);
-        let changed = false;
-        if (data.anthropicKey !== undefined) {
-          ANTHROPIC_KEY = data.anthropicKey;
-          changed = true;
-        }
-        if (data.anthropicModel !== undefined) {
-          ANTHROPIC_MODEL = data.anthropicModel;
-          changed = true;
-        }
-        if (changed) rebuildProviders();
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: true, anthropicAvailable: !!ANTHROPIC_KEY }));
-      } catch (e) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: e.message }));
-      }
-    });
-    return;
-  }
-
   // Learned model-router state (competency ledger snapshot, read-only)
   if (req.method === "GET" && req.url === "/v1/router") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(modelRouter ? modelRouter.describe() : { error: "model-router unavailable" }));
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Settings — which model answers, and the key that makes it reachable
+  //
+  // The key crosses this boundary exactly once, inbound. Every response here
+  // carries a hint ("sk-ant-…4f2a") and never the secret, so no client can
+  // display, log, or re-transmit it (see settings-store.js).
+  // ══════════════════════════════════════════════════════════════
+  if (req.url === "/api/settings" || req.url.startsWith("/api/settings/")) {
+    const readJson = () => new Promise((resolve, reject) => {
+      let body = "", size = 0;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > MAX_BODY) { req.destroy(new Error("Request body too large")); reject(new Error("body too large")); return; }
+        body += c.toString("utf8");
+      });
+      req.on("end", () => {
+        if (!body.trim()) return resolve({});
+        try { resolve(JSON.parse(body)); } catch (err) { reject(err); }
+      });
+      req.on("error", reject);
+    });
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+    (async () => {
+      try {
+        if (req.method === "GET" && req.url === "/api/settings") {
+          return sendJson(200, settingsStore.publicView());
+        }
+
+        // Add (or replace) the Anthropic key. The key is checked against the
+        // real API before it is stored: a typo becomes an error here, in the
+        // dialog where it can be fixed, instead of a 401 three seconds into
+        // someone's next question. `verify: false` stores it unchecked, for
+        // an offline machine that will reach the API later.
+        if (req.method === "POST" && req.url === "/api/settings/anthropic-key") {
+          const data = await readJson();
+          const key = String(data.key || "").trim();
+          if (!key) return sendJson(400, { error: "An API key is required." });
+          if (data.verify !== false) {
+            const check = await verifyAnthropicKey({ apiKey: key, model: data.model || settingsStore.anthropicModel() });
+            if (!check.ok) return sendJson(400, { error: check.error, verified: false });
+          }
+          const view = await settingsStore.setAnthropicKey(key);
+          if (data.model) await settingsStore.setAnthropicModel(data.model);
+          console.error(`[settings] Anthropic key set (${view.anthropic.keyHint}), provider=anthropic model=${settingsStore.anthropicModel()}`);
+          return sendJson(200, { ...settingsStore.publicView(), verified: data.verify !== false });
+        }
+
+        if (req.method === "DELETE" && req.url === "/api/settings/anthropic-key") {
+          const view = await settingsStore.clearAnthropicKey();
+          console.error(`[settings] Anthropic key cleared, provider=${view.provider}`);
+          return sendJson(200, view);
+        }
+
+        if (req.method === "PATCH" && req.url === "/api/settings") {
+          const data = await readJson();
+          if (data.provider !== undefined) await settingsStore.setProvider(data.provider);
+          if (data.anthropicModel !== undefined) await settingsStore.setAnthropicModel(data.anthropicModel);
+          return sendJson(200, settingsStore.publicView());
+        }
+
+        return sendJson(404, { error: "no such settings route" });
+      } catch (err) {
+        sendJson(400, { error: err.message });
+      }
+    })();
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Token usage — the running tally, per conversation and in total
+  // ══════════════════════════════════════════════════════════════
+  if (req.method === "GET" && req.url.startsWith("/api/usage")) {
+    (async () => {
+      try {
+        const conversations = await conversationStore.list();
+        const byModel = {};
+        for (const conv of conversations) {
+          for (const m of conv.usage?.byModel || []) {
+            byModel[m.model] = addUsage(byModel[m.model], m);
+          }
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          total: rollUpUsage(byModel),
+          conversations: conversations.map((c) => ({
+            id: c.id, title: c.title, turnCount: c.turnCount, usage: c.usage,
+          })),
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    })();
     return;
   }
 
@@ -3034,83 +3099,6 @@ const server = http.createServer((req, res) => {
         sendSSE("error", { message: err.message });
       }
       res.end();
-    });
-    return;
-  }
-
-  // Grounding with no generation step — retrieval + the same citation-
-  // instruction prompt the tool-calling talker gets (buildGroundedSystemPrompt,
-  // shared with the /api/conversations turn handler so the wording can never
-  // drift between the two), minus any call to Ollama. Exists for a client
-  // that runs its own model over this evidence instead of the server's — the
-  // eochat UI's browser-local WebLLM path (webllm-client.js) is the first
-  // caller: it has no tool loop of its own, so it asks for toolsAvailable:false.
-  if (req.method === "POST" && req.url === "/api/ground") {
-    let body = "";
-    req.on("data", (c) => { body += c; });
-    req.on("end", () => {
-      let data;
-      try {
-        data = JSON.parse(body);
-      } catch (err) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err.message }));
-        return;
-      }
-      const query = String(data.query || "").trim();
-      if (!query) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "query is required" }));
-        return;
-      }
-      try {
-        const groundResult = engineGroundQuery(query, {
-          budget: data.groundBudget ?? 2400,
-          maxUnits: data.groundMaxUnits ?? 5,
-          limit: data.groundLimit ?? 30,
-          source: data.groundSource,
-          pool: data.pool,
-        });
-
-        if (!groundResult.context) {
-          const warming = corpusWarmup.started && !corpusWarmup.ready;
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({
-            grounded: false,
-            warming,
-            systemPrompt: buildUngroundedSystemPrompt({ warming }),
-            gaps: groundResult.gaps || [],
-            note: warming
-              ? "Document index still loading — this answer is not grounded in your sources yet."
-              : "No matching passage in your sources. Answering from general knowledge, uncited.",
-          }));
-          return;
-        }
-
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({
-          grounded: true,
-          systemPrompt: buildGroundedSystemPrompt(groundResult, { toolsAvailable: false }),
-          total: groundResult.total,
-          folded: groundResult.folded,
-          tokens: groundResult.tokens,
-          budget: groundResult.budget,
-          dropped: groundResult.dropped,
-          citations: groundResult.citations.map((c, i) => ({
-            index: i + 1,
-            span_id: c.span_id,
-            source_id: c.source_id,
-            byte_start: c.byte_start,
-            byte_end: c.byte_end,
-            score: Math.round(c.score * 100) / 100,
-            text: c.text,
-          })),
-          gaps: groundResult.gaps || [],
-        }));
-      } catch (err) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err.message }));
-      }
     });
     return;
   }
@@ -3355,43 +3343,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Switch one or more priors on/off — the Priors tab's per-item and
-  // per-bucket toggles. Accepts either { id, enabled } or { ids: [...], enabled }
-  // so a bucket toggle is one request instead of N. Never 500s for a partial
-  // failure: each id gets its own result so the caller can tell which of a
-  // batch actually changed.
-  if (req.method === "POST" && req.url === "/api/priors/toggle") {
-    let body = "";
-    req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
-      let parsed;
-      try {
-        parsed = JSON.parse(body);
-      } catch {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Invalid JSON body" }));
-        return;
-      }
-      const ids = Array.isArray(parsed.ids) ? parsed.ids : (parsed.id ? [parsed.id] : []);
-      if (!ids.length) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Missing 'id' or 'ids'" }));
-        return;
-      }
-      const enabled = !!parsed.enabled;
-      try {
-        const results = ids.map((id) => priorsSource.setPriorEnabled(id, enabled));
-        const allErrored = results.length > 0 && results.every((r) => r.error);
-        res.writeHead(allErrored ? 404 : 200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ enabled, results }));
-      } catch (err) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-    });
-    return;
-  }
-
   // Structural outline of a document, for the reader's section navigation.
   //
   // POST rather than GET, and it takes the text itself, because the reader's
@@ -3593,157 +3544,6 @@ const server = http.createServer((req, res) => {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // Projects — named collections with their own knowledge base (pool) and
-  // associated conversations. Each project maps to a distinct engine pool
-  // so retrieval is scoped to that project's sources only.
-  // ══════════════════════════════════════════════════════════════
-  if (req.url === "/api/projects" || req.url.startsWith("/api/projects/")) {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const segments = url.pathname.split("/").filter(Boolean);
-
-    const readJsonBody = () => new Promise((resolve, reject) => {
-      let body = "", size = 0;
-      req.on("data", (c) => {
-        size += c.length;
-        if (size > MAX_BODY) { req.destroy(new Error("Request body too large")); reject(new Error("body too large")); return; }
-        body += c.toString("utf8");
-      });
-      req.on("end", () => {
-        if (!body.trim()) return resolve({});
-        try { resolve(JSON.parse(body)); } catch (err) { reject(err); }
-      });
-      req.on("error", reject);
-    });
-    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
-
-    (async () => {
-      try {
-        // GET /api/projects — list all projects
-        if (req.method === "GET" && segments.length === 2) {
-          return sendJson(200, { projects: await projectStore.list() });
-        }
-
-        // POST /api/projects — create a new project
-        if (req.method === "POST" && segments.length === 2) {
-          const data = await readJsonBody();
-          const project = await projectStore.create({
-            name: data.name,
-            description: data.description,
-          });
-          return sendJson(201, project);
-        }
-
-        // GET /api/projects/:id — get project details
-        if (req.method === "GET" && segments.length === 3) {
-          const project = await projectStore.get(segments[2]);
-          if (!project) return sendJson(404, { error: `project not found: ${segments[2]}` });
-          return sendJson(200, project);
-        }
-
-        // PATCH /api/projects/:id — update project metadata
-        if (req.method === "PATCH" && segments.length === 3) {
-          const data = await readJsonBody();
-          const project = await projectStore.update(segments[2], data);
-          return sendJson(200, project);
-        }
-
-        // DELETE /api/projects/:id — delete a project
-        if (req.method === "DELETE" && segments.length === 3) {
-          const result = await projectStore.remove(segments[2]);
-          return sendJson(200, result);
-        }
-
-        // ── Project knowledge sources ──
-
-        // GET /api/projects/:id/sources — list sources in the project's pool
-        if (req.method === "GET" && segments.length === 4 && segments[3] === "sources") {
-          const project = await projectStore.get(segments[2]);
-          if (!project) return sendJson(404, { error: `project not found: ${segments[2]}` });
-          const sources = engineListSources({ pool: project.pool });
-          return sendJson(200, { sources, pool: project.pool });
-        }
-
-        // POST /api/projects/:id/ingest — ingest a source into the project's pool
-        if (req.method === "POST" && segments.length === 4 && segments[3] === "ingest") {
-          const project = await projectStore.get(segments[2]);
-          if (!project) return sendJson(404, { error: `project not found: ${segments[2]}` });
-          const data = await readJsonBody();
-          const { path: ingestPath, url: ingestUrl, content, name } = data;
-
-          if (content) {
-            const sourceId = `source:${name || "upload"}:${Date.now()}`;
-            const result = await engineIngestText(content.slice(0, 500000), sourceId, name || "upload", { pool: project.pool });
-            await projectStore.addSource(segments[2], sourceId);
-            return sendJson(200, { ...result, pool: project.pool });
-          }
-
-          if (ingestUrl) {
-            const fetched = await fetchAndSaveUrl(ingestUrl);
-            if (!fetched.text) {
-              return sendJson(502, { error: `Fetch failed for ${ingestUrl} — ${fetched.error || "no text"}` });
-            }
-            let label;
-            try {
-              const u = new URL(ingestUrl);
-              label = (u.hostname.replace(/^www\./, "") + u.pathname).replace(/\/+$/, "").replace(/\//g, "_");
-            } catch { label = ingestUrl.replace(/\//g, "_"); }
-            const srcName = name || label || ingestUrl;
-            const sourceId = `source:${srcName}`;
-            const result = await engineIngestText(fetched.text.slice(0, 500000), sourceId, srcName, { pool: project.pool });
-            await projectStore.addSource(segments[2], sourceId);
-            return sendJson(200, { ...result, name: srcName, url: ingestUrl, pool: project.pool });
-          }
-
-          if (ingestPath) {
-            try {
-              const result = await engineIngestFile(ingestPath, { pool: project.pool });
-              const sourceId = `source:${path.basename(ingestPath)}`;
-              await projectStore.addSource(segments[2], sourceId);
-              return sendJson(200, { ...result, pool: project.pool });
-            } catch (err) {
-              if (err.message?.includes("duplicate")) {
-                const existing = engineListSources({ pool: project.pool }).find(s => s.path === ingestPath);
-                return sendJson(200, { path: ingestPath, alreadyIngested: true, pool: project.pool });
-              }
-              throw err;
-            }
-          }
-
-          return sendJson(400, { error: "Missing 'content', 'url', or 'path' field" });
-        }
-
-        // DELETE /api/projects/:id/sources — remove a source from the project
-        if (req.method === "DELETE" && segments.length === 5 && segments[3] === "sources") {
-          const project = await projectStore.get(segments[2]);
-          if (!project) return sendJson(404, { error: `project not found: ${segments[2]}` });
-          const sourceId = decodeURIComponent(segments[4]);
-          const result = engineDeleteSource(sourceId, { pool: project.pool });
-          await projectStore.removeSource(segments[2], sourceId);
-          return sendJson(200, result || { deleted: true, sourceId });
-        }
-
-        // ── Project conversations ──
-
-        // GET /api/projects/:id/conversations — list conversations in a project
-        if (req.method === "GET" && segments.length === 4 && segments[3] === "conversations") {
-          const project = await projectStore.get(segments[2]);
-          if (!project) return sendJson(404, { error: `project not found: ${segments[2]}` });
-          const allConvs = await conversationStore.list();
-          const projectConvs = allConvs.filter(c => (c.spaceId === project.id) || (project.conversationIds || []).includes(c.id));
-          projectConvs.sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
-          return sendJson(200, { conversations: projectConvs });
-        }
-
-        sendJson(404, { error: "no such projects route" });
-      } catch (err) {
-        if (res.headersSent) { try { res.end(); } catch { /* already closing */ } return; }
-        sendJson(500, { error: err.message });
-      }
-    })();
-    return;
-  }
-
-  // ══════════════════════════════════════════════════════════════
   // Conversations — the new conversational surface. Each conversation is a
   // durable record (server/conversation-store.js); server/turn-controller.js
   // is the single coordinator for every turn asked against it.
@@ -3771,23 +3571,6 @@ const server = http.createServer((req, res) => {
 
     (async () => {
       try {
-        // ── Path-based navigation: GET /api/conversations/nav?path=<path> ──
-        if (req.method === "GET" && segments.length === 2 && url.searchParams.has("nav")) {
-          const navPath = url.searchParams.get("nav");
-          const resolved = await conversationStore.resolvePath(navPath);
-          if (!resolved) return sendJson(404, { error: `no conversation found at path: ${navPath}` });
-          return sendJson(200, resolved);
-        }
-        // ── Create child: POST /api/conversations/nav?parent=<parentId>&path=<segment>&mode=surf|think ──
-        if (req.method === "POST" && segments.length === 2 && url.searchParams.has("parent")) {
-          const parentId = url.searchParams.get("parent");
-          const childPath = url.searchParams.get("path");
-          const mode = url.searchParams.get("mode") || "surf";
-          if (!childPath) return sendJson(400, { error: "'path' query param is required" });
-          const child = await conversationStore.createChild(parentId, { path: childPath, mode });
-          return sendJson(201, child);
-        }
-
         if (req.method === "GET" && segments.length === 2) {
           return sendJson(200, { conversations: await conversationStore.list() });
         }
@@ -3798,7 +3581,6 @@ const server = http.createServer((req, res) => {
           const data = await readJsonBody();
           const conv = await conversationStore.create({
             title: data.title, pool: data.pool, sourceScope: data.sourceScope, spaceId: data.spaceId,
-            parentId: data.parentId, path: data.path, mode: data.mode,
           });
           return sendJson(201, conv);
         }
@@ -3821,35 +3603,6 @@ const server = http.createServer((req, res) => {
           return sendJson(200, conv);
         }
 
-        // GET /api/conversations/:id/children — list child conversations
-        if (req.method === "GET" && segments.length === 4 && segments[3] === "children") {
-          const parent = await conversationStore.get(segments[2]);
-          if (!parent) return notFound(segments[2]);
-          const children = await conversationStore.findChildren(segments[2]);
-          return sendJson(200, { children, parentId: segments[2] });
-        }
-
-        // POST /api/conversations/:id/children — create a child conversation
-        if (req.method === "POST" && segments.length === 4 && segments[3] === "children") {
-          const parent = await conversationStore.get(segments[2]);
-          if (!parent) return notFound(segments[2]);
-          const data = await readJsonBody();
-          if (!data.path) return sendJson(400, { error: "'path' is required" });
-          const child = await conversationStore.createChild(segments[2], {
-            path: data.path, mode: data.mode || "surf",
-            title: data.title, pool: data.pool, sourceScope: data.sourceScope,
-          });
-          return sendJson(201, child);
-        }
-
-        // GET /api/conversations/:id/breadcrumbs — breadcrumb trail to root
-        if (req.method === "GET" && segments.length === 4 && segments[3] === "breadcrumbs") {
-          const conv = await conversationStore.get(segments[2]);
-          if (!conv) return notFound(segments[2]);
-          const crumbs = await conversationStore.breadcrumbs(segments[2]);
-          return sendJson(200, { breadcrumbs: crumbs });
-        }
-
         // POST /api/conversations/:id/turns — a new user turn, streamed as SSE.
         if (req.method === "POST" && segments.length === 4 && segments[3] === "turns") {
           const conversationId = segments[2];
@@ -3869,7 +3622,6 @@ const server = http.createServer((req, res) => {
             const { done } = await turnController.startTurn({
               conversationId, question: data.question,
               sourceScope: data.sourceScope, pool: data.pool, attachments: data.attachments || [],
-              provider: data.provider, model: data.model, mode: data.mode, webSearch: data.webSearch,
             }, sendEvent);
             await done;
           } catch (err) {
@@ -4360,6 +4112,10 @@ async function start() {
   server.listen(PORT, () => {
     console.error(`[proxy] Ready on port ${PORT} (target: ${TARGET}, store: ${store.size}/${STORE_MAX})`);
     console.error(`[proxy] Tool calling: ${Object.keys(toolHandlers).length} tools loaded`);
+    const view = settingsStore.publicView();
+    console.error(view.effectiveProvider === "anthropic"
+      ? `[proxy] Talker: Anthropic ${view.anthropic.model} (key ${view.anthropic.keyHint} from ${view.anthropic.keySource})`
+      : `[proxy] Talker: local Ollama models${view.fallbackReason ? ` — ${view.fallbackReason}` : ""}`);
     // Print ready message on stdout for consumers
     process.stdout.write(`EO_PROXY_READY:${PORT}\n`);
   });

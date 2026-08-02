@@ -17,6 +17,19 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { MEMORY_DIR } from "./paths.js";
+import { addUsage, rollUpUsage } from "./token-tally.js";
+
+/**
+ * The conversation's running token tally, as callers want to read it.
+ *
+ * Kept as a `{ model: usage }` map on the record and rolled up on read rather
+ * than stored pre-summed, because the roll-up is where per-model pricing is
+ * applied — a stored total would freeze today's prices into last week's
+ * conversation and quietly go wrong when the table is updated.
+ */
+export function usageView(conv) {
+  return rollUpUsage(conv?.usage?.byModel);
+}
 
 export const CONVERSATIONS_DIR = path.join(MEMORY_DIR, "conversations");
 const TRASH_DIR = path.join(CONVERSATIONS_DIR, ".trash");
@@ -155,6 +168,9 @@ export class ConversationStore {
       mode: conv.mode || "chat",
       childIds: conv.childIds || [],
       turnCount: (conv.turns || []).length,
+      // The running tally travels with the summary, so the conversation list
+      // can show what each one has cost without loading every full record.
+      usage: usageView(conv),
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
       deletedAt: conv.deletedAt || null,
@@ -187,6 +203,10 @@ export class ConversationStore {
       path: path || null,
       mode: mode || "chat",
       turns: [],
+      // Running token tally, one bucket per model that has answered here.
+      // Records written before this field existed simply have no bucket and
+      // read as zero — an honest "nothing was measured", not a wrong number.
+      usage: { byModel: {} },
       createdAt: now,
       updatedAt: now,
     };
@@ -303,6 +323,40 @@ export class ConversationStore {
       Object.assign(answer, patch);
       await this.#save(conv);
       return answer;
+    });
+  }
+
+  /**
+   * Record what one model call cost, against both the answer that spent it
+   * and the conversation's running total.
+   *
+   * `usage` REPLACES the answer's own tally and the conversation total is
+   * recomputed from every answer, rather than being incremented. A streaming
+   * call reports its usage repeatedly as it grows (see anthropic-provider.js),
+   * and a regenerated turn adds a second answer to the same turn — under
+   * increment-on-report either would inflate the tally. Recomputing from the
+   * answers means the total is always exactly the sum of what is on record.
+   */
+  async recordUsage(id, turnId, answerId, usage, model) {
+    return this.#withLock(id, async () => {
+      const conv = await this.require(id);
+      const turn = this.#findTurn(conv, turnId);
+      const answer = turn.answers.find((a) => a.id === answerId);
+      if (!answer) throw new Error(`answer not found: ${answerId}`);
+      answer.usage = usage ? { ...usage } : null;
+      if (model) answer.usageModel = model;
+
+      const byModel = {};
+      for (const t of conv.turns || []) {
+        for (const a of t.answers || []) {
+          if (!a.usage) continue;
+          const key = a.usageModel || a.model || "unknown";
+          byModel[key] = addUsage(byModel[key], a.usage);
+        }
+      }
+      conv.usage = { byModel };
+      await this.#save(conv);
+      return usageView(conv);
     });
   }
 
