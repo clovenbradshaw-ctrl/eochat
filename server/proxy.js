@@ -725,7 +725,9 @@ async function fetchAndSaveUrl(url) {
 
 // Moved to citation-check.js so turn-controller.js (the new conversational
 // coordinator) can share these model-blind checks without importing proxy.js.
-import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
+import {
+  validateCitations, verifyQuotedFidelity, checkGrounding, groundingGaps, annotateVoids,
+} from "./citation-check.js";
 
 // ── Context assembly ──
 
@@ -2633,6 +2635,23 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
     // events, one generated, one computed from ground truth.
     const fidelity = verifyQuotedFidelity(content, lastCitations);
     if (fidelity.quotesChecked > 0) sendSSE("fidelity", fidelity);
+
+    // The same mechanical fact-check the conversational surface runs, on the
+    // same terms: computed from the finished answer and the engine's citation
+    // table, sent as its own event ahead of "done" so a client can never
+    // conflate "the model produced text" with "the text was checked". Emitted
+    // unconditionally — a report saying it found nothing is a different fact
+    // from no report at all.
+    // Against rawContent, not content: validateCitations above has already
+    // rewritten an invented [9] into "[⊘ no source 9]", which no longer parses
+    // as a bracket, so checking the rewritten text would report zero
+    // unresolved citations and erase its own finding.
+    const groundingCheck = checkGrounding(rawContent, lastCitations, { question: query || "" });
+    const annotatedText = maxCitation > 0
+      ? validateCitations(annotateVoids(rawContent, groundingCheck), maxCitation)
+      : annotateVoids(rawContent, groundingCheck);
+    sendSSE("grounding_checked", { ...groundingCheck, annotatedText });
+    for (const g of groundingGaps(groundingCheck)) sendSSE("gap", g);
 
     sendSSE("done", { content });
 

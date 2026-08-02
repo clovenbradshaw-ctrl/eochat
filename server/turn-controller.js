@@ -15,7 +15,10 @@
 //
 // Depends on nothing in proxy.js, so proxy.js can import this without a cycle.
 
-import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
+import {
+  validateCitations, verifyQuotedFidelity, parseCitationRefs,
+  checkGrounding, groundingGaps, annotateVoids,
+} from "./citation-check.js";
 
 const HISTORY_TURNS = 6;
 
@@ -25,27 +28,30 @@ function newAnswerEventKey(conversationId, turnId) {
 
 // Every [n] the answer actually cites, matched against the engine's real
 // citation table. A bracket with no matching entry is a gap, never a guess.
+// Uses the shared bracket parser rather than a local /\[(\d+)\]/ so a
+// "[1,2]" or "[2-4]" resolves to the passages it names instead of vanishing
+// from the citation panel entirely.
 function resolveCitationBrackets(text, citations) {
   const table = new Map((citations || []).map((c) => [String(c.index), c]));
   const seen = new Set();
   const resolved = [];
   const unresolvedNums = [];
-  const re = /\[(\d+)\]/g;
-  let m;
-  while ((m = re.exec(text || "")) !== null) {
-    const num = m[1];
-    if (seen.has(num)) continue;
-    seen.add(num);
-    const c = table.get(num);
-    if (c) {
-      resolved.push({
-        num, resolved: true,
-        sourceId: c.source_id, spanId: c.span_id,
-        byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
-      });
-    } else {
-      unresolvedNums.push(num);
-      resolved.push({ num, resolved: false });
+  for (const ref of parseCitationRefs(text)) {
+    for (const n of ref.nums) {
+      const num = String(n);
+      if (seen.has(num)) continue;
+      seen.add(num);
+      const c = table.get(num);
+      if (c) {
+        resolved.push({
+          num, resolved: true,
+          sourceId: c.source_id, spanId: c.span_id,
+          byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
+        });
+      } else {
+        unresolvedNums.push(num);
+        resolved.push({ num, resolved: false });
+      }
     }
   }
   return { citations: resolved, unresolvedNums };
@@ -62,19 +68,17 @@ function resolveCitationBrackets(text, citations) {
  * @param {number} deps.latencyBudgetMs
  * @param {() => boolean} deps.isWarming - true while the corpus is still ingesting at boot
  */
-export function createTurnController(deps) {
-  const {
-    conversationStore, groundQuery, target, numCtx,
-    modelRouter, heuristicModel, latencyBudgetMs, isWarming,
-  } = deps;
-
-  // One in-flight generation per (conversation, turn) at a time — stop/regenerate
-  // both need to find it by that key alone, before they know an answerId.
-  const activeControllers = new Map();
-
-  function buildGroundedSystemMessage(groundResult) {
+/**
+ * The grounding instruction the talker actually receives.
+ *
+ * Module-level and exported rather than closed over the controller so a test
+ * harness can drive the REAL prompt. A harness that reimplements the prompt
+ * measures its own copy: the thing under test — how a weak model behaves when
+ * told which numbers exist — is exactly the thing a copy stops testing the
+ * moment the two drift.
+ */
+export function buildGroundedSystemMessage(groundResult, warming = false) {
     if (!groundResult.context) {
-      const warming = isWarming ? isWarming() : false;
       const content = warming
         ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
           `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
@@ -99,7 +103,17 @@ export function createTurnController(deps) {
       `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
       `${groundResult.context}`;
     return { message: { role: "system", content }, maxCitation: groundResult.citations.length, warming: false };
-  }
+}
+
+export function createTurnController(deps) {
+  const {
+    conversationStore, groundQuery, target, numCtx,
+    modelRouter, heuristicModel, latencyBudgetMs, isWarming,
+  } = deps;
+
+  // One in-flight generation per (conversation, turn) at a time — stop/regenerate
+  // both need to find it by that key alone, before they know an answerId.
+  const activeControllers = new Map();
 
   // Recent completed turns from THIS conversation, as real message history —
   // not reconstructed from a keyword memory search. Bounded so a long-running
@@ -181,7 +195,8 @@ export function createTurnController(deps) {
         budget: 3000, maxUnits: 5, limit: 16,
         source: sourceScope, pool: pool || "corpus",
       });
-      const { message: systemMsg, maxCitation, warming } = buildGroundedSystemMessage(groundResult);
+      const { message: systemMsg, maxCitation, warming } =
+        buildGroundedSystemMessage(groundResult, isWarming ? isWarming() : false);
 
       sendEvent("witnesses_selected", {
         turnId: turn.id, answerId,
@@ -250,16 +265,34 @@ export function createTurnController(deps) {
       const finalText = maxCitation > 0 ? validateCitations(rawText, maxCitation) : rawText;
       const fidelity = verifyQuotedFidelity(finalText, lastCitations);
 
+      // The full mechanical fact-check. This is what catches the case the two
+      // checks above cannot: a perfectly well-formed [2] attached to a
+      // sentence whose names and figures appear nowhere in passage 2. Computed
+      // from the answer and the engine's citation table alone — no second
+      // model call, nothing the writer could have influenced.
+      //
+      // Run against RAW text, for the same reason resolveCitationBrackets is:
+      // validateCitations has already turned an invented [9] into
+      // "[⊘ no source 9]", which is no longer a bracket, so checking the
+      // rewritten text reports zero unresolved citations — the check would
+      // erase the finding it exists to make. Report offsets therefore index
+      // rawText; annotatedText is the one derived artifact clients render, so
+      // no caller has to reconcile the two.
+      const report = checkGrounding(rawText, lastCitations, { question });
+      const annotatedText = maxCitation > 0
+        ? validateCitations(annotateVoids(rawText, report), maxCitation)
+        : annotateVoids(rawText, report);
+
       for (const c of brackets) {
         sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
       }
-      const gaps = [];
-      if (unresolvedNums.length) {
-        gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no engine passage matches this bracket.` });
-      }
-      for (const u of fidelity.unverified) {
-        gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited passage." });
-      }
+      // Emitted before the gaps it explains, and unconditionally — a turn with
+      // nothing wrong must still be able to say what was examined, or "clean"
+      // and "unchecked" render identically (LAWS.md candidate: two facts that
+      // differ must not read alike).
+      sendEvent("grounding_checked", { turnId: turn.id, answerId, ...report, annotatedText });
+
+      const gaps = groundingGaps(report);
       for (const g of groundResult.gaps || []) gaps.push(g);
       if (!groundResult.context) {
         gaps.push({
@@ -272,11 +305,13 @@ export function createTurnController(deps) {
       for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-        text: finalText, model, citations: brackets, gaps,
-        fidelity, status: "completed", completedAt: new Date().toISOString(),
+        text: finalText, annotatedText, model, citations: brackets, gaps,
+        fidelity, grounding_check: report,
+        status: "completed", completedAt: new Date().toISOString(),
       });
       sendEvent("completed", {
         turnId: turn.id, answerId, status: "completed", text: finalText,
+        annotatedText, groundingCheck: report,
         citations: brackets, gaps, model,
         summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
       });
