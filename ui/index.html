@@ -387,6 +387,7 @@
           <button type="button" aria-label="Attach file" onClick="{{ openFileDialog }}" style="width:28px; height:28px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:#8C877C; cursor:pointer;"><i class="ph ph-paperclip" style="font-size:15px;"></i></button>
           <input type="file" multiple="{{ true }}" ref="{{ setFileInput }}" onChange="{{ onFilesSelected }}" style="display:none;" />
           <input type="text" placeholder="Ask across your sources" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
+          <button type="button" aria-label="{{ longFormLabel }}" aria-pressed="{{ longForm }}" title="{{ longFormLabel }}" onClick="{{ toggleLongForm }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ longFormBorder }}; border-radius:8px; background:{{ longFormBg }}; color:{{ longFormColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-stack" style="font-size:12px;"></i>Long</button>
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
           <button type="button" aria-label="Send" onClick="{{ send }}" style="width:32px; height:32px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:{{ sendBg }}; color:#FFFDFA; font-size:14px; line-height:1; cursor:pointer;"><i class="ph ph-arrow-right" style="font-size:14px;"></i></button>
         </div>
@@ -844,6 +845,13 @@ class Component extends DCLogic {
   state = {
     tab: 'chat', draft: '',
     webSearch: false,
+    // Long-form mode: an inline alternative to sendToProxy() that runs the
+    // same holonic plan/ground/revise pipeline the Compose tab uses
+    // (/api/holonic), but posts its result as an ordinary chat turn instead
+    // of into the separate composeResult state. Mutually exclusive with
+    // webSearch — the holonic pipeline has no tool-calling loop, so a web
+    // search flag would silently do nothing there.
+    longForm: false,
     spacesOpen: false, activeSpaceId: 'default', leftCollapsed: false, selectedEntity: null,
     webHistoryOpen: false,
     retrievedOpen: false,
@@ -1510,6 +1518,109 @@ class Component extends DCLogic {
     return { answer, citations: parsed.citations, grounding, trace, model };
   }
 
+  // Long-form mode: the same holonic plan → research → grounded-correction-
+  // loop → assemble pipeline the Compose tab drives (/api/holonic), routed
+  // into an ordinary chat turn instead of composeResult. Reuses the turn's
+  // existing `trace` disclosure for the process log — no new UI surface —
+  // and `thinkingPhase`/`thinkingLog` for the live status while it runs.
+  //
+  // /api/holonic emits named SSE events shaped `{ msg, ...phaseFields }`
+  // (see server/holonic-task.js `run()` and server/proxy.js's `/api/holonic`
+  // handler). They're told apart by which phase-specific fields are present,
+  // the same heuristic _applyComposeEvent uses for the Compose tab — kept
+  // separate here (rather than shared) because this path folds each event
+  // into a turn's `trace` array and `thinkingLog`/`thinkingPhase`, not into
+  // composeSections/composePlan.
+  async sendLongFormToProxy(q, patchTurn) {
+    const pushLog = (glyph, text) => this.setState(s => ({ thinkingLog: s.thinkingLog.concat([{ glyph, text }]) }));
+    this.setState({ thinkingPhase: 'Planning sections…', thinkingMeta: null, thinkingLog: [] });
+    pushLog('⊚', 'Planning sections…');
+
+    const res = await fetch(this.proxyUrl() + '/api/holonic', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: q, session: this.sessionId() }),
+    });
+    if (!res.ok) throw new Error('Proxy returned ' + res.status);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const trace = [];
+    let labels = {};
+    let result = null;
+    let errMsg = null;
+
+    const addTrace = (kind, name, detail) => {
+      trace.push({ kind, name, detail });
+      patchTurn({ trace: trace.slice() });
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim() || !line.startsWith('data: ')) continue;
+        let data;
+        try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (data.subTasks) {
+          labels = Object.fromEntries(data.subTasks.map(s => [s.id, s.label]));
+          const list = data.subTasks.map(s => s.label).join(', ');
+          this.setState({ thinkingPhase: `Planned ${data.subTasks.length} section(s)`, thinkingMeta: null });
+          pushLog('⊚', `Planned ${data.subTasks.length} section(s): ${list}`);
+          addTrace('call', 'plan', `${data.subTasks.length} section(s): ${list}`);
+        } else if (data.priors !== undefined) {
+          // subtask_priors — steering-only detail, not shown inline.
+        } else if (data.id && data.label !== undefined && data.iteration === undefined && data.groundingScore === undefined) {
+          this.setState({ thinkingPhase: `Writing "${data.label}"…`, thinkingMeta: null });
+          pushLog('→', `Section "${data.label}" — researching & drafting…`);
+          addTrace('call', `section: ${data.label}`, 'researching & drafting…');
+        } else if (data.id && data.iteration !== undefined && data.groundingScore !== undefined && data.citationsCount === undefined) {
+          const label = labels[data.id] || data.id;
+          const detail = `iteration ${data.iteration + 1}: grounding ${data.groundingScore.toFixed(2)}, surplus ${(data.surplusScore ?? 0).toFixed(2)}${data.converged ? ' — converged' : ''}`;
+          this.setState({ thinkingPhase: `"${label}" — iteration ${data.iteration + 1}`, thinkingMeta: `grounding ${data.groundingScore.toFixed(2)}` });
+          pushLog('⋈', `"${label}" ${detail}`);
+          addTrace('result', label, detail);
+        } else if (data.id && data.citationsCount !== undefined) {
+          const label = labels[data.id] || data.label || data.id;
+          const detail = `${data.citationsCount} citation(s), grounding ${data.groundingScore.toFixed(2)}`;
+          pushLog('●', `"${label}" done — ${detail}`);
+          addTrace('result', `${label} done`, detail);
+        } else if (data.unresolvedIds || data.redundantPairs) {
+          this.setState({ thinkingPhase: 'Replanning…', thinkingMeta: null });
+          pushLog('⊚', 'Replanning — a section never grounded well or two turned out redundant…');
+          addTrace('call', 'replan', `${(data.unresolvedIds || []).length} unresolved, ${(data.redundantPairs || []).length} redundant`);
+        } else if (data.changes) {
+          const detail = (data.changes || []).map(c => `${c.action}: ${c.justification}`).join(' · ') || 'no changes';
+          pushLog('⊚', `Replan: ${detail}`);
+          addTrace('result', 'replan', detail);
+        } else if (data.sections !== undefined && data.output !== undefined) {
+          // The definitive final event — proxy.js's own `done`, distinct
+          // from holonic-task.js's `holonic_done` progress event (which
+          // carries `msg` but no `output`).
+          result = data;
+          this.setState({ thinkingPhase: null, thinkingMeta: null });
+          pushLog('⊨', `Assembled ${data.sections} section(s), ${data.mechanicalCitations} citation(s), ${data.gaps} gap(s)`);
+          addTrace('result', 'assembled', `${data.sections} section(s), ${data.mechanicalCitations} citation(s), ${data.gaps} gap(s)`);
+        } else if (data.message && !data.msg) {
+          errMsg = data.message;
+        } else if (data.msg) {
+          // Generic fallback for any phase not specifically handled above
+          // (e.g. the bare "plan"/"assemble" progress lines) — still visible
+          // in the live status even without bespoke formatting.
+          this.setState({ thinkingPhase: data.msg, thinkingMeta: null });
+        }
+      }
+    }
+    if (errMsg) throw new Error(errMsg);
+    if (!result) throw new Error('Long-form generation ended without a result');
+    return { answer: result.output, trace, model: null };
+  }
+
   // Engine source ids look like "source:/abs/path/pg2600.txt:chunk-1179".
   // Keep the filename and the chunk — both identify the passage — and drop the
   // absolute path, which is unreadable noise in a narrow rail.
@@ -1657,16 +1768,31 @@ class Component extends DCLogic {
     if (!q && !this.state.draftAttachments.length) return;
     const attachments = this.state.draftAttachments;
     const id = 'turn-' + Date.now();
-    this.logAdd('⊨', `Asked: "${q.slice(0, 44)}${q.length > 44 ? '…' : ''}"`, 'chat');
+    const longForm = this.state.longForm;
+    this.logAdd('⊨', `Asked: "${q.slice(0, 44)}${q.length > 44 ? '…' : ''}"${longForm ? ' (long-form)' : ''}`, 'chat');
     this.setState({ draft: '', draftAttachments: [], streamingLoading: true, streamingAnswer: null, streamingCitations: null, streamingTurnId: id });
     this.updateActiveSpace(sp => ({
       ...sp,
-      turns: sp.turns.concat([{ id, q, attachments, hasAttachments: !!attachments.length, retrieval: null, prompt: '', a: null, citations: null, streaming: false }])
+      turns: sp.turns.concat([{ id, q, attachments, hasAttachments: !!attachments.length, retrieval: null, prompt: '', a: null, citations: null, streaming: false, longForm }])
     }));
 
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === id ? { ...t, ...patch } : t))
     }));
+
+    if (longForm) {
+      try {
+        const result = await this.sendLongFormToProxy(q, patchTurn);
+        this.setState({ streamingLoading: false, streamingAnswer: null, streamingCitations: null, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null, thinkingLog: [], thinkingModalOpen: false });
+        patchTurn({ a: result.answer, citations: [], trace: result.trace, model: result.model });
+        this.logAdd('⊨', 'Long-form answer assembled', 'chat');
+      } catch (err) {
+        this.setState({ streamingLoading: false, streamingAnswer: null, streamingCitations: null, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null, thinkingLog: [] });
+        patchTurn({ a: '(Long-form generation failed — ' + err.message + ')', citations: [] });
+        this.logAdd('○', `Long-form failed — ${err.message}`, 'chat');
+      }
+      return;
+    }
 
     try {
       // Retrieval is mechanical and already finished; show it now. The turn
@@ -2375,9 +2501,15 @@ class Component extends DCLogic {
       quote: c.quote ? `“${c.quote}”` : '(engine returned no text for this span)'
     }));
 
-    // Honest account of where the answer's brackets stand.
+    // Honest account of where the answer's brackets stand. Long-form turns
+    // carry their own provenance section inside turn.a (assembled server-side
+    // from mechanical per-section citations, not [n] brackets) and their own
+    // trace — the bracket-grounding story below does not apply to them and
+    // would misreport as "nothing here is engine-backed".
     let ungroundedNotice = null;
-    if (turn.a && unresolved.length) {
+    if (turn.longForm) {
+      // no-op — see comment above.
+    } else if (turn.a && unresolved.length) {
       ungroundedNotice = `${unresolved.length} citation${unresolved.length > 1 ? 's' : ''} in this answer (${unresolved.map(c => '[' + c.num + ']').join(' ')}) ${unresolved.length > 1 ? 'have' : 'has'} no matching engine passage — treat ${unresolved.length > 1 ? 'them' : 'it'} as unverified.`;
     } else if (turn.a && g && !g.empty && retrieved.some(r => r.kept) && !resolved.length) {
       // Count only what the model could actually cite. Blaming it for ignoring
@@ -2774,7 +2906,17 @@ class Component extends DCLogic {
       webBg: S.webSearch ? '#1F5A4C' : 'none',
       webColor: S.webSearch ? '#FFFDFA' : '#8C877C',
       webBorder: S.webSearch ? '#1F5A4C' : '#E0DACE',
-      toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch })),
+      // Mutually exclusive with longForm: the holonic pipeline has no
+      // tool-calling loop, so web search has nothing to attach to there.
+      toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch, longForm: s.webSearch ? s.longForm : false })),
+      longForm: S.longForm,
+      longFormLabel: S.longForm
+        ? 'Long-form mode on — plans, drafts and revises each section against your sources; click to turn off'
+        : 'Long-form mode off — click to plan, draft and revise a longer, section-by-section answer',
+      longFormBg: S.longForm ? '#1F5A4C' : 'none',
+      longFormColor: S.longForm ? '#FFFDFA' : '#8C877C',
+      longFormBorder: S.longForm ? '#1F5A4C' : '#E0DACE',
+      toggleLongForm: () => this.setState(s => ({ longForm: !s.longForm, webSearch: s.longForm ? s.webSearch : false })),
       proxyLive: live, proxyDead: !live,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
       retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
@@ -2835,10 +2977,12 @@ class Component extends DCLogic {
         }),
       })),
       draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
-      composerHint: enabledSourceCount === 0 && roomSources.length
-        ? 'Every source is switched off — switch one on in the rail to ask.'
-        : 'Answers cite only what your sources say.',
-      composerHintColor: enabledSourceCount === 0 && roomSources.length ? '#A3592B' : '#A39D91',
+      composerHint: S.longForm
+        ? 'Long-form: plans sections, drafts and mechanically checks each against your sources, revising until grounded — slower than a chat reply.'
+        : (enabledSourceCount === 0 && roomSources.length
+            ? 'Every source is switched off — switch one on in the rail to ask.'
+            : 'Answers cite only what your sources say.'),
+      composerHintColor: S.longForm ? '#1F5A4C' : (enabledSourceCount === 0 && roomSources.length ? '#A3592B' : '#A39D91'),
       turns: active.turns.map((turn, i) => this.turnVals(turn, i)),
       streamingAnswer: S.streamingAnswer, streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
       thinkingPhase: S.thinkingPhase || `Reading across ${enabledSourceCount} source${enabledSourceCount === 1 ? '' : 's'}`,
