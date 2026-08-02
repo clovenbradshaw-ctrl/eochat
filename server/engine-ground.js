@@ -454,6 +454,51 @@ export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit =
   };
 }
 
+// The instruction text wrapping a groundResult into a talker-ready system
+// message — pulled out of proxy.js's turn handler so a second caller (the
+// no-generation /api/ground route, used by any client that runs its own
+// model — e.g. a browser-local WebLLM engine — over the same evidence) gets
+// the identical wording instead of a hand-copied drift of it. Pure: no I/O,
+// no ambient time: everything it needs is already in groundResult/warming.
+export function buildUngroundedSystemPrompt({ warming } = {}) {
+  return warming
+    ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+      `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
+      `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
+    : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+      `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
+      `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
+      `there are no source passages, and a bracket would look like a citation that does not exist.`;
+}
+
+// `toolsAvailable` defaults to true (the server's own tool-calling talker
+// loop). A caller with no tool loop of its own — e.g. a browser-local model
+// that only ever sees this one turn of context — passes it false so the
+// prompt does not tell the model to reach for tools it will never receive.
+export function buildGroundedSystemPrompt(groundResult, { toolsAvailable = true } = {}) {
+  const citationRange = groundResult.citations.length > 0
+    ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
+      `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
+    : "";
+
+  const toolsParagraph = toolsAvailable
+    ? `IMPORTANT: You have access to tools. If the material above is ` +
+      `insufficient, use verbatim_search to find more exact passages from ` +
+      `ingested documents, or search_memory for relevant context. Do NOT say ` +
+      `"no information" without first trying these tools.\n\n`
+    : "";
+
+  return `Answer the reader's question using the material below, citing the passages you draw on ` +
+    `with bracketed numbers like [1], [2], etc. ` +
+    citationRange +
+    `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
+    `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
+    `"the provided text", "your sources", or similar; just answer directly.\n\n` +
+    toolsParagraph +
+    `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
+    `${groundResult.context}`;
+}
+
 // Read a specific span's verbatim text by span_id.
 // Returns { text, source_id, byte_start, byte_end, truncated } or an error.
 // The engine's readSpan guarantees the text matches the source file at the
