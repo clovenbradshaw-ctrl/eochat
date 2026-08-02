@@ -304,6 +304,25 @@
                       </sc-for>
                     </div>
                   </sc-if>
+
+                  <sc-if value="{{ turn.hasSnippets }}">
+                    <div style="display:flex; flex-direction:column; gap:7px;">
+                      <sc-for list="{{ turn.snippets }}" as="snip">
+                        <div onClick="{{ snip.open }}" style="display:flex; gap:9px; align-items:flex-start; background:#FBFAF5; border:1px solid #E7E2D4; border-left:3px solid #A6805A; border-radius:3px 8px 8px 3px; padding:9px 13px; cursor:{{ snip.cursor }};">
+                          <span style="font-family:Georgia, serif; font-size:19px; line-height:1; color:#C9A876; flex:none; margin-top:1px;">&ldquo;</span>
+                          <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
+                            <span style="font-family:Georgia, 'Iowan Old Style', serif; font-size:13px; font-style:italic; color:#3A372F; line-height:1.62; word-break:break-word;">{{ snip.quote }}{{ snip.ellipsis }}</span>
+                            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:7px;">
+                              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ snip.num }}</span>
+                              <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:#A39D91;">verbatim · {{ snip.source }}</span>
+                              <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">bytes {{ snip.byteStart }}–{{ snip.byteEnd }}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+
                   <div style="display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-top:2px;">
                     <button type="button" aria-label="Copy" onClick="{{ turn.copy }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-copy"></i>copy</button>
                     <sc-if value="{{ turn.hasPassages }}">
@@ -1503,6 +1522,7 @@ class Component extends DCLogic {
         retrieval: answer && answer.grounding ? this._retrievalSummary(answer.grounding, resolved) : null,
         prompt: '', a: answer ? answer.text : null,
         citations: citations.length ? citations : null,
+        snippets: (answer && answer.snippets || []).map(s => this._clientSnippet(s)),
         grounding: answer ? answer.grounding : null,
         trace: answer ? this._answerTrace(answer) : [],
         model: answer ? answer.model : null,
@@ -1519,6 +1539,23 @@ class Component extends DCLogic {
       source: c.resolved ? this._shortSource(c.sourceId) : '⊘ unresolved — no engine passage for [' + c.num + ']',
       sourceId: c.sourceId, spanId: c.spanId, byteStart: c.byteStart, byteEnd: c.byteEnd, score: c.score,
       quote: groundCit ? (groundCit.text || '').slice(0, 300) : '',
+    };
+  }
+
+  // A verbatim_snippet event/record carries the FULL span text (never
+  // truncated server-side) — the client caps display length here, but marks
+  // the cut with an explicit "truncated" flag rather than silently dropping
+  // the rest (LAWS.md L3). The full passage is always one click away via
+  // openCitation -> the reader panel.
+  _clientSnippet(s) {
+    const full = s.text || '';
+    const cap = 480;
+    return {
+      num: s.num, sourceId: s.sourceId, spanId: s.spanId,
+      byteStart: s.byteStart, byteEnd: s.byteEnd,
+      source: this._shortSource(s.sourceId),
+      quote: full.length > cap ? full.slice(0, cap) : full,
+      truncated: full.length > cap,
     };
   }
 
@@ -1610,7 +1647,7 @@ class Component extends DCLogic {
     const localId = 'pending-' + Date.now();
     this.updateActiveSpace(sp => ({
       ...sp,
-      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: null, citations: null, streaming: false }]),
+      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: null, citations: null, snippets: [], streaming: false }]),
     }));
     let liveId = localId;
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
@@ -1625,6 +1662,7 @@ class Component extends DCLogic {
 
     let grounding = null;
     let citations = [];
+    let snippets = [];
     let currentTurnId = null;
 
     try {
@@ -1673,6 +1711,10 @@ class Component extends DCLogic {
             citations = citations.filter(c => c.num !== data.num).concat([this._clientCitation(data, grounding)]);
             patchTurn({ citations: citations.slice() });
           }
+          if (type === 'verbatim_snippet') {
+            snippets = snippets.filter(s => s.num !== data.num).concat([this._clientSnippet(data)]);
+            patchTurn({ snippets: snippets.slice() });
+          }
           if (type === 'gap') {
             this.logAdd('⊘', `Gap: ${data.reason || data.type}`, 'sources');
           }
@@ -1684,6 +1726,7 @@ class Component extends DCLogic {
             const retrieval = grounding ? this._retrievalSummary(grounding, resolved) : null;
             patchTurn({
               a: data.text, citations: citations.length ? citations.slice() : null,
+              snippets: (data.snippets || []).map(s => this._clientSnippet(s)),
               model: data.model, retrieval, answerStatus: data.status,
               trace: this._answerTrace({ grounding, gaps: data.gaps, model: data.model }),
             });
@@ -1702,7 +1745,7 @@ class Component extends DCLogic {
       }
     } catch (err) {
       this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
-      patchTurn({ a: '(Proxy unavailable — ' + err.message + ')', citations: [], retrieval: null });
+      patchTurn({ a: '(Proxy unavailable — ' + err.message + ')', citations: [], snippets: [], retrieval: null });
       this.logAdd('○', `Chat failed — ${err.message}`, 'chat');
     }
   }
@@ -1724,7 +1767,7 @@ class Component extends DCLogic {
       ...sp, turns: sp.turns.map(t => (t.id === turnId ? { ...t, ...patch } : t)),
     }));
     this.setState({ streamingLoading: true, streamingTurnId: turnId, thinkingPhase: 'Reading your sources…', thinkingMeta: null });
-    let grounding = null, citations = [];
+    let grounding = null, citations = [], snippets = [];
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns/' + encodeURIComponent(turnId) + '/regenerate', { method: 'POST' });
       if (!res.ok) throw new Error('Proxy returned ' + res.status);
@@ -1751,11 +1794,19 @@ class Component extends DCLogic {
             citations = citations.filter(c => c.num !== data.num).concat([this._clientCitation(data, grounding)]);
             patchTurn({ citations: citations.slice() });
           }
+          if (type === 'verbatim_snippet') {
+            snippets = snippets.filter(s => s.num !== data.num).concat([this._clientSnippet(data)]);
+            patchTurn({ snippets: snippets.slice() });
+          }
           if (type === 'failed') throw new Error(data.message || 'regenerate failed');
           if (type === 'completed') {
             const resolved = citations.filter(c => c.resolved);
             const retrieval = grounding ? this._retrievalSummary(grounding, resolved) : null;
-            patchTurn({ a: data.text, citations: citations.length ? citations.slice() : null, model: data.model, retrieval, answerStatus: data.status });
+            patchTurn({
+              a: data.text, citations: citations.length ? citations.slice() : null,
+              snippets: (data.snippets || []).map(s => this._clientSnippet(s)),
+              model: data.model, retrieval, answerStatus: data.status,
+            });
             this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
           }
           const phase = this._phaseForEvent(type, data);
@@ -2785,6 +2836,21 @@ class Component extends DCLogic {
           border: openable ? '#E4DFD5' : '#EDE9E1',
           bg: openable ? '#FAF8F4' : 'transparent',
           title: openable ? `Open ${c.source} at this passage` : `${c.source} is not open in this room`,
+        };
+      }),
+
+      // The verbatim surface: one card per citation the answer actually
+      // used, always visible (no toggle) — the summary's proof sitting
+      // right beneath it, in the book's own bytes, not a diagnostic the
+      // reader has to go looking for.
+      hasSnippets: (turn.snippets || []).length > 0,
+      snippets: (turn.snippets || []).map(s => {
+        const openable = !!this._sourceForCitation(s.sourceId);
+        return {
+          ...s, openable,
+          open: () => this.openCitation({ num: s.num, resolved: true, sourceId: s.sourceId, source: s.source, byteStart: s.byteStart, byteEnd: s.byteEnd, quote: s.quote }),
+          cursor: openable ? 'pointer' : 'default',
+          ellipsis: s.truncated ? '…' : '',
         };
       }),
 
