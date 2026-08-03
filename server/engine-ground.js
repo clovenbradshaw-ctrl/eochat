@@ -629,6 +629,15 @@ const sliceBytes = (buf, start, end) => buf.subarray(start, end).toString("utf8"
 function headingScore(line, nextLineBlank) {
   const trimmed = line.trim();
   if (trimmed.length < 3 || trimmed.length > 80) return 0;
+  // Markdown ATX headings ("# ", "## ", … "###### ") are an unambiguous
+  // structural marker — the writer said "this is a heading" in the syntax
+  // itself, so this does not need the blank-line-follows/sentence-shape
+  // heuristics below, which exist to disambiguate weaker signals (ALL CAPS,
+  // "Chapter 1") in prose that carries no such marker. Without this, every
+  // prior card (server/priors-source.js::renderCard) and any plain .md
+  // source outlines as one unnavigable blob — real "# "/"## " headings never
+  // scored above 0.
+  if (/^#{1,6}\s+\S/.test(trimmed)) return 5;
   if (!nextLineBlank) return 0;
   // Penalize sentence-like lines (end with ?.! or have multiple capitalized words).
   // Trailing quotation marks are stripped first: a line ending `Bolkónskaya.”`
@@ -653,6 +662,14 @@ function headingScore(line, nextLineBlank) {
   if (/^[A-Z\s'"\u201c\u201d]{4,}$/.test(trimmed) || /^[A-Z][a-z]+\s+[A-Z]/.test(trimmed)) s += 2;
   if (/[?.!]$/.test(trimmed)) s -= 2;
   return s >= 2 ? s : 0;
+}
+
+// Strip a Markdown ATX marker ("## ") from a heading line for display. Offset
+// math always runs against the raw line; this only affects the label shown
+// to a reader, so "## Declared" reads as "Declared" instead of carrying its
+// own syntax as if that were part of the title.
+function stripHeadingMarker(label) {
+  return label.replace(/^#{1,6}\s+/, "");
 }
 
 // Dynamically discover segment boundaries near a byte offset by examining
@@ -696,7 +713,7 @@ function discoverSegment(idx, nearByte) {
   return {
     startByte: idx.starts[startIdx],
     endByte: endIdx != null ? Math.max(idx.starts[startIdx], idx.starts[endIdx] - 1) : hiByte,
-    label: startFound ? idx.lines[startIdx].trim() : "(context window — no heading precedes this passage)",
+    label: startFound ? stripHeadingMarker(idx.lines[startIdx].trim()) : "(context window — no heading precedes this passage)",
     headingCount,
   };
 }
@@ -737,7 +754,7 @@ export function outlineOfText(text, { max = 500 } = {}) {
     const nextBlank = i + 1 < lines.length && lines[i + 1].trim() === "";
     if (!headingScore(lines[i], nextBlank)) continue;
     candidates.push({
-      label: lines[i].trim(),
+      label: stripHeadingMarker(lines[i].trim()),
       // Where the heading line itself begins, and where its body does. The
       // reader renders the label from `label`, so it slices from bodyStart to
       // avoid printing the heading twice.
