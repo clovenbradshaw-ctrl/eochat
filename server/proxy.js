@@ -52,6 +52,7 @@ import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // Static, not dynamic: the request handler is synchronous, and the module only
 // catalogs on import — ingest stays lazy behind ensurePriorsIngested().
 import * as priorsSource from "./priors-source.js";
+import * as livePriorsSource from "./live-priors-source.js";
 import { HolonicTask } from "./holonic-task.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
 import { createTurnController } from "./turn-controller.js";
@@ -59,6 +60,8 @@ import { settingsStore } from "./settings-store.js";
 import { verifyAnthropicKey } from "./anthropic-provider.js";
 import { addUsage, rollUpUsage } from "./token-tally.js";
 import { runSessionMessage } from "./code-longform-session.js";
+import { customInstructionStore } from "./custom-instruction-store.js";
+import { workspaceMemory } from "./workspace-memory.js";
 
 // ── CLI args with validation ──
 
@@ -3343,6 +3346,53 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // ══════════════════════════════════════════════════════════════
+  // Live priors — the living corpus of source texts, browsable as
+  // a folder tree. Empty folders are hidden.
+  // ══════════════════════════════════════════════════════════════
+  if (req.method === "GET" && req.url.startsWith("/api/live-priors")) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    try {
+      if (url.pathname === "/api/live-priors/tree") {
+        const refresh = url.searchParams.get("refresh") === "true";
+        const tree = livePriorsSource.livePriorsTree({ refresh });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(tree || { children: [], fileCount: 0 }));
+        return;
+      }
+
+      if (url.pathname === "/api/live-priors/read") {
+        const filePath = url.searchParams.get("path");
+        if (!filePath) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing 'path' parameter" }));
+          return;
+        }
+        const result = livePriorsSource.readLivePrior(filePath, {
+          byteStart: parseInt(url.searchParams.get("start") || "0", 10),
+          maxBytes: parseInt(url.searchParams.get("max") || "80000", 10),
+        });
+        res.writeHead(result.error ? 404 : 200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+      if (url.pathname === "/api/live-priors/categories") {
+        const categories = livePriorsSource.livePriorsCategories();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ categories }));
+        return;
+      }
+
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unknown live-priors endpoint" }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
   // Structural outline of a document, for the reader's section navigation.
   //
   // POST rather than GET, and it takes the text itself, because the reader's
@@ -3671,6 +3721,128 @@ const server = http.createServer((req, res) => {
         if (res.headersSent) { try { res.end(); } catch { /* already closing */ } return; }
         const status = err instanceof ConversationNotFoundError ? 404 : 400;
         sendJson(status, { error: err.message });
+      }
+    })();
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Custom Instructions — user-uploaded instruction folds per project.
+  // These folds are surfaced/folded by the instruction gate each turn.
+  // ══════════════════════════════════════════════════════════════
+  if (req.url.startsWith("/api/projects/") && req.url.includes("/instructions")) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const segments = url.pathname.split("/").filter(Boolean);
+    // ["api", "projects", projectId, "instructions", foldId?]
+
+    const readJsonBody = () => new Promise((resolve, reject) => {
+      let body = "", size = 0;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > MAX_BODY) { req.destroy(new Error("Request body too large")); reject(new Error("body too large")); return; }
+        body += c.toString("utf8");
+      });
+      req.on("end", () => {
+        if (!body.trim()) return resolve({});
+        try { resolve(JSON.parse(body)); } catch (err) { reject(err); }
+      });
+      req.on("error", reject);
+    });
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+    (async () => {
+      try {
+        const projectId = segments[2];
+        const foldId = segments[4];
+
+        if (req.method === "GET" && !foldId) {
+          const folds = await customInstructionStore.list(projectId);
+          return sendJson(200, { folds });
+        }
+        if (req.method === "GET" && foldId) {
+          const fold = await customInstructionStore.get(projectId, foldId);
+          if (!fold) return sendJson(404, { error: `fold not found: ${foldId}` });
+          return sendJson(200, fold);
+        }
+        if (req.method === "POST" && !foldId) {
+          const data = await readJsonBody();
+          const fold = await customInstructionStore.create(projectId, data);
+          return sendJson(201, fold);
+        }
+        if (req.method === "PATCH" && foldId) {
+          const data = await readJsonBody();
+          const fold = await customInstructionStore.update(projectId, foldId, data);
+          return sendJson(200, fold);
+        }
+        if (req.method === "DELETE" && foldId) {
+          const result = await customInstructionStore.remove(projectId, foldId);
+          return sendJson(200, result);
+        }
+        sendJson(404, { error: "no such instructions route" });
+      } catch (err) {
+        sendJson(400, { error: err.message });
+      }
+    })();
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Workspace Memory — feedback and compliance history per project.
+  // Used to adjust instruction surf scoring based on past performance.
+  // ══════════════════════════════════════════════════════════════
+  if (req.url.startsWith("/api/projects/") && req.url.includes("/memory")) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const segments = url.pathname.split("/").filter(Boolean);
+    // ["api", "projects", projectId, "memory", "feedback"|"compliance"|"stats"|"clear"?]
+
+    const readJsonBody = () => new Promise((resolve, reject) => {
+      let body = "", size = 0;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > MAX_BODY) { req.destroy(new Error("Request body too large")); reject(new Error("body too large")); return; }
+        body += c.toString("utf8");
+      });
+      req.on("end", () => {
+        if (!body.trim()) return resolve({});
+        try { resolve(JSON.parse(body)); } catch (err) { reject(err); }
+      });
+      req.on("error", reject);
+    });
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+    (async () => {
+      try {
+        const projectId = segments[2];
+        const action = segments[4];
+
+        if (req.method === "GET" && action === "feedback") {
+          const feedback = await workspaceMemory.recentFeedback(projectId);
+          return sendJson(200, { feedback });
+        }
+        if (req.method === "GET" && action === "compliance") {
+          const history = await workspaceMemory.complianceHistory(projectId);
+          return sendJson(200, { history });
+        }
+        if (req.method === "GET" && action === "stats") {
+          const stats = await workspaceMemory.stats(projectId);
+          return sendJson(200, stats);
+        }
+        if (req.method === "GET" && action === "adjustments") {
+          const adjustments = await workspaceMemory.allAdjustments(projectId);
+          return sendJson(200, { adjustments: Object.fromEntries(adjustments) });
+        }
+        if (req.method === "POST" && action === "record") {
+          const data = await readJsonBody();
+          const record = await workspaceMemory.recordTurn(projectId, data);
+          return sendJson(201, record);
+        }
+        if (req.method === "DELETE" && action === "clear") {
+          const result = await workspaceMemory.clear(projectId);
+          return sendJson(200, result);
+        }
+        sendJson(404, { error: "no such memory route" });
+      } catch (err) {
+        sendJson(400, { error: err.message });
       }
     })();
     return;

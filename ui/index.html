@@ -16,6 +16,7 @@
      load first. Standalone eochat has no component host to supply them. -->
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -43,6 +44,28 @@
   .eo-scrollbar::-webkit-scrollbar-thumb { background: #E0DACE; border-radius: 4px; }
   .eo-fade-in { animation: eoFadeIn .2s ease-out; }
   @keyframes eoFadeIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
+  .eo-markdown { font-size: 14px; color: #1B1A17; line-height: 1.72; text-wrap: pretty; }
+  .eo-markdown p { margin: 0 0 0.75em 0; }
+  .eo-markdown p:last-child { margin-bottom: 0; }
+  .eo-markdown strong { font-weight: 600; }
+  .eo-markdown em { font-style: italic; }
+  .eo-markdown code { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; background: #F0EDE6; padding: 1px 5px; border-radius: 3px; }
+  .eo-markdown pre { background: #F0EDE6; padding: 12px 14px; border-radius: 6px; overflow-x: auto; margin: 0.75em 0; }
+  .eo-markdown pre code { background: none; padding: 0; font-size: 12.5px; }
+  .eo-markdown ul, .eo-markdown ol { margin: 0.5em 0; padding-left: 1.5em; }
+  .eo-markdown li { margin: 0.25em 0; }
+  .eo-markdown blockquote { border-left: 3px solid #E0DACE; margin: 0.75em 0; padding: 0.25em 0 0.25em 1em; color: #6E6A60; }
+  .eo-markdown h1, .eo-markdown h2, .eo-markdown h3, .eo-markdown h4 { margin: 1em 0 0.5em 0; font-weight: 600; line-height: 1.3; }
+  .eo-markdown h1 { font-size: 1.4em; }
+  .eo-markdown h2 { font-size: 1.25em; }
+  .eo-markdown h3 { font-size: 1.1em; }
+  .eo-markdown h4 { font-size: 1em; }
+  .eo-markdown hr { border: none; border-top: 1px solid #E0DACE; margin: 1em 0; }
+  .eo-markdown a { color: #1F5A4C; text-decoration: underline; }
+  .eo-markdown a:hover { color: #143B31; }
+  .eo-markdown table { border-collapse: collapse; margin: 0.75em 0; }
+  .eo-markdown th, .eo-markdown td { border: 1px solid #E0DACE; padding: 6px 10px; text-align: left; }
+  .eo-markdown th { background: #F4F2ED; font-weight: 600; }
 </style>
 </helmet>
 
@@ -233,7 +256,7 @@
         <button type="button" onClick="{{ tabOrbit }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOrbitColor }}; box-shadow: {{ tabOrbitUnderline }}; cursor:pointer;">Orbit</button>
         </sc-if>
         <button type="button" onClick="{{ tabPriors }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabPriorsColor }}; box-shadow: {{ tabPriorsUnderline }}; cursor:pointer;">Priors</button>
-        <button type="button" onClick="{{ tabCompose }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabComposeColor }}; box-shadow: {{ tabComposeUnderline }}; cursor:pointer;">Compose</button>
+        <button type="button" onClick="{{ tabInstructions }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabInstructionsColor }}; box-shadow: {{ tabInstructionsUnderline }}; cursor:pointer;">Instructions</button>
         <button type="button" onClick="{{ tabGlassBox }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabGlassBoxColor }}; box-shadow: {{ tabGlassBoxUnderline }}; cursor:pointer;">Glass box</button>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
           <sc-if value="{{ proxyDead }}">
@@ -396,6 +419,55 @@
               </sc-if>
             </div>
           </sc-if>
+
+          <sc-if value="{{ composeInProgress }}">
+            <div style="max-width:88%; display:flex; flex-direction:column; gap:10px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">⊨</span>
+                <span style="font-size:13px; color:#8C877C;">{{ composeStatusLabel }}</span>
+              </div>
+              <sc-if value="{{ composeReplanNotice }}">
+                <div style="display:flex; align-items:flex-start; gap:7px; background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C;">⊚</span>
+                  <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ composeReplanNotice }}</span>
+                </div>
+              </sc-if>
+              <sc-for list="{{ composeSectionRows }}" as="sec">
+                <div style="border:1px solid #E7E2D8; border-radius:9px; background:#FAF8F4; padding:10px 12px; display:flex; flex-direction:column; gap:4px;">
+                  <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                    <span style="font-size:13px; font-weight:500; color:#26241F;">{{ sec.label }}</span>
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color: {{ sec.statusColor }};">{{ sec.statusLabel }}</span>
+                  </div>
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">grounding: {{ sec.groundingTrail }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ composeDoneInline }}">
+            <div style="max-width:88%; display:flex; flex-direction:column; gap:0;">
+              <sc-for list="{{ composeResultSections }}" as="rs">
+                <div style="display:flex; flex-direction:column; gap:8px; border-top: 2px solid #E4DFD5; padding-top:14px; margin-top:14px;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C;">{{ rs.label }}</span>
+                  <span style="font-size:14px; color:#1B1A17; line-height:1.72; text-wrap:pretty; white-space:pre-wrap;">{{ rs.content }}</span>
+                  <sc-if value="{{ rs.hasCitations }}">
+                    <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                      <sc-for list="{{ rs.citations }}" as="cit">
+                        <span style="display:flex; align-items:center; gap:7px; font-size:11px; color:#4A463E; border:1px solid #E4DFD5; background:#FAF8F4; border-radius:6px; padding:3px 7px;">
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#1F5A4C; background:#E5EDE9; border-radius:3px; padding:1px 4px;">{{ cit.jaccard }}</span>
+                          {{ cit.source }}
+                        </span>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-top:10px; border-top:1px solid #EBE6DC; margin-top:14px;">
+                <button type="button" aria-label="Copy" onClick="{{ composeCopy }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-copy"></i>copy</button>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ composeSummary }}</span>
+              </div>
+            </div>
+          </sc-if>
         </div>
       </div>
 
@@ -467,6 +539,66 @@
         </div>
       </div>
       </sc-if>
+      </sc-if>
+
+      <sc-if value="{{ isInstructions }}">
+      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Instructions</span>
+          <button type="button" onClick="{{ addInstruction }}" style="display:flex; align-items:center; gap:6px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; padding:5px 12px; cursor:pointer; font-family:inherit; font-size:12px; color:#1F5A4C;">
+            <i class="ph ph-plus" style="font-size:13px;"></i>Add instruction
+          </button>
+        </div>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">Custom instructions for this project. Each instruction is surfaced when its signals match the conversation, and folded otherwise.</span>
+
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:10px;" class="eo-scrollbar">
+          <sc-if value="{{ noInstructions }}">
+            <span style="font-size:12px; color:#A39D91; padding:20px 0;">No instructions yet. Add one to guide how the model responds in this project.</span>
+          </sc-if>
+          <sc-for list="{{ instructionRows }}" as="instr">
+            <div style="border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4; overflow:hidden;">
+              <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 12px; gap:10px;">
+                <div style="flex:1; min-width:0;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-size:13px; font-weight:500; color:#26241F;">{{ instr.title }}</span>
+                    <sc-if value="{{ instr.always }}">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color:#1F5A4C; background:#E5EDE9; border-radius:5px; padding:2px 7px;">always on</span>
+                    </sc-if>
+                    <sc-if value="{{ instr.notAlways }}">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color:#8C877C; background:#F1EEE7; border-radius:5px; padding:2px 7px;">weight: {{ instr.weight }}</span>
+                    </sc-if>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">signals:</span>
+                    <sc-for list="{{ instr.signalChips }}" as="sig">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#4A463E; background:#E7E2D8; border-radius:4px; padding:1px 5px;">{{ sig }}</span>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:6px; flex:none;">
+                  <button type="button" onClick="{{ instr.edit }}" style="border:0; background:none; color:#8C877C; cursor:pointer; padding:4px;"><i class="ph ph-pencil-simple" style="font-size:13px;"></i></button>
+                  <button type="button" onClick="{{ instr.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:4px; opacity:0.5;"><i class="ph ph-trash" style="font-size:13px;"></i></button>
+                </div>
+              </div>
+              <sc-if value="{{ instr.expanded }}">
+                <div style="padding:0 12px 12px; border-top:1px solid #EBE6DC; margin-top:0;">
+                  <div style="padding-top:10px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">fingerprint</span>
+                    <p style="font-size:12px; color:#4A463E; line-height:1.55; margin:4px 0 0;">{{ instr.fingerprint }}</p>
+                  </div>
+                  <div style="padding-top:10px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">body</span>
+                    <pre style="font-size:12px; color:#3A372F; line-height:1.6; margin:4px 0 0; white-space:pre-wrap; word-break:break-word; font-family:inherit;">{{ instr.body }}</pre>
+                  </div>
+                </div>
+              </sc-if>
+              <sc-if value="{{ instr.collapsed }}">
+                <button type="button" onClick="{{ instr.expand }}" style="width:100%; border:0; border-top:1px solid #EBE6DC; background:none; padding:6px; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">show details ▾</button>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
       </sc-if>
 
       <sc-if value="{{ isGlassBox }}">
@@ -542,73 +674,95 @@
           <sc-if value="{{ noPriors }}">
             <span style="font-size:12px; color:#A39D91; line-height:1.5;">{{ priorsMessage }}</span>
           </sc-if>
-        </div>
-      </div>
-      </sc-if>
 
-      <sc-if value="{{ isCompose }}">
-      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
-        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Compose</span>
-        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A deliberate long-form generation, not a chat reply — each section is drafted, mechanically checked against the source, and revised before moving on.</span>
-
-        <div style="display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 12px; background:#FFFDFA;">
-          <input type="text" placeholder="e.g. write a 3-page essay about the Creature's intellectual development" value="{{ composeTask }}" onChange="{{ onComposeTask }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
-          <button type="button" onClick="{{ runCompose }}" style="border:0; border-radius:8px; padding:8px 14px; font-family:inherit; font-size:12.5px; font-weight:500; background: {{ composeButtonBg }}; color:#FFFDFA; cursor:pointer; flex:none;">{{ composeButtonLabel }}</button>
-        </div>
-
-        <sc-if value="{{ hasComposeError }}">
-          <div style="display:flex; align-items:flex-start; gap:7px; background:#FBF0EC; border:1px solid #E8C9BC; border-radius:8px; padding:8px 10px;">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#c0341a;">⊘</span>
-            <span style="font-size:11.5px; color:#8a3a26; line-height:1.55;">{{ composeError }}</span>
-          </div>
-        </sc-if>
-
-        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:12px;" class="eo-scrollbar">
-          <sc-if value="{{ hasComposePlan }}">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">plan: {{ composePlanCount }} section(s)</span>
-          </sc-if>
-
-          <sc-if value="{{ composeReplanNotice }}">
-            <div style="display:flex; align-items:flex-start; gap:7px; background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px;">
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C;">⊚</span>
-              <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ composeReplanNotice }}</span>
-            </div>
-          </sc-if>
-
-          <sc-for list="{{ composeSectionRows }}" as="sec">
-            <div style="border:1px solid #E7E2D8; border-radius:9px; background:#FAF8F4; padding:10px 12px; display:flex; flex-direction:column; gap:4px;">
-              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-                <span style="font-size:13px; font-weight:500; color:#26241F;">{{ sec.label }}</span>
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color: {{ sec.statusColor }};">{{ sec.statusLabel }}</span>
-              </div>
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">grounding: {{ sec.groundingTrail }}</span>
-            </div>
-          </sc-for>
-
-          <sc-if value="{{ composeDone }}">
-            <div style="display:flex; flex-direction:column; gap:14px; padding-top:10px; border-top:1px solid #EBE6DC;">
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ composeSummary }}</span>
-              <sc-for list="{{ composeResultSections }}" as="rs">
-                <div style="display:flex; flex-direction:column; gap:8px;">
-                  <span style="font-size:13.5px; font-weight:500; color:#26241F;">{{ rs.label }}</span>
-                  <span style="font-size:13.5px; color:#1B1A17; line-height:1.65; text-wrap:pretty; white-space:pre-wrap;">{{ rs.content }}</span>
-                  <sc-for list="{{ rs.citations }}" as="cit">
-                    <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
-                      <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">mechanical · {{ cit.jaccard }}</span>
-                        <span style="font-size:11.5px; color:#4A463E;">{{ cit.source }}</span>
+          <sc-if value="{{ hasLivePriors }}">
+            <div style="margin-top:16px; border-top:1px solid #E4DFD5; padding-top:12px; display:flex; flex-direction:column; gap:6px;">
+              <span style="font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:#8C877C;">Live priors — source texts</span>
+              <span style="font-size:11.5px; color:#A39D91; line-height:1.4;">The living corpus, organized by category. Empty folders are hidden.</span>
+              <sc-for list="{{ livePriorsTree }}" as="node">
+                <sc-if value="{{ node.isFolder }}">
+                  <div style="border:1px solid #E7E2D8; border-radius:8px; background:#FAF8F4; overflow:hidden;">
+                    <button type="button" onClick="{{ node.toggle }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:8px 10px; cursor:pointer; font-family:inherit; text-align:left;">
+                      <span style="display:flex; align-items:center; gap:8px;">
+                        <i class="{{ node.chevronClass }}" style="font-size:10px; color:#A39D91;"></i>
+                        <i class="ph ph-folder" style="font-size:12px; color:#8A5A22;"></i>
+                        <span style="font-size:12.5px; font-weight:500; color:#26241F;">{{ node.name }}</span>
+                      </span>
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">{{ node.fileCount }} files</span>
+                    </button>
+                    <sc-if value="{{ node.expanded }}">
+                      <div style="padding:0 10px 10px; display:flex; flex-direction:column; gap:4px;">
+                        <sc-for list="{{ node.children }}" as="child">
+                          <sc-if value="{{ child.isFolder }}">
+                            <div style="padding-left:12px;">
+                              <button type="button" onClick="{{ child.toggle }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:5px 8px; cursor:pointer; font-family:inherit; text-align:left; border-radius:5px;" onmouseover="this.style.background='#F1EEE7'" onmouseout="this.style.background='none'">
+                                <span style="display:flex; align-items:center; gap:6px;">
+                                  <i class="{{ child.chevronClass }}" style="font-size:9px; color:#A39D91;"></i>
+                                  <i class="ph ph-folder" style="font-size:11px; color:#A39D91;"></i>
+                                  <span style="font-size:11.5px; color:#4A463E;">{{ child.name }}</span>
+                                </span>
+                                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ child.fileCount }}</span>
+                              </button>
+                              <sc-if value="{{ child.expanded }}">
+                                <div style="padding-left:14px; display:flex; flex-direction:column; gap:2px;">
+                                  <sc-for list="{{ child.children }}" as="grandchild">
+                                    <sc-if value="{{ grandchild.isFolder }}">
+                                      <button type="button" onClick="{{ grandchild.toggle }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:4px 6px; cursor:pointer; font-family:inherit; text-align:left; border-radius:4px;" onmouseover="this.style.background='#F1EEE7'" onmouseout="this.style.background='none'">
+                                        <span style="display:flex; align-items:center; gap:5px;">
+                                          <i class="{{ grandchild.chevronClass }}" style="font-size:8px; color:#A39D91;"></i>
+                                          <i class="ph ph-folder" style="font-size:10px; color:#A39D91;"></i>
+                                          <span style="font-size:11px; color:#6E6A60;">{{ grandchild.name }}</span>
+                                        </span>
+                                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">{{ grandchild.fileCount }}</span>
+                                      </button>
+                                    </sc-if>
+                                    <sc-if value="{{ grandchild.isFile }}">
+                                      <button type="button" onClick="{{ grandchild.open }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:4px 6px; cursor:pointer; font-family:inherit; text-align:left; border-radius:4px;" onmouseover="this.style.background='#F1EEE7'" onmouseout="this.style.background='none'">
+                                        <span style="display:flex; align-items:center; gap:5px;">
+                                          <i class="ph ph-file-text" style="font-size:10px; color:#1F5A4C;"></i>
+                                          <span style="font-size:11px; color:#26241F;">{{ grandchild.name }}</span>
+                                        </span>
+                                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">{{ grandchild.sizeLabel }}</span>
+                                      </button>
+                                    </sc-if>
+                                  </sc-for>
+                                </div>
+                              </sc-if>
+                            </div>
+                          </sc-if>
+                          <sc-if value="{{ child.isFile }}">
+                            <button type="button" onClick="{{ child.open }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:0; background:none; padding:5px 8px; cursor:pointer; font-family:inherit; text-align:left; border-radius:5px;" onmouseover="this.style.background='#F1EEE7'" onmouseout="this.style.background='none'">
+                              <span style="display:flex; align-items:center; gap:6px;">
+                                <i class="ph ph-file-text" style="font-size:11px; color:#1F5A4C;"></i>
+                                <span style="font-size:11.5px; color:#26241F;">{{ child.name }}</span>
+                              </span>
+                              <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ child.sizeLabel }}</span>
+                            </button>
+                          </sc-if>
+                        </sc-for>
                       </div>
-                      <span style="font-size:12px; color:#3A372F; line-height:1.6; font-style:italic;">{{ cit.quote }}</span>
-                    </div>
-                  </sc-for>
-                </div>
+                    </sc-if>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ node.isFile }}">
+                  <button type="button" onClick="{{ node.open }}" style="width:100%; display:flex; align-items:center; justify-content:space-between; border:1px solid #E7E2D8; border-radius:8px; background:#FFFDFA; padding:8px 10px; cursor:pointer; font-family:inherit; text-align:left;" onmouseover="this.style.background='#F1EEE7'" onmouseout="this.style.background='#FFFDFA'">
+                    <span style="display:flex; align-items:center; gap:8px;">
+                      <i class="ph ph-file-text" style="font-size:12px; color:#1F5A4C;"></i>
+                      <span style="font-size:12.5px; color:#26241F;">{{ node.name }}</span>
+                    </span>
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">{{ node.sizeLabel }}</span>
+                  </button>
+                </sc-if>
               </sc-for>
             </div>
           </sc-if>
+          <sc-if value="{{ livePriorsError }}">
+            <span style="font-size:11px; color:#c0341a; line-height:1.4;">Live priors unavailable — {{ livePriorsError }}</span>
+          </sc-if>
         </div>
       </div>
       </sc-if>
-      </sc-if>
+
     </div>
 
     <div style="min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
@@ -1007,10 +1161,18 @@ class Component extends DCLogic {
     composeTask: '', composeRunning: false, composeError: null,
     composePlan: null, composeSections: {}, composeOrder: [],
     composeReplan: null, composeResult: null,
+    composeMode: false, composeInlineQuestion: null,
+    // Instructions tab: custom instruction folds for the current project.
+    // Each fold has id, title, always, weight, signals, fingerprint, body.
+    instructions: null, instructionsError: null, instructionsExpanded: {},
     // Priors catalog from /api/priors — the witness-tier pool, kept separate
     // from `_proxySources` (the corpus pool) because asking about the priors
     // and asking about the texts are different questions. null = not fetched.
     _priors: null, _priorsError: null, priorGenreOpen: {},
+    // Live priors tree from /api/live-priors/tree — the living corpus of
+    // source texts, browsable as a folder tree. null = not fetched.
+    _livePriors: null, _livePriorsError: null, livePriorsExpanded: {},
+    livePriorsReader: null,
     // Per-source engine projections, keyed by source name.
     //
     // `folds` carries the cast: referents a per-text prior actually typed, the
@@ -1045,9 +1207,11 @@ class Component extends DCLogic {
     this.loadConversations();
     this.fetchSources();
     this.fetchPriors();
+    this.fetchLivePriors();
     this.fetchRecycleBin();
     this.fetchSettings();
     this.fetchUsageTotal();
+    this.fetchInstructions();
     // Escape closes the dialog from anywhere inside it, not just while the
     // input holds focus.
     this._onWindowKeyDown = (e) => { if (e.key === 'Escape' && this.state.modal) this.closeModal(); };
@@ -1259,6 +1423,55 @@ class Component extends DCLogic {
       this.logAdd('○', `Priors catalog: ${data.priors.length} priors`, 'sources');
     } catch (err) {
       this.setState({ _priorsError: `could not reach the proxy: ${err.message}` });
+    }
+  }
+
+  // Live priors — the living corpus. Fetched separately from the witness-tier
+  // priors because they are different things: one is JSON artifacts about
+  // corpora, the other is the actual source texts organized by category.
+  async fetchLivePriors() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/live-priors/tree', { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) {
+        this.setState({ _livePriorsError: `proxy returned ${res.status}` });
+        return;
+      }
+      const data = await res.json();
+      this.setState({ _livePriors: data, _livePriorsError: null });
+    } catch (err) {
+      this.setState({ _livePriorsError: `could not reach the proxy: ${err.message}` });
+    }
+  }
+
+  toggleLivePriorsNode(path) {
+    this.setState(s => ({ livePriorsExpanded: { ...s.livePriorsExpanded, [path]: !s.livePriorsExpanded[path] } }));
+  }
+
+  async openLivePriorFile(filePath) {
+    const name = 'live-prior:' + filePath;
+    const already = this.state.readerContent[name];
+    this.setState(s => ({
+      readerContent: already ? s.readerContent : { ...s.readerContent, [name]: 'Loading…' },
+      readerOutlines: { ...s.readerOutlines, [name]: null },
+      selectedEntity: null,
+      tab: 'chat',
+      livePriorsReader: name,
+    }));
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/live-priors/read?path=' + encodeURIComponent(filePath), { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) {
+        this.setState(s => ({ readerContent: { ...s.readerContent, [name]: `Error: proxy returned ${res.status}` } }));
+        return;
+      }
+      const data = await res.json();
+      if (data.error) {
+        this.setState(s => ({ readerContent: { ...s.readerContent, [name]: `Error: ${data.error}` } }));
+        return;
+      }
+      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: data.text } }));
+      this.logAdd('○', `Opened live prior: ${filePath}`, 'sources');
+    } catch (err) {
+      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: `Error: ${err.message}` } }));
     }
   }
 
@@ -1977,6 +2190,10 @@ class Component extends DCLogic {
 
   onComposeTask(e) { this.setState({ composeTask: e.target.value }); }
 
+  toggleComposeMode() {
+    this.setState(s => ({ composeMode: !s.composeMode }));
+  }
+
   // Runs holonic_task directly via the dedicated /api/holonic endpoint (not
   // the LLM tool-choice loop) and renders each SSE event as it arrives —
   // per-section iteration scores, replan decisions, and the final assembled
@@ -2083,11 +2300,178 @@ class Component extends DCLogic {
     }
   }
 
+  async runComposeInline(question) {
+    if (!question || this.state.composeRunning) return;
+    const conversationId = this.state.activeSpaceId;
+    const localId = 'compose-' + Date.now();
+    this.updateActiveSpace(sp => ({
+      ...sp,
+      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: null, citations: null, streaming: false }]),
+    }));
+
+    this.setState({
+      composeRunning: true, composeError: null, composePlan: null,
+      composeSections: {}, composeOrder: [], composeReplan: null, composeResult: null,
+      composeInlineQuestion: question,
+      streamingLoading: true, thinkingPhase: 'Planning composition…', thinkingMeta: null, thinkingLog: [],
+    });
+    this.logAdd('⊨', `Compose: "${question.slice(0, 60)}${question.length > 60 ? '…' : ''}"`, 'chat');
+
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/holonic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: question }),
+      });
+      if (!res.ok) throw new Error('Proxy returned ' + res.status);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim() || !line.startsWith('data: ')) continue;
+          let data;
+          try { data = JSON.parse(line.slice(6)); } catch { continue; }
+          this._applyComposeEvent(data);
+          if (data.subTasks) {
+            this.setState({ thinkingPhase: `Writing ${data.subTasks.length} section(s)…`, thinkingMeta: null });
+          }
+          if (data.id && data.label !== undefined && data.iteration === undefined && data.groundingScore === undefined) {
+            this.setState({ thinkingPhase: `Writing: ${data.label}…`, thinkingMeta: null });
+          }
+        }
+      }
+    } catch (err) {
+      this.setState({ composeError: err.message, composeRunning: false, streamingLoading: false, thinkingPhase: null, thinkingMeta: null });
+      this.logAdd('⊘', `Compose failed: ${err.message}`, 'chat');
+      return;
+    }
+    this.setState({ composeRunning: false, streamingLoading: false, thinkingPhase: null, thinkingMeta: null, composeInlineQuestion: null });
+  }
+
+  // ── Instructions tab ──────────────────────────────────────────────────────
+  // Custom instruction folds for the current project. Each fold is surfaced
+  // when its signals match the conversation, and folded otherwise.
+
+  projectId() {
+    const sp = this.activeSpace();
+    return sp?.pool || sp?.id || 'default';
+  }
+
+  async fetchInstructions() {
+    const projectId = this.projectId();
+    try {
+      const res = await fetch(`${this.proxyUrl()}/api/projects/${projectId}/instructions`);
+      if (!res.ok) throw new Error('Failed to fetch instructions');
+      const data = await res.json();
+      this.setState({ instructions: data.folds || [], instructionsError: null });
+    } catch (err) {
+      this.setState({ instructionsError: err.message });
+    }
+  }
+
+  addInstruction() {
+    this.openModal({
+      title: 'Add instruction',
+      label: 'Instruction title',
+      placeholder: 'e.g. Respond as a legal expert',
+      hint: 'Define when this instruction surfaces (signals), whether it is always on, and what it instructs the model to do.',
+      submitLabel: 'Create',
+      onSubmit: (title) => this.createInstruction(title),
+    });
+  }
+
+  async createInstruction(title) {
+    const projectId = this.projectId();
+    try {
+      const res = await fetch(`${this.proxyUrl()}/api/projects/${projectId}/instructions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          always: false,
+          weight: 50,
+          signals: [],
+          fingerprint: title,
+          body: '',
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to create instruction');
+      await this.fetchInstructions();
+      this.logAdd('⊨', `Created instruction: "${title}"`, 'chat');
+    } catch (err) {
+      this.setState({ instructionsError: err.message });
+    }
+  }
+
+  editInstruction(foldId) {
+    const fold = this.state.instructions?.find(f => f.id === foldId);
+    if (!fold) return;
+    this.openModal({
+      title: 'Edit instruction',
+      label: 'Instruction body',
+      placeholder: 'What should the model do when this instruction is active?',
+      hint: 'Edit the full instruction body. Signals, weight, and fingerprint can be edited via the API.',
+      submitLabel: 'Save',
+      initialValue: fold.body,
+      onSubmit: (body) => this.updateInstruction(foldId, { body }),
+    });
+  }
+
+  async updateInstruction(foldId, patch) {
+    const projectId = this.projectId();
+    try {
+      const res = await fetch(`${this.proxyUrl()}/api/projects/${projectId}/instructions/${foldId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error('Failed to update instruction');
+      await this.fetchInstructions();
+    } catch (err) {
+      this.setState({ instructionsError: err.message });
+    }
+  }
+
+  async deleteInstruction(foldId) {
+    const projectId = this.projectId();
+    const fold = this.state.instructions?.find(f => f.id === foldId);
+    if (!fold) return;
+    if (!confirm(`Delete instruction "${fold.title}"?`)) return;
+    try {
+      const res = await fetch(`${this.proxyUrl()}/api/projects/${projectId}/instructions/${foldId}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Failed to delete instruction');
+      await this.fetchInstructions();
+      this.logAdd('⊘', `Deleted instruction: "${fold.title}"`, 'chat');
+    } catch (err) {
+      this.setState({ instructionsError: err.message });
+    }
+  }
+
+  toggleInstructionExpanded(foldId) {
+    this.setState(s => ({
+      instructionsExpanded: { ...s.instructionsExpanded, [foldId]: !s.instructionsExpanded[foldId] },
+    }));
+  }
+
   async send() {
     const q = this.state.draft.trim();
     if (!q && !this.state.draftAttachments.length) return;
     this.setState({ draft: '', draftAttachments: [] });
-    await this.askConversation(q);
+    if (this.state.composeMode) {
+      await this.runComposeInline(q);
+    } else {
+      await this.askConversation(q);
+    }
   }
 
   addSource() {
@@ -2869,6 +3253,7 @@ class Component extends DCLogic {
 
     return {
       ...turn,
+      aHtml: turn.a ? (typeof marked !== 'undefined' ? marked.parse(turn.a) : turn.a) : '',
       attachments: (turn.attachments || []).map(a => ({ ...a, displayName: a.title || a.name })),
       copy: () => navigator.clipboard.writeText(`Q: ${turn.q}${turn.a ? `\n\nA: ${turn.a}` : ''}${resolved.length ? '\n\n' + resolved.map(c => `[${c.num}] ${c.source}${c.byteStart !== undefined ? ` bytes ${c.byteStart}–${c.byteEnd}` : ''}\n"${c.quote}"`).join('\n\n') : ''}`),
       copyJson: () => navigator.clipboard.writeText(JSON.stringify({ question: turn.q, answer: turn.a, model: turn.model, citations: cits, grounding: turn.grounding, trace: turn.trace, prompt: turn.prompt }, null, 2)),
@@ -2953,7 +3338,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose');
+    const c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose'), ins = tabStyle('instructions');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // Selection is by referent id — the identity the engine assigned — so two
@@ -3254,7 +3639,7 @@ class Component extends DCLogic {
 
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose',
+      isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose', isInstructions: t === 'instructions',
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
       webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
@@ -3268,12 +3653,14 @@ class Component extends DCLogic {
       tabChat: () => this.setState({ tab: 'chat' }), tabOutline: () => this.setState({ tab: 'outline' }),
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
       tabPriors: () => this.setState({ tab: 'priors' }), tabCompose: () => this.setState({ tab: 'compose' }),
+      tabInstructions: () => this.setState({ tab: 'instructions' }),
       tabChatColor: c.color, tabChatUnderline: c.underline,
       tabOutlineColor: o.color, tabOutlineUnderline: o.underline,
       tabOrbitColor: r.color, tabOrbitUnderline: r.underline,
       tabGlassBoxColor: g.color, tabGlassBoxUnderline: g.underline,
       tabPriorsColor: pr.color, tabPriorsUnderline: pr.underline,
       tabComposeColor: cp.color, tabComposeUnderline: cp.underline,
+      tabInstructionsColor: ins.color, tabInstructionsUnderline: ins.underline,
       composeTask: S.composeTask,
       onComposeTask: (e) => this.onComposeTask(e),
       composeRunning: S.composeRunning,
@@ -3321,6 +3708,25 @@ class Component extends DCLogic {
           };
         }),
       })),
+      // Instructions tab
+      noInstructions: !(S.instructions || []).length,
+      instructionsError: S.instructionsError,
+      instructionRows: (S.instructions || []).map(fold => ({
+        id: fold.id,
+        title: fold.title,
+        always: fold.always,
+        notAlways: !fold.always,
+        weight: fold.weight,
+        fingerprint: fold.fingerprint || '(none)',
+        body: fold.body || '(empty)',
+        signalChips: (fold.signals || []).slice(0, 5),
+        expanded: !!S.instructionsExpanded[fold.id],
+        collapsed: !S.instructionsExpanded[fold.id],
+        expand: () => this.toggleInstructionExpanded(fold.id),
+        edit: () => this.editInstruction(fold.id),
+        delete: () => this.deleteInstruction(fold.id),
+      })),
+      addInstruction: () => this.addInstruction(),
       draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
       composerHint: enabledSourceCount === 0 && roomSources.length
         ? 'Every source is switched off — switch one on in the rail to ask.'
@@ -3569,6 +3975,41 @@ class Component extends DCLogic {
       priorsMessage: S._priorsError
         ? `Priors unavailable — ${S._priorsError}`
         : (S._priors === null ? 'Loading priors…' : 'No priors in the pool.'),
+      // Live priors tree — the living corpus. Rendered as a nested folder tree
+      // with files at the leaves. Empty folders are already filtered server-side.
+      hasLivePriors: !!(S._livePriors && S._livePriors.children && S._livePriors.children.length),
+      livePriorsError: S._livePriorsError,
+      livePriorsTree: (() => {
+        if (!S._livePriors || !S._livePriors.children) return [];
+        const renderNode = (node, depth = 0) => {
+          if (node.type === 'folder') {
+            const expanded = !!S.livePriorsExpanded[node.path];
+            return {
+              isFolder: true,
+              isFile: false,
+              name: node.name,
+              path: node.path,
+              fileCount: node.fileCount,
+              expanded,
+              chevronClass: expanded ? 'ph ph-caret-down' : 'ph ph-caret-right',
+              toggle: () => this.toggleLivePriorsNode(node.path),
+              children: expanded && node.children ? node.children.map(c => renderNode(c, depth + 1)) : [],
+            };
+          } else {
+            return {
+              isFolder: false,
+              isFile: true,
+              name: node.name,
+              path: node.path,
+              sizeLabel: node.size >= 1024 * 1024 ? (node.size / 1024 / 1024).toFixed(1) + ' MB'
+                : node.size >= 1024 ? (node.size / 1024).toFixed(0) + ' KB'
+                : node.size + ' B',
+              open: () => this.openLivePriorFile(node.path),
+            };
+          }
+        };
+        return S._livePriors.children.map(c => renderNode(c));
+      })(),
       // Headings from the engine's boundary detector, not from lines that
       // happen to be uppercase — that heuristic returned Gutenberg's licence
       // banner and missed every "Chapter 5". Each entry carries the byte offset

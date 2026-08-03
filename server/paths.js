@@ -31,6 +31,11 @@ export const PRIORS_ROOT = path.resolve(
   process.env.EOCHAT_PRIORS_PATH || path.join(REPO_ROOT, "vendor", "eoPriors")
 );
 
+/** Live priors checkout — the living corpus of source texts. Override with EOCHAT_LIVE_PRIORS_PATH. */
+export const LIVE_PRIORS_ROOT = path.resolve(
+  process.env.EOCHAT_LIVE_PRIORS_PATH || path.join(REPO_ROOT, "..", "live_priors")
+);
+
 /** Per-text coref alias/narrator priors — witness-tier, injected never derived. */
 export const COREF_DIR = path.join(PRIORS_ROOT, "priors", "coref");
 
