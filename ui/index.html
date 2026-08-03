@@ -1657,6 +1657,15 @@ const LINK_ROW_CAP = 60;
 // to a space; the orphaned key is inert, not migrated.
 const SPACES_KEY = 'eochat.spaces.v2';
 
+// GitHub Pages serves this file as a static site with no backend of its
+// own — the provider:'ollama' generation path only works once a reader
+// points ?proxyUrl= at a proxy they run themselves. Defaulting Local mode
+// on there means a first-time visitor gets a real, in-tab reply without
+// first finding and flipping the toggle by hand. Anywhere else (npm run
+// ui, or index.html served against a real proxy) the server-generated
+// path stays the default, unchanged.
+const ON_GH_PAGES = typeof window !== 'undefined' && /(^|\.)github\.io$/.test(window.location.hostname);
+
 class Component extends DCLogic {
   state = {
     view: 'projects', // 'projects' | 'chat'
@@ -1669,8 +1678,9 @@ class Component extends DCLogic {
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
     // mirrors window.EOWebLLM's own state machine, so the toggle can want
     // local mode before the download is ready — or after it has failed —
-    // without those two facts being confused with each other.
-    localModel: false, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
+    // without those two facts being confused with each other. Defaults on
+    // for the GitHub Pages deployment (see ON_GH_PAGES above).
+    localModel: ON_GH_PAGES, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
     spacesOpen: false, activeSpaceId: 'default', chatMode: 'chat', leftCollapsed: false, selectedEntity: null, activeTurnId: null,
     entityRung: 'Entity', entityPath: [], entityRungHelp: false,
     projectsOpen: true,
@@ -1820,6 +1830,12 @@ class Component extends DCLogic {
       this._unsubLocalModel = window.EOWebLLM.subscribe((snap) => {
         this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error });
       });
+      // localModel defaults on for ON_GH_PAGES (see state init above) — start
+      // the download immediately rather than waiting for a manual toggle
+      // click that a first-time visitor has no reason to know to make.
+      if (this.state.localModel && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
+        window.EOWebLLM.init();
+      }
     }
     this.bindEntityClicks();
   }
