@@ -171,21 +171,36 @@ function verdictFor(ttfs) {
 
 async function checkIngestLatency() {
   section("L1 — no dead air: document ingest");
-  const docs = CANDIDATE_DOCS.filter((d) => fs.existsSync(d.file));
+  const docs = CANDIDATE_DOCS
+    .filter((d) => fs.existsSync(d.file))
+    .map((d) => ({ label: d.label, ext: path.extname(d.file), content: fs.readFileSync(d.file, "utf8") }));
   if (!docs.length) {
     record("L1", "L1a", "SKIP", "no candidate documents present on this machine");
     return;
   }
+
+  // Every checked-in fixture admits in single-digit milliseconds, so L1c —
+  // the clause about work long enough to need intermediate signals — SKIPPED
+  // on every run, and the heartbeat that exists to satisfy it was never once
+  // exercised by the check that supposedly enforces it. A progress path no
+  // check has ever seen fire is not a fix, it is an intention. Synthesizing
+  // one deliberately large document gives the clause something real to
+  // measure without depending on what happens to be on the machine.
+  docs.push({
+    label: "synthetic/large",
+    ext: ".txt",
+    content: "The quick brown fox jumps over the lazy dog near the river bank at dawn.\n".repeat(24000),
+  });
 
   // `stream: true` opts into the SSE progress path (LAWS.md L1c fix) — the
   // plain JSON response, exercised separately by checkConcurrentLoad below,
   // stays a single blocking round trip for callers that never ask to stream.
   let sawLongEnoughForL1c = false;
   for (const doc of docs) {
-    const content = fs.readFileSync(doc.file, "utf8");
+    const content = doc.content;
     const bytes = Buffer.byteLength(content);
     // Unique name per run so a re-run never collides with its own leftovers.
-    const name = `lawcheck-${doc.label.replace(/\//g, "-")}-${process.pid}${path.extname(doc.file)}`;
+    const name = `lawcheck-${doc.label.replace(/\//g, "-")}-${process.pid}${doc.ext}`;
 
     const r = await collectSSE(`${PROXY}/api/ingest`, {
       content, name, session: `lawcheck-${process.pid}`, stream: true,
@@ -237,17 +252,23 @@ async function checkIngestLatency() {
 
 async function checkSilentTruncation() {
   section("L3 — no silent truncation");
-  const CAP = 500000; // proxy.js: content.slice(0, 500000)
-  const big = CANDIDATE_DOCS.map((d) => d.file).find(
-    (f) => fs.existsSync(f) && fs.statSync(f).size > CAP * 1.5
-  );
-  if (!big) {
-    record("L3", "L3a", "SKIP", `no document larger than the ${CAP}-char ingest cap available to test with`);
-    return;
-  }
+  const CAP = 500000; // proxy.js: INGEST_CHAR_CAP
 
-  const content = fs.readFileSync(big, "utf8");
-  const name = `lawcheck-truncation-${process.pid}${path.extname(big)}`;
+  // This used to look for a checkout-local file bigger than the cap and SKIP
+  // when it found none — which is what happened on every machine without War
+  // and Peace in ~/Downloads. The violation was real the whole time and went
+  // unmeasured, because the check could not reach the only condition that
+  // triggers it. A law whose check silently skips is not enforced, so the
+  // oversized document is synthesized here rather than hoped for: the cap is a
+  // character count, and characters are free to make.
+  const marker = "ZANZIBAR_TAIL_SENTINEL";
+  const filler = "Paragraph filler: the quick brown fox jumps over the lazy dog near the river bank at dawn.\n";
+  let content = filler.repeat(Math.ceil((CAP * 1.4) / filler.length));
+  // The sentinel sits past the cap on purpose: it is the thing the reader will
+  // later be told the document "does not mention".
+  content += `\n${marker} appears only after the cap.\n`;
+
+  const name = `lawcheck-truncation-${process.pid}.txt`;
   const { res, body } = await timedFetch(`${PROXY}/api/ingest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -265,14 +286,51 @@ async function checkSilentTruncation() {
   // must say it happened, because a silently shortened source produces
   // confidently wrong "the text does not mention X" answers about the part
   // that was dropped.
-  const declared = parsed.truncated ?? parsed.capped ?? parsed.dropped_bytes ?? parsed.original_length;
-  const reported = declared != null;
-  record("L3", "L3a", reported ? "PASS" : "VIOLATION",
-    reported
-      ? `oversized ingest reports the cap (${JSON.stringify(declared)})`
+  const said = parsed.truncated === true || parsed.capped === true ||
+    parsed.dropped_bytes != null || parsed.droppedChars != null || parsed.original_length != null;
+  record("L3", "L3a", said ? "PASS" : "VIOLATION",
+    said
+      ? `oversized ingest declares the cut: truncated=${JSON.stringify(parsed.truncated)}`
       : `${(content.length / 1024).toFixed(0)}KB ingested, silently cut to ${(CAP / 1024).toFixed(0)}KB — response has no truncation field, so the reader believes the whole text is loaded`,
     { submitted_chars: content.length, cap: CAP, dropped_chars: content.length - CAP,
       response_keys: Object.keys(parsed) });
+
+  // L3b — "some was dropped" does not tell the reader whether to re-ask. The
+  // numbers must be there and must add up; a truncation notice that misstates
+  // the loss is worse than none, because it is trusted.
+  const dropped = parsed.droppedChars ?? parsed.dropped_bytes;
+  const original = parsed.originalChars ?? parsed.original_length;
+  const ingested = parsed.ingestedChars;
+  const quantified = dropped != null && original != null;
+  const consistent = quantified && original === content.length &&
+    (ingested == null || original - ingested === dropped);
+  record("L3", "L3b", quantified ? (consistent ? "PASS" : "VIOLATION") : "VIOLATION",
+    !quantified
+      ? `the cut is announced but not measured — no droppedChars/originalChars, so the reader cannot tell whether to re-ask`
+      : consistent
+        ? `reports ${ingested ?? CAP} of ${original} characters ingested, ${dropped} dropped — and the figures reconcile against what was sent`
+        : `reported figures do not reconcile: sent ${content.length}, response claims original=${original} ingested=${ingested} dropped=${dropped}`,
+    { submitted_chars: content.length, reported_original: original ?? null,
+      reported_ingested: ingested ?? null, reported_dropped: dropped ?? null });
+
+  // The other half of the law, and the one a lazy fix breaks: a document that
+  // fits must NOT claim it was cut. "Always say truncated" would pass L3a
+  // while making the flag meaningless.
+  const smallName = `lawcheck-untruncated-${process.pid}.txt`;
+  const small = filler.repeat(20);
+  const { body: smallBody } = await timedFetch(`${PROXY}/api/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: small, name: smallName, session: `lawcheck-${process.pid}` }),
+  });
+  let smallParsed = {};
+  try { smallParsed = JSON.parse(smallBody); } catch {}
+  const clean = smallParsed.truncated === false || smallParsed.truncated == null;
+  record("L3", "L3a", clean ? "PASS" : "VIOLATION",
+    clean
+      ? `a ${small.length}-character document under the cap reports no truncation`
+      : `a ${small.length}-character document under the cap claims truncated=${JSON.stringify(smallParsed.truncated)} — the flag cannot be trusted if it is always set`,
+    { submitted_chars: small.length, reported_truncated: smallParsed.truncated ?? null });
 }
 
 // Shared by the idle baseline (checkChatLatency) and the under-load run
@@ -527,14 +585,63 @@ async function checkGapIsAuditable() {
       ? `no-match search names the gap: ${JSON.stringify(j.gaps).slice(0, 120)}`
       : `no-match search returns gaps:${JSON.stringify(j.gaps)} — the field exists to name the absence and is left empty`,
     { total: j.total ?? null, gaps: j.gaps ?? null });
+
+  // Naming the gap is not enough if every silence gets the same name. "You
+  // have ingested nothing", "the corpus is still loading" and "your sources
+  // were read and do not say this" are three different facts, and a reader who
+  // cannot tell them apart cannot act: the first wants an upload, the second
+  // wants patience, the third is an answer. The gap must therefore carry a
+  // type AND say how much was actually searched.
+  const gap = Array.isArray(j.gaps) ? j.gaps[0] : j.gaps;
+  const typed = !!(gap && typeof gap === "object" && (gap.type || gap.reason));
+  const quantified = !!(gap && typeof gap === "object" && gap.sourcesSearched != null);
+  record("L2", "L2e", typed && quantified ? "PASS" : "VIOLATION",
+    typed && quantified
+      ? `the gap distinguishes which silence it was: type="${gap.type}", ${gap.sourcesSearched} source(s) searched`
+      : typed
+        ? `the gap is typed ("${gap.type}") but does not say how much was searched — "nothing is loaded" still reads like "nothing was found"`
+        : `the gap is untyped (${JSON.stringify(gap).slice(0, 80)}) — an empty corpus and a silent one render identically`,
+    { gap_type: gap?.type ?? null, sources_searched: gap?.sourcesSearched ?? null });
+}
+
+// ── candidate law: errors do not wear success ───────────────────────────────
+
+// Promoted from LAWS.md's candidate list by writing the check, which is the
+// only way a candidate becomes a law here. The failure it forbids: a request
+// that produced no evidence answering with a success status, so that every
+// client branching on `res.ok` — this harness included, which once passed
+// these very routes for exactly that reason — treats a missing passage as a
+// delivered one. On an audit hop that is the most damaging possible place for
+// it, because the reader following a citation home is told the trip succeeded.
+async function checkErrorsDoNotWearSuccess() {
+  section("errors do not wear success");
+  const ghost = "span:fnv128:0000000000000000000000000000dead";
+  const probes = [
+    { label: "verbatim/read", url: `${PROXY}/api/verbatim/read?span_id=${encodeURIComponent(ghost)}` },
+    { label: "verbatim/context", url: `${PROXY}/api/verbatim/context?span_id=${encodeURIComponent(ghost)}` },
+  ];
+  for (const p of probes) {
+    const r = await fetch(p.url)
+      .then(async (x) => ({ status: x.status, json: await x.json().catch(() => null) }))
+      .catch((e) => ({ status: 0, json: null, err: e.message }));
+    const carriesError = !!(r.json && r.json.error);
+    // The body saying "unknown span" while the status line says 200 is the
+    // violation. Either it found the span (200, no error) or it did not (4xx).
+    const honest = !carriesError || (r.status >= 400 && r.status < 500);
+    record("L2", "L2b", honest ? "PASS" : "VIOLATION",
+      honest
+        ? `${p.label}: an unresolvable span answers HTTP ${r.status}, so a client checking res.ok is not misled`
+        : `${p.label}: HTTP ${r.status} with body {error:"${String(r.json.error).slice(0, 60)}"} — a failed read wearing a success status`,
+      { probe: p.label, status: r.status, carries_error: carriesError });
+  }
 }
 
 // ── cleanup ────────────────────────────────────────────────────────────────
 
 async function listSourceKeys() {
   const j = await fetch(`${PROXY}/api/sources?pool=corpus`).then((r) => r.json()).catch(() => []);
-  // `path` on read, `sourceId` on write — the same value under two names. Take
-  // whichever is present so this keeps working if they are ever reconciled.
+  // The same value under two names, now carried on both surfaces — take
+  // whichever is present so this works against either spelling.
   return new Set((Array.isArray(j) ? j : []).map((s) => s.path || s.sourceId).filter(Boolean));
 }
 
@@ -599,6 +706,7 @@ async function main() {
     await checkConcurrentLoad();
     await checkAuditRoundTrip();
     await checkGapIsAuditable();
+    await checkErrorsDoNotWearSuccess();
   } finally {
     await cleanup();
   }

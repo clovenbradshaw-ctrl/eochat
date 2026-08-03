@@ -101,6 +101,8 @@ export function engineIngestText(text, sourceId, displayName, { pool: poolName =
   p.sources.set(sourceId || name, { name, chunks, kind, pool: p.name, ingestedAt: Date.now() });
   return {
     sourceId,
+    // "One name per thing": /api/sources publishes this same value as `path`.
+    path: sourceId,
     chunks,
     pool: p.name,
     entries: admitted.map((a, i) => ({ id: `chunk-${i}`, size: a.byteEnd - a.byteStart })),
@@ -148,6 +150,8 @@ export async function engineIngestTextAsync(text, sourceId, displayName, { pool:
   p.sources.set(sourceId || name, { name, chunks: result.chunks, kind, pool: p.name, ingestedAt: Date.now() });
   return {
     sourceId,
+    // "One name per thing": /api/sources publishes this same value as `path`.
+    path: sourceId,
     chunks: result.chunks,
     pool: p.name,
     entries: result.admitted.map((a, i) => ({ id: `chunk-${i}`, size: a.byteEnd - a.byteStart })),
@@ -1016,6 +1020,7 @@ export function engineIngestFile(filePath, { pool: poolName = DEFAULT_POOL, kind
   p.sources.set(filePath, { name, chunks, kind, pool: p.name, ingestedAt: Date.now() });
   return {
     path: filePath,
+    sourceId: filePath,
     chunks,
     pool: p.name,
     entries: admitted.map((a, i) => ({ id: `chunk-${i}`, size: a.byteEnd - a.byteStart })),
@@ -1034,6 +1039,7 @@ export async function engineIngestFileAsync(filePath, { pool: poolName = DEFAULT
   p.sources.set(filePath, { name, chunks: result.chunks, kind, pool: p.name, ingestedAt: Date.now() });
   return {
     path: filePath,
+    sourceId: filePath,
     chunks: result.chunks,
     pool: p.name,
     entries: result.admitted.map((a, i) => ({ id: `chunk-${i}`, size: a.byteEnd - a.byteStart })),
@@ -1043,11 +1049,20 @@ export async function engineIngestFileAsync(filePath, { pool: poolName = DEFAULT
 // Every pool's sources, each tagged with the pool it lives in and what it is.
 // Callers that only want ingested texts filter on `kind === "corpus"` rather
 // than assuming the list is homogeneous.
+//
+// LAWS.md candidate law — "one name per thing." The key this map is built on
+// is the same value `/api/ingest` hands back as `sourceId`, but this surface
+// only ever published it as `path`, so a reader following an id from the
+// ingest response to the source list found it renamed, and a reader going the
+// other way found a `path` that is not a filesystem path at all for anything
+// ingested as content. Both names are carried now, identical in value, so
+// neither direction requires knowing the other spelling.
 export function engineListSources({ pool: poolName } = {}) {
   const selected = poolName ? [pool(poolName)] : Array.from(pools.values());
   return selected.flatMap((p) =>
     Array.from(p.sources.entries()).map(([path, info]) => ({
       path,
+      sourceId: path,
       name: info.name,
       chunks: info.chunks,
       kind: info.kind ?? "corpus",

@@ -3564,11 +3564,11 @@ class Component extends DCLogic {
       try {
         const text = await file.text();
         const result = await this._ingestTextContent(file.name, text, projectId);
-        this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+        this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
         // Cache locally so the reader can render it (e.g. the spreadsheet grid)
         // without a round trip back through the proxy's attachment store.
         this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: text } }));
-        this.logAdd('⋈', `Uploaded "${file.name}" (${result.chunks || 0} chunks)`, 'sources');
+        this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
       } catch (err) {
         this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
         this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
@@ -3577,18 +3577,38 @@ class Component extends DCLogic {
     this.fetchSources();
   }
 
+  // LAWS.md L3 — the client used to cut `text` at 500,000 characters before
+  // sending, which put the truncation on the one side of the wire that can
+  // never report it: the server received a 500,000-character document, saw
+  // nothing unusual about it, and answered "ingested, 250 chunks" perfectly
+  // honestly. The whole text is sent now, and the server's cap — the only
+  // place that knows the ceiling — decides and reports. The caller surfaces
+  // whatever it reports.
   async _ingestTextContent(name, text, projectId) {
     const endpoint = projectId ? '/api/projects/' + encodeURIComponent(projectId) + '/ingest' : '/api/ingest';
     const res = await fetch(this.proxyUrl() + endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(projectId
-        ? { content: text.slice(0, 500000), name }
-        : { content: text.slice(0, 500000), name, session: this.sessionId() })
+        ? { content: text, name }
+        : { content: text, name, session: this.sessionId() })
     });
     const result = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
     return result;
+  }
+
+  // One place decides how a truncated ingest is said, so every upload path
+  // (text, spreadsheet, PDF, URL) says it identically instead of each
+  // remembering to. Returns '' when nothing was dropped.
+  _truncationNote(result) {
+    if (!result || !result.truncated) return '';
+    const pct = result.originalChars
+      ? Math.round((result.droppedChars / result.originalChars) * 100)
+      : 0;
+    return ` — ⚠ only the first ${result.ingestedChars.toLocaleString()} of ` +
+      `${result.originalChars.toLocaleString()} characters were ingested; ` +
+      `${result.droppedChars.toLocaleString()} (${pct}%) are NOT searchable and cannot be cited`;
   }
 
   // .xlsx/.xls are real binary containers, not text — parsed in-browser via
@@ -3611,10 +3631,10 @@ class Component extends DCLogic {
       const sheetName = workbook.SheetNames[0];
       const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
       const result = await this._ingestTextContent(file.name, csv, projectId);
-      this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
       this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: csv } }));
       const moreSheets = workbook.SheetNames.length - 1;
-      this.logAdd('⋈', `Uploaded "${file.name}" — parsed sheet "${sheetName}"${moreSheets ? ` (${moreSheets} more sheet(s) not shown)` : ''} (${result.chunks || 0} chunks)`, 'sources');
+      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — parsed sheet "${sheetName}"${moreSheets ? ` (${moreSheets} more sheet(s) not shown)` : ''} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
       this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
       this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
@@ -3684,7 +3704,7 @@ class Component extends DCLogic {
       const finalText = ocrText || text;
       const extractMethod = ocrText ? 'ocr' : 'pdf-text-layer';
       const result = await this._ingestTextContent(file.name, finalText, projectId);
-      this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
       this.setState(s => ({
         readerContent: { ...s.readerContent, [file.name]: finalText },
         readerPDFLayout: { ...(s.readerPDFLayout || {}), [file.name]: layout },
@@ -3692,7 +3712,7 @@ class Component extends DCLogic {
         readerPDFNumPages: pdf.numPages,
         readerPDFBlob: this._uploadBlobUrls.get(file.name),
       }));
-      this.logAdd('⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)`, 'sources');
+      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
       this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
       this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
