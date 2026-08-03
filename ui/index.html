@@ -45,6 +45,16 @@
 <!-- Renders markdown in AI answers. Falls through to plain text if the CDN is
       unreachable — same offline-degrade pattern as the other optional libs. -->
 <script src="https://unpkg.com/marked@15.0.7/lib/marked.umd.min.js"></script>
+<!-- Renders LaTeX math ($...$ / $$...$$) in AI answers via KaTeX.
+     renderMarkdown() checks `typeof katex` and falls through to the literal
+     $…$ text if this fails to load (offline, CDN blocked), the same offline-
+     degrade pattern as the other optional libs. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<!-- math.js, for client-side expression evaluation in chat answers. Its
+     browser build exposes window.math; evaluateMath() checks `typeof math`
+     and degrades if the CDN is unreachable. -->
+<script src="https://cdn.jsdelivr.net/npm/mathjs@12.4.3/lib/browser/math.min.js"></script>
 <style>
   body { margin: 0; background: #F4F2ED; -webkit-font-smoothing: antialiased; }
   a { color: #1F5A4C; text-decoration: none; }
@@ -1920,6 +1930,10 @@ class Component extends DCLogic {
     this.fetchRecycleBin();
     this.fetchModels();
     this.loadSettings();
+    // math.js bridge for chat answers: a guarded evaluator on window, so any
+    // caller (or the model, via a future tool) can evaluate client-side
+    // expressions without reaching into the component instance.
+    window.mathEval = (expr) => this.evaluateMath(expr);
     // Escape closes the dialog from anywhere inside it, not just while the
     // input holds focus.
     this._onWindowKeyDown = (e) => {
@@ -3215,10 +3229,43 @@ class Component extends DCLogic {
     }));
   }
 
+  // KaTeX rendering for $...$ / $$...$$ inside markdown. Math outside fenced
+  // code blocks and inline code spans is rendered to HTML and parked behind
+  // %%MATH<n>%% placeholders so `marked` can't mangle it; the caller swaps the
+  // rendered HTML back in after parsing. Degrades to literal text when KaTeX
+  // never loaded (offline, CDN blocked).
+  extractMath(text) {
+    if (typeof katex === 'undefined') return { text, rendered: [] };
+    const rendered = [];
+    const park = (html) => { const i = rendered.length; rendered.push(html); return '%%MATH' + i + '%%'; };
+    const isCode = (seg) => /^```/.test(seg) || /^`+[^`]/.test(seg);
+    const parts = text.split(/(```[\s\S]*?(?:```|$)|`+[^\n]*?`+)/g);
+    const out = parts.map((seg) => {
+      if (isCode(seg)) return seg;
+      let s = seg.replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => park(katex.renderToString(m.trim(), { displayMode: true, throwOnError: false })));
+      s = s.replace(/(^|[^$\\])\$([^$\s][^$\n]*?[^$\s]|[^$\s])\$(?!\$)/g, (whole, pre, m) => pre + park(katex.renderToString(m.trim(), { throwOnError: false })));
+      return s;
+    }).join('');
+    return { text: out, rendered };
+  }
+
   renderMarkdown(text) {
     if (!text) return '';
     if (typeof marked === 'undefined') return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return marked.parse(text, { breaks: true, gfm: true });
+    const math = this.extractMath(text);
+    let html = marked.parse(math.text, { breaks: true, gfm: true });
+    math.rendered.forEach((r, i) => { html = html.split('%%MATH' + i + '%%').join(r); });
+    return html;
+  }
+
+  // math.js evaluation for chat answers. Exposed on the app and as
+  // window.mathEval so the chat model (or any caller) can evaluate an
+  // expression client-side. Returns { ok:false } instead of throwing when the
+  // expression is invalid or the CDN is unreachable.
+  evaluateMath(expr) {
+    if (typeof math === 'undefined') return { ok: false, error: 'math.js is not available (CDN unreachable)' };
+    try { return { ok: true, value: math.evaluate(String(expr)) }; }
+    catch (e) { return { ok: false, error: String(e.message || e) }; }
   }
 
   // The chat answer, as clickable HTML. Markdown renders first, then every
@@ -3235,6 +3282,7 @@ class Component extends DCLogic {
     host.innerHTML = html;
     const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
+        if (node.parentElement && node.parentElement.closest('.katex')) return NodeFilter.FILTER_REJECT;
         return (node.nodeValue || '').match(regex) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
     });
