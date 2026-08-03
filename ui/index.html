@@ -79,13 +79,56 @@
   .eo-md th, .eo-md td { border:1px solid #E4DFD5; padding:5px 9px; text-align:left; }
   .eo-md th { background:#F2EFE8; font-weight:500; }
   .eo-md hr { border:none; border-top:1px solid #E0DACE; margin:.8em 0; }
+
+  /* ── Narrow screens ──────────────────────────────────────────────────────
+     The shell is a four-column grid whose track widths are inline styles
+     computed from state, so the media queries below have to use !important to
+     reach past them — the alternative is threading a viewport width through
+     application state, which would make layout a re-render concern and lie
+     about where the decision belongs. Layout is CSS's job; the state only says
+     which panel the reader opened.
+
+     Below 900px the reader and the right rail are dropped rather than
+     squeezed: at that width they are narrower than the passage text they
+     exist to show, so keeping them would cost the chat its column and give
+     nothing back. The left panel keeps its collapsed 52px rail, which is what
+     makes it reopenable — hiding it outright on mobile would strand a reader
+     with no route back to their sources. When expanded, it floats over the
+     chat instead of stealing a track from it. */
+  @media (max-width: 900px) {
+    .eo-shell { grid-template-columns: auto minmax(0, 1fr) !important; }
+    .eo-reader-col, .eo-right-rail { display: none !important; }
+    .eo-left.eo-left-expanded {
+      position: absolute !important;
+      top: 0; bottom: 0; left: 0;
+      width: min(86vw, 300px) !important;
+      z-index: 40;
+      box-shadow: 0 12px 40px -12px rgba(28,26,23,.45);
+    }
+    /* An absolutely positioned grid child leaves auto-placement, so without
+       this the chat slides up into the rail's track and the track meant for
+       it collapses to zero — measured at 390px wide: "372px 0px", a full-width
+       sidebar and a chat column with no width at all. Pinning the chat to
+       column 2 makes the track assignment independent of whether the panel is
+       currently in flow. */
+    .eo-shell > .eo-main { grid-column: 2 !important; }
+  }
+
+  @media (max-width: 620px) {
+    .eo-page { padding: 8px !important; }
+    .eo-topbar { flex-wrap: wrap; row-gap: 6px; }
+    /* Touch targets: a 24px icon button is below every platform's minimum and
+       is the difference between a control and a coin toss on a phone. */
+    .eo-shell button { min-height: 32px; }
+    .eo-composer textarea { font-size: 16px !important; } /* iOS zooms below 16 */
+  }
 </style>
 </helmet>
 
-<div style="height:100svh; box-sizing:border-box; padding:16px; font-family:'Instrument Sans', system-ui, sans-serif; color:#1B1A17; display:flex; flex-direction:column; overflow:hidden;">
+<div class="eo-page" style="height:100svh; box-sizing:border-box; padding:16px; font-family:'Instrument Sans', system-ui, sans-serif; color:#1B1A17; display:flex; flex-direction:column; overflow:hidden;">
 <div style="width:100%; max-width:100%; flex:1; min-height:0; display:flex; flex-direction:column; gap:14px; overflow:hidden; position:relative;">
 
-  <div style="display:flex; align-items:center; justify-content:space-between; padding:0 2px;">
+  <div class="eo-topbar" style="display:flex; align-items:center; justify-content:space-between; padding:0 2px;">
     <div style="display:flex; align-items:center; gap:10px; position:relative;">
       <sc-if value="{{ showingProjects }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C;">eochat</span>
@@ -135,9 +178,33 @@
     </div>
   </div>
 
-  <div style="position:relative; flex:1; min-height:0; display:grid; grid-template-columns: {{ leftColWidth }} minmax(0, 1fr) {{ readerColWidth }} {{ rightRailWidth }}; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:14px; box-shadow:0 1px 2px rgba(28,26,23,.04), 0 12px 28px -22px rgba(28,26,23,.35); overflow:hidden;">
+  <!-- No backend.
+       This sits above the view switch on purpose. Placed inside the chat view
+       it was invisible in the state that needs it most: with no engine there
+       are no projects, so the app lands on the projects view and says "No
+       projects yet. Click + to create your first project" — a confident empty-
+       library message when the truth is that nothing was ever asked. That is
+       the same two-facts-render-alike failure the engine's own laws forbid,
+       reappearing at the level of the product, and it is exactly what a
+       visitor to the deployed static build sees, since it defaults to a proxy
+       on a localhost they have never started. -->
+  <sc-if value="{{ proxyDead }}">
+    <div style="border:1px solid #E3C9A8; background:#FDF6EC; border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A3592B;">⊘</span>
+        <span style="font-size:13px; font-weight:600; color:#26241F;">No engine reachable at {{ proxyUrlLabel }}</span>
+      </div>
+      <span style="font-size:12.5px; color:#6E6A60; line-height:1.6;">{{ proxyHelpText }}</span>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:2px;">
+        <button type="button" onClick="{{ retryProxy }}" style="border:1px solid #1F5A4C; background:#1F5A4C; color:#FFFDFA; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:12px; cursor:pointer;">Retry</button>
+        <button type="button" onClick="{{ toggleSettings }}" style="border:1px solid #E0DACE; background:#FFFDFA; color:#4A463E; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:12px; cursor:pointer;">Set engine URL</button>
+      </div>
+    </div>
+  </sc-if>
 
-    <div style="background:#FAF8F4; border-right:1px solid #EBE6DC; padding: {{ leftPadding }}; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; align-items: {{ leftAlign }};">
+  <div class="eo-shell" style="position:relative; flex:1; min-height:0; display:grid; grid-template-columns: {{ leftColWidth }} minmax(0, 1fr) {{ readerColWidth }} {{ rightRailWidth }}; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:14px; box-shadow:0 1px 2px rgba(28,26,23,.04), 0 12px 28px -22px rgba(28,26,23,.35); overflow:hidden;">
+
+    <div class="{{ leftPanelClass }}" style="background:#FAF8F4; border-right:1px solid #EBE6DC; padding: {{ leftPadding }}; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; align-items: {{ leftAlign }};">
       <sc-if value="{{ leftCollapsed }}">
         <button type="button" aria-label="Expand sources" onClick="{{ toggleLeftCollapsed }}" style="width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-sidebar-simple" style="font-size:13px;"></i></button>
         <span style="writing-mode:vertical-rl; font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; letter-spacing:.08em; margin-top:6px;">{{ leftPanelCountLabel }}</span>
@@ -185,6 +252,13 @@
 
         <sc-if value="{{ insideProject }}">
         <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button type="button" onClick="{{ editProjectInstructions }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:12px; flex:none;">§</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">Instructions</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ instructionsLabel }}</span>
+            </button>
+          </div>
           <div style="display:flex; align-items:center; gap:4px;">
             <button type="button" onClick="{{ toggleSourcesOpen }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
               <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:12px; flex:none;">◱</span>
@@ -236,6 +310,7 @@
               <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ spacesCount }}</span>
               <i class="{{ chatsChevron }}" style="font-size:11px; color:#A39D91;"></i>
             </button>
+            <button type="button" aria-label="Export this chat as Markdown" title="Export this chat as Markdown — citations and verbatim source text included" onClick="{{ exportConversation }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-download-simple" style="font-size:13px;"></i></button>
             <button type="button" aria-label="New chat" onClick="{{ addSpace }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-plus" style="font-size:13px;"></i></button>
           </div>
           <sc-if value="{{ chatsOpen }}">
@@ -341,7 +416,7 @@
       </sc-if>
     </div>
 
-    <div style="display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden;">
+    <div class="eo-main" style="display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden;">
 
       <sc-if value="{{ showingProjects }}">
       <div style="flex:1; padding:32px 28px; display:flex; flex-direction:column; gap:18px; min-height:0; overflow-y:auto;" class="eo-scrollbar">
@@ -422,9 +497,10 @@
                     </sc-for>
                   </div>
                 </sc-if>
-                <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:12px 12px 4px 12px; padding:9px 13px;">
+                <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:12px 12px 4px 12px; padding:9px 13px; white-space:pre-wrap;">
                   <span style="font-size:13.5px; line-height:1.5; color:#26241F;">{{ turn.q }}</span>
                 </div>
+                <button type="button" aria-label="Edit and ask again" title="Put this question back in the composer to edit and ask again" onClick="{{ turn.editAndReask }}" style="align-self:flex-end; display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; cursor:pointer; padding:2px 0 0;"><i class="ph ph-pencil-simple"></i>edit &amp; ask again</button>
               </div>
               <sc-if value="{{ turn.retrieval }}">
                 <div style="display:flex; align-items:center; gap:8px;">
@@ -581,14 +657,14 @@
             </sc-for>
           </div>
         </sc-if>
-        <div style="position:relative; display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 8px; background:#FFFDFA;">
-          <button type="button" aria-label="Attach file" onClick="{{ openFileDialog }}" style="width:28px; height:28px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:#8C877C; cursor:pointer;"><i class="ph ph-paperclip" style="font-size:15px;"></i></button>
+        <div class="eo-composer" style="position:relative; display:flex; gap:8px; align-items:flex-end; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 8px; background:#FFFDFA;">
+          <button type="button" aria-label="Attach file" onClick="{{ openFileDialog }}" style="width:28px; height:28px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:#8C877C; cursor:pointer; align-self:flex-end;"><i class="ph ph-paperclip" style="font-size:15px;"></i></button>
           <input type="file" multiple="{{ true }}" ref="{{ setFileInput }}" onChange="{{ onFilesSelected }}" style="display:none;" />
           <sc-if value="{{ inputDisabled }}">
             <input type="text" placeholder="Waiting for response…" value="" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#8C877C; padding:6px 0; cursor:default;" readonly />
           </sc-if>
           <sc-if value="{{ !inputDisabled }}">
-            <input type="text" placeholder="Ask across your sources" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
+            <textarea aria-label="Ask across your sources" placeholder="{{ composerPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" ref="{{ setComposerInput }}" rows="{{ 1 }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; line-height:1.5; color:#1B1A17; padding:6px 0; resize:none; overflow-y:auto; max-height:40vh;"></textarea>
           </sc-if>
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
           <sc-if value="{{ hasModels }}">
@@ -873,7 +949,7 @@
       </sc-if>
     </div>
 
-    <div style="min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+    <div class="eo-reader-col" style="min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
     <sc-if value="{{ readerOpen }}">
     <div style="min-width:0; min-height:0; display:flex; flex-direction:column; border-left:1px solid #EBE6DC;">
       <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; row-gap:8px; padding:14px 20px; border-bottom:1px solid #EBE6DC;">
@@ -1114,7 +1190,7 @@
     </div>
 
     <sc-if value="{{ notShowingProjects }}">
-    <div style="background:#FAF8F4; border-left:1px solid #EBE6DC; padding:18px 16px; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; overflow-y:auto;" class="eo-scrollbar">
+    <div class="eo-right-rail" style="background:#FAF8F4; border-left:1px solid #EBE6DC; padding:18px 16px; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; overflow-y:auto;" class="eo-scrollbar">
 
       <sc-if value="{{ readerPreviewVisible }}">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
@@ -1366,14 +1442,20 @@
 
   <sc-if value="{{ modalOpen }}">
   <div onClick="{{ closeModal }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:14vh 24px 24px; z-index:60;">
-    <div onClick="{{ stopModalClick }}" class="eo-fade-in" style="width:100%; max-width:404px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:17px 18px 15px; display:flex; flex-direction:column; gap:13px;">
+    <div onClick="{{ stopModalClick }}" class="eo-fade-in" style="width:100%; max-width:{{ modalMaxWidth }}; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:17px 18px 15px; display:flex; flex-direction:column; gap:13px;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#8C877C;">{{ modalTitle }}</span>
         <button type="button" aria-label="Cancel" onClick="{{ closeModal }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
       </div>
       <div style="display:flex; flex-direction:column; gap:6px;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ modalLabel }}</span>
-        <input type="text" ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" onKeyDown="{{ onModalKey }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:inherit; font-size:13.5px; color:#1B1A17; outline:none;" />
+        <sc-if value="{{ modalSingleLine }}">
+          <input type="text" ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" onKeyDown="{{ onModalKey }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:inherit; font-size:13.5px; color:#1B1A17; outline:none;" />
+        </sc-if>
+        <sc-if value="{{ modalMultiline }}">
+          <textarea ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" rows="{{ 16 }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:'IBM Plex Mono', monospace; font-size:12.5px; line-height:1.6; color:#1B1A17; outline:none; resize:vertical; min-height:220px;"></textarea>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ modalValueStats }}</span>
+        </sc-if>
       </div>
       <sc-if value="{{ modalUpload }}">
         <div style="display:flex; align-items:center; gap:9px;">
@@ -1661,6 +1743,14 @@ class Component extends DCLogic {
 
   componentDidMount() {
     this.tick = this.tick.bind(this);
+    // On a narrow screen the left panel floats over the chat rather than
+    // taking a column, so opening expanded would put a drawer across the
+    // conversation before the reader has asked for it. Which panel is open is
+    // a UX default, not layout, so it belongs here rather than in the CSS that
+    // decides how the panel is drawn once open.
+    if (typeof window !== 'undefined' && window.innerWidth <= 900) {
+      this.setState({ leftCollapsed: true });
+    }
     this.checkHealth();
     this.fetchProjects();
     this.loadConversations();
@@ -1697,17 +1787,145 @@ class Component extends DCLogic {
     if (this._onEntitySpanClick) document.removeEventListener('click', this._onEntitySpanClick);
   }
 
+  // Put an earlier question back in the composer to reword and ask again.
+  //
+  // Deliberately additive: the original turn and its answer stay in the
+  // record, and the reworded question arrives as a new turn. Other chat tools
+  // rewrite the edited turn and discard everything after it, which is fine
+  // when the transcript is disposable — but this application's whole claim is
+  // that what it did is inspectable afterwards, and a history that silently
+  // drops the answer you were unhappy with cannot support that. "Regenerate"
+  // already covers "same question, another attempt"; this covers "not quite
+  // the question I meant", and both leave the trail intact.
+  editAndReask(turn) {
+    if (this.state.streamingLoading) return;
+    this.setState({ draft: turn.q || '' });
+    // Focus and size the composer after the value has actually landed in it.
+    setTimeout(() => {
+      const el = this.composerEl;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+      this.autoGrowComposer(el);
+    }, 0);
+  }
+
+  // Export the open conversation as Markdown.
+  //
+  // The point of exporting from THIS app rather than any other chat tool is
+  // that the provenance travels with the prose. A transcript of the answers
+  // alone is what every competitor can already give you, and it is exactly the
+  // artefact whose claims cannot be checked once it leaves the app. So each
+  // answer carries its citations — source and byte range — and the verbatim
+  // snippets the engine sliced for the passages the answer actually used, and
+  // any typed gaps it reported. A reader who receives this file can go back to
+  // the source bytes without the app.
+  exportConversation() {
+    const space = this.activeSpace();
+    const turns = space.turns || [];
+    if (!turns.length) {
+      this.logAdd('⊘', 'Nothing to export — this conversation has no turns yet', 'chat');
+      return;
+    }
+
+    const out = [];
+    out.push(`# ${space.name || 'Conversation'}`);
+    out.push('');
+    out.push(`_Exported ${new Date().toISOString()} from EOChat._`);
+    const srcNames = (space.sources || []).map(s => s.name).filter(Boolean);
+    if (srcNames.length) out.push(`_Sources in scope: ${srcNames.join(', ')}_`);
+    out.push('');
+
+    turns.forEach((turn, i) => {
+      out.push(`## ${i + 1}. ${(turn.q || '').trim() || '(no question)'}`);
+      out.push('');
+      out.push((turn.a || '_(no answer)_').trim());
+      out.push('');
+
+      const cits = (turn.citations || []).filter(c => c.resolved);
+      if (cits.length) {
+        out.push('**Citations**');
+        out.push('');
+        for (const c of cits) {
+          const range = (c.byteStart != null && c.byteEnd != null) ? ` bytes ${c.byteStart}–${c.byteEnd}` : '';
+          out.push(`- \`[${c.num}]\` ${c.sourceId || c.source || 'unknown source'}${range}`);
+        }
+        out.push('');
+      }
+
+      // An unresolved citation is a finding, not a formatting problem. It ships
+      // in the export for the same reason it shows in the UI.
+      const unresolved = (turn.citations || []).filter(c => !c.resolved);
+      if (unresolved.length) {
+        out.push(`**Unresolved citations:** ${unresolved.map(c => `[${c.num}]`).join(' ')} — no engine passage backs these.`);
+        out.push('');
+      }
+
+      const snippets = turn.snippets || [];
+      if (snippets.length) {
+        out.push('**Verbatim source text**');
+        out.push('');
+        for (const s of snippets) {
+          const label = s.source || s.sourceId || '';
+          out.push(`> ${(s.full || s.text || '').trim().replace(/\n/g, '\n> ')}`);
+          out.push(`>`);
+          out.push(`> — \`[${s.num ?? '?'}]\` ${label}`);
+          out.push('');
+        }
+      }
+
+      const gaps = ((turn.grounding && turn.grounding.gaps) || []).map(g => g.reason || g.note || g.type).filter(Boolean);
+      if (gaps.length) {
+        out.push('**Gaps reported**');
+        out.push('');
+        for (const g of gaps) out.push(`- ${g}`);
+        out.push('');
+      }
+      out.push('---');
+      out.push('');
+    });
+
+    const md = out.join('\n');
+    const safeName = (space.name || 'conversation').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'conversation';
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${safeName}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Revoking immediately can race the download in some browsers; one tick is
+    // enough and the object is small.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    this.logAdd('⋈', `Exported ${turns.length} turn(s) to ${safeName}.md — citations and verbatim source text included`, 'chat');
+  }
+
+  // Grow the composer to fit what has been typed, up to the CSS max-height
+  // (past which it scrolls). Height is reset to auto first so the box shrinks
+  // again on delete — measuring scrollHeight against a previously grown box
+  // only ever reports the old, larger height.
+  autoGrowComposer(el) {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, Math.round(window.innerHeight * 0.4)) + 'px';
+  }
+
   openModal(cfg) { this._modalProjectId = cfg.projectId || null; this.setState({ modal: cfg, modalValue: cfg.initialValue || '' }); }
   closeModal() { this._modalProjectId = null; this.setState({ modal: null, modalValue: '', thinkingModalOpen: false }); }
   openThinkingModal() { this.setState({ thinkingModalOpen: true }); }
 
   // Whitespace-only input is not a name — reject it rather than creating a
-  // blank-titled space or POSTing an empty path to the proxy.
+  // blank-titled space or POSTing an empty path to the proxy. `allowEmpty`
+  // exists for editors where clearing IS the operation: emptying a project's
+  // instructions means "this project has no rules", which is a real state and
+  // must be reachable, not something you can only get into by never typing.
   submitModal() {
     const modal = this.state.modal;
     if (!modal) return;
-    const value = (this.state.modalValue || '').trim();
-    if (!value) return;
+    const raw = this.state.modalValue || '';
+    const value = modal.allowEmpty ? raw : raw.trim();
+    if (!value && !modal.allowEmpty) return;
     this.closeModal();
     modal.onSubmit(value);
   }
@@ -3218,6 +3436,9 @@ class Component extends DCLogic {
     if (!q && !this.state.draftAttachments.length) return;
     const mode = this.state.chatMode || 'chat';
     this.setState({ draft: '', draftAttachments: [], streamingLoading: true, thinkingPhase: 'surfing...', thinkingMeta: null, thinkingLog: [] });
+    // The box grew to fit the question; with the draft cleared it has to
+    // shrink back, or the next prompt starts inside a tall empty field.
+    if (this.composerEl) { this.composerEl.style.height = 'auto'; }
     this.logAdd('→', `Sending ${mode !== 'chat' ? mode + ' ' : ''}question…`, 'chat');
     if (this.state.localModel && this.state.localModelStatus === 'ready') {
       await this.localAskConversation(q);
@@ -3444,6 +3665,69 @@ class Component extends DCLogic {
     }
   }
 
+  // The project's own instructions — the rules the model obeys inside it.
+  //
+  // Any length. They are stored verbatim and compiled into folds the
+  // instruction gate surfs and folds per turn, so a long manual costs a
+  // bounded block rather than the whole context window. What comes back from
+  // the save is the compile report, and it is shown rather than swallowed: a
+  // reader whose 40-section manual was folded, or one of whose sections can
+  // never surface, cannot act on what they are not told.
+  async editProjectInstructions() {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) return;
+    const project = this.state.projects.find(p => p.id === projectId);
+    let current = { text: '', report: null };
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/instructions', { signal: AbortSignal.timeout(10000) });
+      if (res.ok) current = await res.json();
+    } catch (err) {
+      this.logAdd('⊘', `Could not read instructions for this project — ${err.message}`, 'sources');
+    }
+    this.openModal({
+      title: `Instructions for ${project ? project.name : 'project'}`,
+      label: 'Rules the model follows in this project',
+      placeholder: 'e.g.\n\nAlways cite the statute, never paraphrase it.\n\n## Refund policy\nState the refund window as fourteen days from dispatch.',
+      hint: 'Any length. Use ## headings to name each rule area — a heading is what makes that rule findable, so it can be surfaced verbatim on the turns it applies to and folded away on the turns it does not. Short instruction sets are handed to the model whole on every turn.',
+      submitLabel: 'Save instructions',
+      multiline: true,
+      allowEmpty: true,
+      initialValue: current.text || '',
+      projectId,
+      onSubmit: (text) => this.saveProjectInstructions(projectId, text),
+    });
+  }
+
+  async saveProjectInstructions(projectId, text) {
+    this.logAdd('○', 'Saving project instructions…', 'sources');
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/instructions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
+      const r = result.report || {};
+      if (!result.chars) {
+        this.logAdd('⊘', 'Project instructions cleared — no rules are in force in this project', 'sources');
+      } else if (r.mode === 'whole') {
+        this.logAdd('§', `Saved ${result.chars.toLocaleString()} characters — under the per-turn budget, so all of it is in force on every turn`, 'sources');
+      } else {
+        this.logAdd('§', `Saved ${result.chars.toLocaleString()} characters (~${r.totalTokens?.toLocaleString()} tokens) — folded into ${r.folds} rule(s), ${r.alwaysOn} always in force, the rest surfaced when relevant`, 'sources');
+      }
+      // A section that can never surface is a rule the reader believes they
+      // wrote and the model will never see. Say so.
+      if (r.warning) this.logAdd('⊘', r.warning, 'sources');
+      if (r.unroutable?.length) {
+        this.logAdd('◐', `${r.unroutable.length} section(s) had no distinctive words to match on, so they are kept always in force rather than being unreachable`, 'sources');
+      }
+      this.fetchProjects();
+    } catch (err) {
+      this.logAdd('⊘', `Could not save instructions — ${err.message}`, 'sources');
+    }
+  }
+
   // Project-scoped add: same URL / path / upload surface as addSource, but the
   // bytes land in the active project's own pool via /api/projects/:id/ingest,
   // so retrieval stays scoped to that project's knowledge base. The projectId
@@ -3564,11 +3848,11 @@ class Component extends DCLogic {
       try {
         const text = await file.text();
         const result = await this._ingestTextContent(file.name, text, projectId);
-        this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+        this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
         // Cache locally so the reader can render it (e.g. the spreadsheet grid)
         // without a round trip back through the proxy's attachment store.
         this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: text } }));
-        this.logAdd('⋈', `Uploaded "${file.name}" (${result.chunks || 0} chunks)`, 'sources');
+        this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
       } catch (err) {
         this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
         this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
@@ -3577,18 +3861,39 @@ class Component extends DCLogic {
     this.fetchSources();
   }
 
+  // LAWS.md L3 — the client used to cut `text` at 500,000 characters before
+  // sending, which put the truncation on the one side of the wire that can
+  // never report it: the server received a 500,000-character document, saw
+  // nothing unusual about it, and answered "ingested, 250 chunks" perfectly
+  // honestly. The whole text is sent now and admitted whole. `_truncationNote`
+  // stays wired because `truncated` is still part of the ingest contract — if a
+  // cap is ever reintroduced server-side, this surface reports it rather than
+  // going silent again, which is the failure that motivated all of this.
   async _ingestTextContent(name, text, projectId) {
     const endpoint = projectId ? '/api/projects/' + encodeURIComponent(projectId) + '/ingest' : '/api/ingest';
     const res = await fetch(this.proxyUrl() + endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(projectId
-        ? { content: text.slice(0, 500000), name }
-        : { content: text.slice(0, 500000), name, session: this.sessionId() })
+        ? { content: text, name }
+        : { content: text, name, session: this.sessionId() })
     });
     const result = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
     return result;
+  }
+
+  // One place decides how a truncated ingest is said, so every upload path
+  // (text, spreadsheet, PDF, URL) says it identically instead of each
+  // remembering to. Returns '' when nothing was dropped.
+  _truncationNote(result) {
+    if (!result || !result.truncated) return '';
+    const pct = result.originalChars
+      ? Math.round((result.droppedChars / result.originalChars) * 100)
+      : 0;
+    return ` — ⚠ only the first ${result.ingestedChars.toLocaleString()} of ` +
+      `${result.originalChars.toLocaleString()} characters were ingested; ` +
+      `${result.droppedChars.toLocaleString()} (${pct}%) are NOT searchable and cannot be cited`;
   }
 
   // .xlsx/.xls are real binary containers, not text — parsed in-browser via
@@ -3611,10 +3916,10 @@ class Component extends DCLogic {
       const sheetName = workbook.SheetNames[0];
       const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
       const result = await this._ingestTextContent(file.name, csv, projectId);
-      this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
       this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: csv } }));
       const moreSheets = workbook.SheetNames.length - 1;
-      this.logAdd('⋈', `Uploaded "${file.name}" — parsed sheet "${sheetName}"${moreSheets ? ` (${moreSheets} more sheet(s) not shown)` : ''} (${result.chunks || 0} chunks)`, 'sources');
+      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — parsed sheet "${sheetName}"${moreSheets ? ` (${moreSheets} more sheet(s) not shown)` : ''} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
       this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
       this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
@@ -3684,7 +3989,7 @@ class Component extends DCLogic {
       const finalText = ocrText || text;
       const extractMethod = ocrText ? 'ocr' : 'pdf-text-layer';
       const result = await this._ingestTextContent(file.name, finalText, projectId);
-      this.markSource(file.name, { processing: false, glyph: '●', color: '#1F5A4C', ingested: true, chunks: result.chunks || 0 });
+      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
       this.setState(s => ({
         readerContent: { ...s.readerContent, [file.name]: finalText },
         readerPDFLayout: { ...(s.readerPDFLayout || {}), [file.name]: layout },
@@ -3692,7 +3997,7 @@ class Component extends DCLogic {
         readerPDFNumPages: pdf.numPages,
         readerPDFBlob: this._uploadBlobUrls.get(file.name),
       }));
-      this.logAdd('⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)`, 'sources');
+      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
       this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
       this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
@@ -4382,6 +4687,7 @@ class Component extends DCLogic {
       // that hasn't finished isn't a real action, it's a race with itself.
       canRegenerate: !!turn.a && !(this.state.streamingLoading && this.state.streamingTurnId === turn.id),
       regenerate: () => this.regenerateAnswer(turn.id),
+      editAndReask: () => this.editAndReask(turn),
       wasInterrupted: turn.answerStatus === 'interrupted',
 
       // A bracket is a door. Openable only when the cited source is actually
@@ -4478,7 +4784,7 @@ class Component extends DCLogic {
     // surfaces of the same referent select the same thing.
     const selectEntity = (id) => this.setState({ selectedEntity: id });
     const modal = S.modal;
-    const modalValid = (S.modalValue || '').trim().length > 0;
+    const modalValid = !!modal?.allowEmpty || (S.modalValue || '').trim().length > 0;
 
     const _commitEdit = (attId) => {
       const v = S.editTitleValue.trim();
@@ -5153,6 +5459,23 @@ class Component extends DCLogic {
       proxyLive: live, proxyDead: !live,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
       retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
+      proxyUrlLabel: this.proxyUrl(),
+      // Three different reasons the engine is unreachable, and they need three
+      // different answers. A browser will not let an HTTPS page call
+      // http://localhost at all — it blocks the request before it leaves, so
+      // "start the server" is useless advice there and the reader would follow
+      // it, watch nothing change, and conclude the app is broken.
+      proxyHelpText: (() => {
+        const url = this.proxyUrl();
+        const pageIsHttps = typeof location !== 'undefined' && location.protocol === 'https:';
+        if (pageIsHttps && url.startsWith('http://')) {
+          return 'This page is served over HTTPS, so the browser blocks it from calling an http:// address — the request never leaves, whether or not the engine is running. Serve the engine over HTTPS and set its URL below, or run this page locally (npm run ui) where http://localhost is allowed.';
+        }
+        if (/localhost|127\.0\.0\.1/.test(url)) {
+          return 'Nothing is answering on this machine. Start it with "npm start" in the eochat repo, or point this page at an engine elsewhere with ?proxyUrl=… or the button below. Until then documents, retrieval and citations are unavailable — this is a missing engine, not an empty library.';
+        }
+        return 'The engine did not answer. It may be down, still starting, or blocked by a network rule. Retry, or set a different URL below.';
+      })(),
       tabDocuments: () => this.setState({ tab: 'documents' }),
       tabChat: () => this.setState({ tab: 'chat' }), tabOutline: () => this.setState({ tab: 'outline' }),
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
@@ -5248,8 +5571,26 @@ class Component extends DCLogic {
         color: e.glyph === '⊘' ? '#A3592B' : (e.glyph === '→' ? '#1F5A4C' : (e.glyph === '←' ? '#8C877C' : '#6E6A60'))
       })),
       showEmptyChat: active.turns.length === 0 && !S.streamingLoading && !S.streamingAnswer,
-      onDraft: (e) => this.setState({ draft: e.target.value }),
-      onKey: (e) => { if (e.key === 'Enter') this.send(); }, send: () => this.send(),
+      onDraft: (e) => { this.setState({ draft: e.target.value }); this.autoGrowComposer(e.target); },
+      // Enter sends, Shift+Enter (and Ctrl/Cmd+Enter) insert a newline — the
+      // convention every chat tool shares, and the reason the composer had to
+      // stop being an <input>: a single-line field cannot hold a newline at
+      // all, so a reader could not write a paragraph, paste one, or lay out a
+      // list. IME composition is excluded: while a CJK candidate window is
+      // open, Enter picks the candidate and must not send the message.
+      onKey: (e) => {
+        if (e.key !== 'Enter') return;
+        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return; // newline
+        if (e.isComposing || e.keyCode === 229) return;               // IME
+        e.preventDefault();
+        this.send();
+      },
+      send: () => this.send(),
+      composerPlaceholder: 'Ask across your sources — Shift+Enter for a new line',
+      setComposerInput: (el) => {
+        this.composerEl = el;
+        if (el) this.autoGrowComposer(el);
+      },
       // Mode state
       currentMode: S.chatMode || 'chat',
       isSurfMode: S.chatMode === 'surf',
@@ -5268,6 +5609,7 @@ class Component extends DCLogic {
       modeBadgeColor: S.chatMode === 'surf' ? '#1F5A4C' : '#5A3E1F',
       modeBadgeBorder: S.chatMode === 'surf' ? '#C5DDD7' : '#DDD0C0',
       activeSpaceName: active.name, spacesOpen: S.spacesOpen,
+      exportConversation: () => this.exportConversation(),
       toggleSpaces: () => this.setState(s => ({ spacesOpen: !s.spacesOpen })),
       spaces, addSpace: () => this.addSpace(),
       activeSources, noSources: roomSources.length === 0, hasSources: roomSources.length > 0, sourceCount: roomSources.length,
@@ -5318,6 +5660,10 @@ class Component extends DCLogic {
         ? 'always canonical'
         : `${enabledSourceCount} switched on`,
       leftCollapsed: S.leftCollapsed, leftExpanded: !S.leftCollapsed,
+      // The collapsed/expanded distinction has to reach CSS, because on a
+      // narrow screen an expanded panel floats over the chat while a collapsed
+      // one keeps its rail in the grid.
+      leftPanelClass: S.leftCollapsed ? 'eo-left eo-left-collapsed' : 'eo-left eo-left-expanded',
       leftPadding: S.leftCollapsed ? '18px 8px' : '18px 16px',
       leftAlign: S.leftCollapsed ? 'center' : 'stretch',
       leftColWidth: S.leftCollapsed ? '52px' : '232px',
@@ -5336,12 +5682,35 @@ class Component extends DCLogic {
       toggleChatsOpen: () => this.setState(s => ({ chatsOpen: !s.chatsOpen })),
       spacesCount: S.spaces.length,
       addSource: () => this.addSource(), addProjectDocument: () => this.addProjectDocument(), searchWeb: () => this.searchWeb(),
+      editProjectInstructions: () => this.editProjectInstructions(),
+      // "none" is a real state and reads differently from a character count,
+      // so a project with no rules says so rather than showing a bare 0.
+      instructionsLabel: (() => {
+        const p = S.projects.find(x => x.id === S.activeProjectId);
+        const n = p?.instructionsChars || 0;
+        return n ? (n > 999 ? `${Math.round(n / 1000)}k chars` : `${n} chars`) : 'none';
+      })(),
       modalOpen: !!modal,
       modalTitle: modal ? modal.title : '',
       modalLabel: modal ? modal.label : '',
       modalPlaceholder: modal ? (modal.placeholder || '') : '',
       modalHint: modal ? (modal.hint || '') : '',
       modalUpload: !!(modal && modal.upload),
+      modalMultiline: !!(modal && modal.multiline),
+      modalSingleLine: !!modal && !modal.multiline,
+      modalMaxWidth: modal && modal.multiline ? '720px' : '404px',
+      modalValueStats: (() => {
+        const v = S.modalValue || '';
+        if (!v.trim()) return 'empty — this project would have no instructions';
+        // The reader is entitled to know whether what they typed will be
+        // handed over whole or folded, since that is the difference between
+        // "always in force" and "in force when relevant".
+        const tokens = Math.ceil(v.length / 3.5);
+        return `${v.length.toLocaleString()} characters · ~${tokens.toLocaleString()} tokens · ` +
+          (tokens <= 2800
+            ? 'fits the per-turn budget, so all of it is always in force'
+            : 'over the per-turn budget, so it will be folded and surfaced by relevance');
+      })(),
       setSourceFileInput: (el) => { this.sourceFileInputEl = el; },
       modalPickFile: () => this.sourceFileInputEl && this.sourceFileInputEl.click(),
       onSourceFilesSelected: (e) => this.onSourceFilesSelected(e),

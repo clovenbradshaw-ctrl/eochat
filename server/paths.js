@@ -14,7 +14,7 @@
 
 import path from "node:path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +33,31 @@ export const PRIORS_ROOT = path.resolve(
 
 /** Per-text coref alias/narrator priors — witness-tier, injected never derived. */
 export const COREF_DIR = path.join(PRIORS_ROOT, "priors", "coref");
+
+/**
+ * The legacy eoreader5 checkout, vendored as a submodule. The perceiver's
+ * `buildReadingFromBytes` (terrain analysis) still lives only here.
+ * Override with EOCHAT_LEGACY_ENGINE_PATH.
+ */
+export const LEGACY_ENGINE_ROOT = path.resolve(
+  process.env.EOCHAT_LEGACY_ENGINE_PATH || path.join(REPO_ROOT, "vendor", "eoreader5")
+);
+
+/**
+ * Terrain analysis entry point. Two call sites imported this by absolute path
+ * from one developer's home directory, so affordance 15 (Terrain Analysis) was
+ * dead on every other machine — it did not degrade, it threw ENOENT and
+ * reported the exception as the terrain result. Resolved here like everything
+ * else, and returned as a file:// URL because a dynamic import() of a bare
+ * Windows path is not a valid specifier.
+ */
+export const PERCEIVER_DISPATCH = path.join(
+  LEGACY_ENGINE_ROOT, "packages", "engine", "perceiver", "dispatch.js"
+);
+
+export function perceiverDispatchUrl() {
+  return pathToFileURL(PERCEIVER_DISPATCH).href;
+}
 
 /** Where the model-router ledger and other durable state live. */
 export const MEMORY_DIR = path.resolve(

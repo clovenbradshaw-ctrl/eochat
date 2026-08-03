@@ -149,9 +149,12 @@ function scoreFold(fold, cueWords, cueLower) {
 // The static framing that surrounds the fold list, plus per-fold renderers, so
 // the budget can be an honest ceiling on the WHOLE instruction block the model
 // receives — not just the fold bodies.
-const GATE_HEADER = `===== EO INSTRUCTION GATE =====
+const DEFAULT_LABEL = "EO INSTRUCTION GATE";
+const gateHeader = (label) => `===== ${label} =====
 The full instruction set is folded. Only the ACTIVE folds below are in force this turn — they are the complete set of rules you follow now. The FOLDED folds listed at the end exist but are NOT active: do not follow them, do not apply them, and do not mention them.`;
-const GATE_FOOTER = `===== END INSTRUCTION GATE =====`;
+const gateFooter = (label) => `===== END ${label} =====`;
+const GATE_HEADER = gateHeader(DEFAULT_LABEL);
+const GATE_FOOTER = gateFooter(DEFAULT_LABEL);
 
 // R2 — a missing fold is a named gap, never a silence. When no conditional
 // fold matched this turn, the block says so in its own section: the model must
@@ -162,8 +165,8 @@ No conditional fold matched this turn. The ACTIVE folds above are the complete a
 function activeLine(fold) { return `\n### ${fold.id} — ${fold.title}\n${fold.body}`; }
 function foldedLine(fold) { return `- ${fold.id}: ${fold.fingerprint || fold.title}`; }
 
-function framingTokens(nActive, nFolded, gap) {
-  const text = `${GATE_HEADER}\n--- ACTIVE FOLDS (${nActive}) ---\n--- FOLDED FOLDS (${nFolded}) — fingerprints only, NOT active ---\n${gap ? GAP_MARKER + "\n" : ""}${GATE_FOOTER}`;
+function framingTokens(nActive, nFolded, gap, label = DEFAULT_LABEL) {
+  const text = `${gateHeader(label)}\n--- ACTIVE FOLDS (${nActive}) ---\n--- FOLDED FOLDS (${nFolded}) — fingerprints only, NOT active ---\n${gap ? GAP_MARKER + "\n" : ""}${gateFooter(label)}`;
   return countTokens(text);
 }
 
@@ -172,24 +175,31 @@ function framingTokens(nActive, nFolded, gap) {
 // explicit NOT-ACTIVE marker. A gap turn (no conditional fold matched) carries
 // the R2 marker naming the absence. The core-gate fold (always-on) explains
 // this frame to the model itself.
-function buildSystemBlock(surfaced, folded, gap) {
-  const parts = [GATE_HEADER];
+function buildSystemBlock(surfaced, folded, gap, label = DEFAULT_LABEL) {
+  const parts = [gateHeader(label)];
   parts.push(`--- ACTIVE FOLDS (${surfaced.length}) ---`);
   for (const fold of surfaced) parts.push(activeLine(fold));
   parts.push("");
   parts.push(`--- FOLDED FOLDS (${folded.length}) — fingerprints only, NOT active ---`);
   for (const fold of folded) parts.push(foldedLine(fold));
   if (gap) parts.push(GAP_MARKER);
-  parts.push(GATE_FOOTER);
+  parts.push(gateFooter(label));
   return parts.join("\n");
 }
 
-export function createInstructionGate({ dir = INSTRUCTION_DIR, budgetTokens: budgetOverride } = {}) {
+// `folds` may be supplied directly instead of read from a directory, so a
+// corpus that does not live on disk as .md files — a project's own
+// instructions, compiled from free text by project-instructions.js — is gated
+// by this exact function rather than a second one written to resemble it. R3
+// requires one scoreFold shared by every fold; that is only true if there is
+// one gate. Directory loading stays the default so every existing caller is
+// unchanged.
+export function createInstructionGate({ dir = INSTRUCTION_DIR, folds: providedFolds, budgetTokens: budgetOverride, label = DEFAULT_LABEL } = {}) {
   const envBudget = Number(process.env.EO_INSTRUCTION_BUDGET);
   const budgetTokens = Number.isFinite(budgetOverride)
     ? budgetOverride
     : Number.isFinite(envBudget) ? envBudget : DEFAULT_INSTRUCTION_BUDGET;
-  const folds = loadInstructionFolds(dir);
+  const folds = providedFolds ? [...providedFolds] : loadInstructionFolds(dir);
   const alwaysOn = folds.filter((f) => f.always).sort((a, b) => b.weight - a.weight);
   const conditional = folds.filter((f) => !f.always);
 
@@ -237,7 +247,7 @@ export function createInstructionGate({ dir = INSTRUCTION_DIR, budgetTokens: bud
       let used = countTokens(surfaced.map(activeLine).join(""));
       let folded = folds.filter((f) => !surfaced.some((s) => s.id === f.id));
       let indexTokens = countTokens(folded.map(foldedLine).join(""));
-      let blockTokens = framingTokens(surfaced.length, folded.length, gap) + used + indexTokens;
+      let blockTokens = framingTokens(surfaced.length, folded.length, gap, label) + used + indexTokens;
 
       for (const { fold, score } of scored) {
         if (score <= 0) break; // sorted desc — the rest are all irrelevant this turn
@@ -253,15 +263,22 @@ export function createInstructionGate({ dir = INSTRUCTION_DIR, budgetTokens: bud
       const activeIds = new Set(surfaced.map((f) => f.id));
       folded = folds.filter((f) => !activeIds.has(f.id));
       indexTokens = countTokens(folded.map(foldedLine).join(""));
-      const blockTokensFinal = framingTokens(surfaced.length, folded.length, gap) + used + indexTokens;
-      const rejectedByBudget = scored.filter((s) => s.score > 0 && !activeIds.has(s.fold.id)).length;
+      const blockTokensFinal = framingTokens(surfaced.length, folded.length, gap, label) + used + indexTokens;
+      // Folds that WERE relevant this turn and were crowded out by the budget.
+      // This is a different fact from "nothing matched", and the two must not
+      // read alike: a rule the reader wrote, which the gate agreed applied,
+      // and which the model never saw, is the one failure most likely to be
+      // mistaken for the gate working correctly. Named, with ids, so the
+      // remedy (raise the budget, or split the section) is actionable.
+      const crowdedOut = scored.filter((s) => s.score > 0 && !activeIds.has(s.fold.id));
+      const rejectedByBudget = crowdedOut.length;
 
       return {
         activeIds: surfaced.map((f) => f.id),
         foldedIds: folded.map((f) => f.id),
         surfaced,
         folded,
-        systemMessage: buildSystemBlock(surfaced, folded, gap),
+        systemMessage: buildSystemBlock(surfaced, folded, gap, label),
         scores: debug ? scored.map(({ fold, score, matched }) => ({ id: fold.id, score, matched })) : undefined,
         stats: {
           totalFolds: folds.length,
@@ -274,6 +291,7 @@ export function createInstructionGate({ dir = INSTRUCTION_DIR, budgetTokens: bud
           overflow: blockTokensFinal > budget ? blockTokensFinal - budget : 0,
           gap,
           rejectedByBudget,
+          crowdedOutIds: crowdedOut.map((s) => s.fold.id),
         },
       };
     },

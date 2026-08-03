@@ -3,13 +3,25 @@
 **The universal rules for instruction sets and the gate that serves them.**
 
 An instruction set is a manual the model must follow — the eochat corpus
-(`instruction-set/`) and the Aurora support manual
-(`instruction-set-support/`). It differs from a source document in one
-essential way: a source is read *to be quoted faithfully*; an instruction is
-read *to be obeyed*. That is what makes a mis-served instruction dangerous. A
-wrong quote wastes a turn; a wrong rule produces an answer that *was correct
-according to the manual it followed* — correct about the manual, wrong for the
-reader.
+(`instruction-set/`), the Aurora support manual (`instruction-set-support/`),
+and any **project's own instructions**, written by a reader through the app and
+compiled to folds by `server/project-instructions.js`. It differs from a source
+document in one essential way: a source is read *to be quoted faithfully*; an
+instruction is read *to be obeyed*. That is what makes a mis-served instruction
+dangerous. A wrong quote wastes a turn; a wrong rule produces an answer that
+*was correct according to the manual it followed* — correct about the manual,
+wrong for the reader.
+
+These rules bind reader-authored instructions exactly as they bind the
+checked-in corpora, which is why project instructions are segmented rather than
+summarized (R1), why every segment declares the terms that surface it (R3), and
+why a section with no distinctive terms is promoted to always-on rather than
+becoming a wall nothing can reach. The one thing a reader-authored manual can
+do that a checked-in one cannot is *outgrow its budget without anyone noticing
+at review time*, so the gate additionally reports which folds matched a turn
+and were crowded out (`crowdedOutIds`) — "matched but did not fit" is a
+different fact from "nothing matched", and R2's whole point is that two
+different facts must not render alike.
 
 These rules are universal across every corpus the gate serves. They are not
 app laws (LAWS.md) and not the constitution (`../eo-constitution/`, which

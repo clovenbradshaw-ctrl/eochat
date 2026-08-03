@@ -164,11 +164,27 @@ async function testStopInterrupts(dir) {
 
   const completed = events.find(e => e.type === "completed");
   assert.equal(completed.data.status, "interrupted");
-  assert.equal(completed.data.text, "Partial answer before ");
+
+  // The invariant is "what the reader last saw is what gets saved", so it is
+  // asserted against the last delta the reader actually received rather than
+  // against a string literal. The literal form of this assertion expected the
+  // model's raw chunk including its trailing space, but every `answer_delta`
+  // carries `formatOutput(text)` — which trims — so that space was never shown
+  // to anyone. The test was asserting a string the implementation had no
+  // reason to produce and the reader never saw; comparing the two surfaces to
+  // each other cannot drift the way a literal can.
+  const lastDelta = events.filter(e => e.type === "answer_delta").pop();
+  assert.ok(lastDelta, "an interrupted turn must still have streamed something");
+  assert.equal(completed.data.text, lastDelta.data.text,
+    "the interrupted answer must be exactly what was last streamed to the reader");
+  assert.ok(completed.data.text.startsWith("Partial answer before"),
+    `the streamed partial must be preserved, got ${JSON.stringify(completed.data.text)}`);
+
   const stored = await conversationStore.get(conv.id);
   const turn = stored.turns.find(t => t.id === turnId);
   assert.equal(turn.answers[0].status, "interrupted");
-  assert.equal(turn.answers[0].text, "Partial answer before ", "the partial text actually streamed must be persisted, not dropped");
+  assert.equal(turn.answers[0].text, completed.data.text,
+    "the partial text actually streamed must be persisted, not dropped");
   assert.equal(turn.question, "Long one", "stopping must never lose the user's turn");
   console.log("  ok: stop leaves a valid, persisted, interrupted partial turn");
 }

@@ -44,10 +44,12 @@ import path from "path";
 
 // Every path reaching outside this repo resolves here — no hardcoded
 // home-directory absolutes, no walking up out of the source tree.
-import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies } from "./paths.js";
+import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies, PERCEIVER_DISPATCH, perceiverDispatchUrl } from "./paths.js";
 import { createModelRouter } from "./model-router.js";
 import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
+import { compileInstructionFolds } from "./project-instructions.js";
+import { createInstructionGate, countTokens as gateCountTokens, DEFAULT_INSTRUCTION_BUDGET } from "./instruction-gate.js";
 import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // Static, not dynamic: the request handler is synchronous, and the module only
 // catalogs on import — ingest stays lazy behind ensurePriorsIngested().
@@ -179,8 +181,64 @@ try {
 // ── Conversations — the new conversational surface's durable state + turn coordinator ──
 
 const conversationStore = new ConversationStore();
+// A project's own instructions, compiled to folds and cached against the
+// file's mtime.
+//
+// This is deliberately synchronous. It runs on the turn path, where the
+// instruction block has to be assembled BEFORE the model call it governs — an
+// await here is an opportunity for the rules to arrive late, and a rule that
+// arrives after the answer is not a rule. The file is small, the compile is
+// pure, and both are skipped entirely unless the text actually changed.
+const projectFoldCache = new Map(); // projectId -> { mtimeMs, folds, report }
+
+function projectIdForConversation(conv) {
+  // Conversations opened inside a project carry the project as their space and
+  // its pool; a conversation outside one uses the shared "corpus" pool.
+  const id = conv?.spaceId || (conv?.pool && conv.pool !== "corpus" ? conv.pool : null);
+  return id || null;
+}
+
+// The project's own instruction budget, read from the project file. Cached
+// alongside the folds because it decides how they are compiled.
+function projectBudget(projectId) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(MEMORY_DIR, "projects", `${projectId}.json`), "utf8"));
+    const n = Number(raw.instructionBudget);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_INSTRUCTION_BUDGET;
+  } catch {
+    return DEFAULT_INSTRUCTION_BUDGET;
+  }
+}
+
+function projectInstructionFolds(conv) {
+  const projectId = projectIdForConversation(conv);
+  if (!projectId) return null;
+  let stat;
+  try {
+    stat = fs.statSync(projectStore.instructionsPath(projectId));
+  } catch {
+    projectFoldCache.delete(projectId);
+    return null; // no instructions for this project is a no-op, never an error
+  }
+  const budgetTokens = projectBudget(projectId);
+  const hit = projectFoldCache.get(projectId);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.budgetTokens === budgetTokens) {
+    return { folds: hit.folds, budgetTokens };
+  }
+  try {
+    const text = fs.readFileSync(projectStore.instructionsPath(projectId), "utf8");
+    const compiled = compileInstructionFolds(text, { idPrefix: "proj", budgetTokens });
+    projectFoldCache.set(projectId, { mtimeMs: stat.mtimeMs, budgetTokens, ...compiled });
+    return { folds: compiled.folds, budgetTokens };
+  } catch (err) {
+    console.error(`[proxy] project instructions failed to compile for ${projectId}: ${err.message}`);
+    return null;
+  }
+}
+
 const turnController = createTurnController({
   conversationStore,
+  projectInstructionFolds,
   groundQuery: engineGroundQuery,
   target: TARGET,
   anthropicKey: ANTHROPIC_KEY,
@@ -530,9 +588,16 @@ class DiscourseStore {
     const entry = { type: "attachment", name, content: content?.slice(0, 100000), type, size, text: content?.slice(0, ATTACHMENT_SNAPSHOT_CHARS), ingestedAt: ingestedAt || new Date().toISOString(), contentHash: this.#hash(content?.slice(0, 1000) || "") };
     session.attachments.set(name, entry);
 
-    // Also save full content to a sidecar file so FETCH can retrieve it
+    // Also save the content to a sidecar file so FETCH can retrieve it. Stored
+    // whole, matching admission: the sidecar is what `fetch_attachment` reads
+    // when the model goes back for more, and a sidecar shorter than the
+    // ingested document would make the drill-down path quietly blinder than
+    // the search path over the very same source.
     const sidecar = path.join(DISCOURSE_DIR, `${sessionId}_attach_${name.replace(/[^a-zA-Z0-9._-]/g, "_")}`);
-    await fsp.writeFile(sidecar, content?.slice(0, 500000) || "", "utf8").catch(() => {});
+    const stored = content || "";
+    entry.storedChars = stored.length;
+    entry.truncated = false;
+    await fsp.writeFile(sidecar, stored, "utf8").catch(() => {});
 
     await this.#append(sessionId, entry);
     return entry;
@@ -1631,9 +1696,7 @@ const toolHandlers = {
       // Run terrain analysis via engine dispatch
       let terrainInfo = null;
       try {
-        const { buildReadingFromBytes } = await import(
-          "/Users/mlacy/Documents/Default Project/eoreader5/packages/engine/perceiver/dispatch.js"
-        );
+        const { buildReadingFromBytes } = await import(perceiverDispatchUrl());
         const reading = await buildReadingFromBytes(bytes);
         terrainInfo = {
           covered: reading.terrain_report?.covered ?? [],
@@ -1697,18 +1760,39 @@ const toolHandlers = {
     return JSON.stringify({ entries: store.size, max: STORE_MAX, ttl_ms: STORE_TTL });
   },
 
+  // L3a — drill-down is where an unannounced cut does the most damage. This
+  // is the tool the model calls when the first answer was not enough; handing
+  // back the first 15,000 characters as though they were the document invites
+  // exactly one conclusion about everything after them, and it is wrong. The
+  // cut is therefore stated in the tool's own return value, where the model
+  // reading it will see it, rather than left for the reader to infer.
   async fetch_attachment(args) {
     const sessionId = args.session || "default";
     const content = await discourse.getAttachmentContent(sessionId, args.name);
     if (!content) return `[Attachment "${args.name}" not found in discourse store]`;
-    return content.slice(0, 15000);
+    const CAP = 15000;
+    if (content.length <= CAP) return content;
+    const dropped = content.length - CAP;
+    return content.slice(0, CAP) +
+      `\n\n[TRUNCATED — this is the first ${CAP} of ${content.length} characters of "${args.name}". ` +
+      `${dropped} characters were not returned. Do not conclude that anything is absent from this ` +
+      `document on the basis of this excerpt; the remainder was not read. Use verbatim_search to ` +
+      `reach the parts not shown here.]`;
   },
 
   async terrain_report(args) {
+    // A missing perceiver is a SETUP failure, and it must not be reported as a
+    // terrain finding. Before this, the import pointed at one developer's home
+    // directory, so on every other machine the ENOENT was caught below and
+    // returned as `[Terrain analysis failed: Cannot find module …]` — which
+    // reads, to a model and a reader alike, like something about the document.
+    if (!fs.existsSync(PERCEIVER_DISPATCH)) {
+      return `[Terrain analysis unavailable: the eoreader5 perceiver is not present at ${PERCEIVER_DISPATCH}. ` +
+        `This is a setup gap, not a property of "${args.path}" — run "git submodule update --init --recursive", ` +
+        `or set EOCHAT_LEGACY_ENGINE_PATH. No terrain conclusion should be drawn from this message.]`;
+    }
     try {
-      const { buildReadingFromBytes } = await import(
-        "/Users/mlacy/Documents/Default Project/eoreader5/packages/engine/perceiver/dispatch.js"
-      );
+      const { buildReadingFromBytes } = await import(perceiverDispatchUrl());
       const bytes = await fsp.readFile(args.path);
       const reading = await buildReadingFromBytes(bytes);
       const report = reading.terrain_report;
@@ -2515,10 +2599,18 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
         systemContext: ungroundedSystem,
         retrieved: [],
         queryTerms: String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean),
-        gaps: groundResult.gaps || [],
+        // L2e on the surface the reader actually uses. An ungrounded turn used
+        // to report `gaps: []` and one fixed sentence about "your sources",
+        // which says the wrong thing outright when the reader has no sources:
+        // it blames the library for a silence that is really an empty shelf.
+        // The same typed gap the verbatim search now returns is emitted here,
+        // so the chat banner can tell "ingest something first" apart from
+        // "your documents were read and do not cover this".
+        gaps: (groundResult.gaps?.length ? groundResult.gaps : null)
+          || (warming ? [] : describeAbsence({ query, poolName: groundResult.pool || "corpus", sourceFilter: opts.groundSource || null })),
         note: warming
           ? "Document index still loading — this answer is not grounded in your sources yet."
-          : "No matching passage in your sources. Answering from general knowledge, uncited.",
+          : absenceNote(groundResult, opts.groundSource || null),
       });
       return groundResult;
     }
@@ -2594,7 +2686,7 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
         // to 500,000 chars, and admitting that synchronously is exactly the
         // L1d failure mode LAWS.md documents — one chat turn's web ingest
         // could block every other concurrent request's SSE handshake.
-        await engineIngestTextAsync(fetched.text.slice(0, 500000), `source:${label}`, label);
+        await engineIngestTextAsync(fetched.text, `source:${label}`, label);
         admitted.push({ url, label });
         const record = {
           name: label, url, size: fetched.text.length,
@@ -2602,6 +2694,7 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
           query: query || "",
           ingestedAt: new Date().toISOString(),
           savedPath: fetched.path || null,
+          truncated: false,
         };
         recordWebHistory(record);
         sendSSE("source_added", record);
@@ -2653,7 +2746,35 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
 }
 
 // ── Ingest ──
+
+// LAWS.md L3 — no silent truncation, satisfied by not truncating.
 //
+// Admission used to stop at 500,000 characters. Reporting the cut was a real
+// improvement over hiding it, but reporting is a consolation prize: the
+// dropped six sevenths of a book are still not searchable and still not
+// citable, and the reader who is told so is still left without the thing they
+// asked for. A document handed to this application is now admitted whole.
+//
+// `admitWhole` exists so the shape of an ingest result does not depend on how
+// big the document was: `truncated: false` is a positive assertion of
+// completeness that every ingest surface makes, not a field that only appears
+// when something went wrong. If a cap is ever reintroduced, it has to come
+// back through here, and the field is already wired to the UI that would
+// show it.
+function admitWhole(result) {
+  return { ...result, truncated: false };
+}
+
+// Transport ceiling for a single ingest request body. This is NOT a
+// truncation: nothing is cut, and nothing is admitted. A body past this size
+// is refused outright, with the limit named, because the alternative is not
+// "ingest more" — it is a heap allocation failure that takes the process down
+// and loses the document anyway. The ceiling is far above any realistic text
+// (War and Peace is ~3MB), and V8's own maximum string length sits not far
+// above it, so this is the honest edge of what a single request can carry
+// rather than a policy choice about how much of a book is worth reading.
+const INGEST_MAX_BODY = parseArg("ingest-max-body", 268_435_456, Number);
+
 // Shared by both /api/ingest response modes (plain JSON and SSE, below):
 // admission itself runs off the main thread (engineIngestTextAsync/
 // engineIngestFileAsync — see ingest-worker.js for why), so this only
@@ -2679,7 +2800,7 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
     } catch { label = ingestUrl.replace(/\//g, "_"); }
     const srcName = name || label || ingestUrl;
     const sourceId = `source:${srcName}`;
-    const result = await engineIngestTextAsync(fetched.text.slice(0, 500000), sourceId, srcName);
+    const result = await engineIngestTextAsync(fetched.text, sourceId, srcName);
     const att = await discourse.addAttachment(sessionId, {
       name: srcName,
       content: fetched.text,
@@ -2687,16 +2808,16 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
       size: fetched.text.length,
       ingestedAt: new Date().toISOString(),
     });
-    return {
-      ...result, name: srcName, url: ingestUrl,
+    return admitWhole({
+      ...result, sourceId, name: srcName, url: ingestUrl,
       attachment: { name: att.name, type: att.type, size: att.size },
-    };
+    });
   }
 
   // Content-based ingestion (from browser file picker)
   if (content) {
     const sourceId = `source:${name || "upload"}:${Date.now()}`;
-    const result = await engineIngestTextAsync(content.slice(0, 500000), sourceId, name || "upload");
+    const result = await engineIngestTextAsync(content, sourceId, name || "upload");
 
     // Register as attachment in discourse
     const att = await discourse.addAttachment(sessionId, {
@@ -2707,7 +2828,9 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
       ingestedAt: new Date().toISOString(),
     });
 
-    return { ...result, name: name || "upload", attachment: { name: att.name, type: att.type, size: att.size } };
+    return admitWhole(
+      { ...result, sourceId, name: name || "upload", attachment: { name: att.name, type: att.type, size: att.size } },
+    );
   }
 
   // Path-based ingestion (from server filesystem)
@@ -2724,7 +2847,9 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
       const existing = engineListSources().find(s => s.path === ingestPath);
       return {
         path: ingestPath,
+        sourceId: ingestPath,
         alreadyIngested: true,
+        truncated: false,
         chunks: existing?.chunks || 0,
         pool: existing?.pool || "corpus",
         note: "Source already ingested",
@@ -2732,6 +2857,103 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
     }
     throw err;
   }
+}
+
+// LAWS.md candidate law — "errors do not wear success."
+//
+// The engine's read helpers report a failed read by RETURNING `{error}`
+// rather than throwing, so the routes that wrapped them in an unconditional
+// `writeHead(200)` answered "unknown span_id — search first" with a success
+// status. Every client that branches on `res.ok` — including the check
+// harness, which passed these routes for exactly that reason — then treats a
+// missing passage as a delivered one. On an audit hop that is the worst
+// possible place for it: the reader following a citation home is told the
+// journey succeeded.
+//
+// A read that produced no evidence is 404: the span named does not exist.
+function sendVerbatim(res, result) {
+  const failed = result && typeof result === "object" && result.error;
+  res.writeHead(failed ? 404 : 200, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(result));
+}
+
+// ── Absence ──
+//
+// LAWS.md L2e — a gap is a finding and must be inspectable. A no-match search
+// used to return `gaps: null`, which meant an empty corpus, a corpus still
+// warming up, a source filter that excluded everything, and a corpus that
+// genuinely does not discuss the query all produced byte-identical responses.
+// The reader cannot act on any of them, because they cannot tell which one
+// happened — and "an empty space where evidence should be is the single
+// easiest thing to mistake for evidence of nothing."
+//
+// This names which silence it was, and says what was searched, so the reader
+// can tell "you have not given me this book" from "this book does not say
+// that." Every branch reports the same shape the UI already renders for
+// engine gaps (`{ type, reason }`), so no new surface is needed to show it.
+// The one-line form of the same finding, for the ungrounded-turn banner. It
+// must not say "no matching passage in your sources" when there are no
+// sources: that sentence quietly asserts a library was consulted.
+function absenceNote(groundResult, sourceFilter) {
+  const gap = describeAbsence({
+    query: "",
+    poolName: groundResult?.pool || "corpus",
+    sourceFilter,
+  })[0];
+  if (gap.type === "no_sources_ingested") {
+    return "No documents are ingested yet, so nothing was searched. Answering from general knowledge, uncited — add a source to get cited answers.";
+  }
+  if (gap.type === "source_filter_matched_nothing") {
+    return `No ingested source matches "${sourceFilter}", so nothing was searched. Answering from general knowledge, uncited.`;
+  }
+  return `No matching passage in your ${gap.sourcesSearched} ingested source(s). Answering from general knowledge, uncited.`;
+}
+
+function describeAbsence({ query, poolName, sourceFilter, searchedQuery }) {
+  const gap = (type, reason, extra = {}) => [{
+    type, reason, query,
+    ...(searchedQuery && searchedQuery !== query ? { searchedQuery } : {}),
+    pool: poolName,
+    ...(sourceFilter ? { sourceFilter } : {}),
+    ...extra,
+  }];
+
+  // Still loading is not the same fact as not present, and the two must never
+  // render alike (LAWS.md, candidate law: "two facts that differ must not read
+  // alike"). corpusWarmup exists for exactly this distinction.
+  if (corpusWarmup.started && !corpusWarmup.ready) {
+    return gap("corpus_warming",
+      "The corpus is still being loaded, so this search did not see every source yet. Ask again once loading finishes — this is not a statement that the text is silent.");
+  }
+
+  let sources = [];
+  try {
+    sources = engineListSources({ pool: poolName }).filter((s) => (s.kind ?? "corpus") === "corpus");
+  } catch { /* listing is best-effort; the gap below is still worth naming */ }
+
+  if (!sources.length) {
+    return gap("no_sources_ingested",
+      `Nothing is ingested in the "${poolName}" pool, so there was nothing to search. This is an empty library, not a silent one — ingest a document first.`,
+      { sourcesSearched: 0 });
+  }
+
+  if (sourceFilter) {
+    const matching = sources.filter((s) => (s.name || s.path || "").includes(sourceFilter));
+    if (!matching.length) {
+      return gap("source_filter_matched_nothing",
+        `No ingested source matches the filter "${sourceFilter}", so the search ran against nothing. ${sources.length} source(s) are loaded but none were eligible.`,
+        { sourcesSearched: 0, sourcesAvailable: sources.length });
+    }
+    return gap("no_evidence_matched",
+      `Searched ${matching.length} source(s) matching "${sourceFilter}" and found no passage for this query. The sources are loaded and were read; they do not appear to contain it.`,
+      { sourcesSearched: matching.length, sources: matching.map((s) => s.name) });
+  }
+
+  // The honest, and most common, case: the library is there, it was read, and
+  // it does not contain this. That is a finding, and it is now stated as one.
+  return gap("no_evidence_matched",
+    `Searched ${sources.length} ingested source(s) and found no passage matching this query. The corpus was read and does not appear to contain it.`,
+    { sourcesSearched: sources.length, sources: sources.map((s) => s.name).slice(0, 20) });
 }
 
 // ── Project store ──
@@ -2964,8 +3186,31 @@ const server = http.createServer((req, res) => {
 
   if (req.method === "POST" && req.url === "/api/ingest") {
     let body = "";
-    req.on("data", (c) => { body += c; });
+    let overBody = false;
+    // The UI no longer pre-cuts uploads, and admission no longer caps, so this
+    // route is the first and only thing to see a whole document — it must
+    // bound what it buffers or a large enough upload takes the process down
+    // and loses the document anyway. Refusing is reserved for exactly that,
+    // and it refuses out loud: an oversized body used to be answered by
+    // destroying the socket, which is L1d's "dies quietly" in its purest form.
+    // Nothing between "fits in memory" and this ceiling is ever cut.
+    req.on("data", (c) => {
+      if (overBody) return;
+      body += c;
+      if (body.length > INGEST_MAX_BODY) {
+        overBody = true;
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          error: `Upload exceeds the ${INGEST_MAX_BODY}-byte request ceiling and was not ingested.`,
+          maxBodyBytes: INGEST_MAX_BODY,
+          ingested: false,
+          note: "Nothing was admitted — this is a refusal, not a truncation. Split the document and ingest the parts.",
+        }));
+        req.destroy();
+      }
+    });
     req.on("end", async () => {
+      if (overBody) return;
       let data;
       try {
         data = JSON.parse(body);
@@ -3079,10 +3324,14 @@ const server = http.createServer((req, res) => {
             grounded: false,
             warming,
             systemPrompt: buildUngroundedSystemPrompt({ warming }),
-            gaps: groundResult.gaps || [],
+            // Same L2e treatment as the server-model path above — a client
+            // running its own model must be able to tell an empty library from
+            // a silent one just as well as the one using ours.
+            gaps: (groundResult.gaps?.length ? groundResult.gaps : null)
+              || (warming ? [] : describeAbsence({ query, poolName: groundResult.pool || data.pool || "corpus", sourceFilter: data.groundSource || null })),
             note: warming
               ? "Document index still loading — this answer is not grounded in your sources yet."
-              : "No matching passage in your sources. Answering from general knowledge, uncited.",
+              : absenceNote(groundResult.pool ? groundResult : { pool: data.pool }, data.groundSource || null),
           }));
           return;
         }
@@ -3460,8 +3709,7 @@ const server = http.createServer((req, res) => {
       }
       try {
         const result = engineReadSpan(spanId, maxBytes);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(result));
+        sendVerbatim(res, result);
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
@@ -3481,8 +3729,7 @@ const server = http.createServer((req, res) => {
       }
       try {
         const result = engineReadSegment(q, maxBytes, source);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(result));
+        sendVerbatim(res, result);
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
@@ -3508,8 +3755,7 @@ const server = http.createServer((req, res) => {
       }
       try {
         const result = engineReadContext(id, { beforeBytes: before, afterBytes: after });
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(result));
+        sendVerbatim(res, result);
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
@@ -3540,6 +3786,7 @@ const server = http.createServer((req, res) => {
       // Try the query as-is first (the engine's dense retrieval may find
       // semantically related passages even with diacritic differences)
       let result = engineSearch(query, Math.min(limit, 40), { maxChars, source, pool: searchPool });
+      let searchedQuery = query;
 
       // If the query returned gaps (no_evidence_matched) and the query has
       // diacritics or the query might differ from stored text's diacritics,
@@ -3551,19 +3798,30 @@ const server = http.createServer((req, res) => {
         const stripped = query.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
         if (stripped !== query) {
           result = engineSearch(stripped, Math.min(limit, 40), { maxChars, source, pool: searchPool });
+          searchedQuery = stripped;
           if (result.passages.length > 0) {
             result.diacritic_fallback = true;
             result.diacritic_query = stripped;
           }
         }
       }
+
+      // L2e — if the engine did not supply its own typed gap and the search
+      // came back empty, name the absence here rather than passing `null` up.
+      // The engine's gap wins when it has one: it knows more about why its own
+      // retrieval was silent than this layer does.
+      const engineGaps = Array.isArray(result.gaps) ? result.gaps : result.gaps ? [result.gaps] : [];
+      const gaps = result.passages.length === 0 && engineGaps.length === 0
+        ? describeAbsence({ query, poolName: result.pool, sourceFilter: source, searchedQuery })
+        : engineGaps;
+
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         query,
         pool: result.pool,
         total: result.total,
         passages: result.passages,
-        gaps: result.gaps,
+        gaps,
         verbatim: true,
         note: "These are exact verbatim spans from the engine — byte-accurate, no model involved.",
       }));
@@ -3653,6 +3911,101 @@ const server = http.createServer((req, res) => {
           return sendJson(200, result);
         }
 
+        // ── Project instructions ──
+        //
+        // The rules the model must obey inside this project. Any length: they
+        // are stored verbatim and compiled to folds that the instruction gate
+        // surfs and folds per turn, so a long manual costs a bounded block
+        // rather than the whole window (INSTRUCTION-LAW R5).
+
+        // GET /api/projects/:id/instructions — the text, plus how it will be
+        // gated. The compile report ships with the text on purpose: a reader
+        // who cannot see that their manual was folded into 40 pieces, or that
+        // one section can never surface, cannot act on it.
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "instructions") {
+          const record = await projectStore.getInstructions(segments[2]);
+          const budgetTokens = projectBudget(segments[2]);
+          const { folds, report } = compileInstructionFolds(record.text, { idPrefix: "proj", budgetTokens });
+          return sendJson(200, {
+            ...record,
+            report,
+            folds: folds.map((f) => ({
+              id: f.id, title: f.title, always: f.always,
+              signals: f.signals, fingerprint: f.fingerprint,
+              tokens: gateCountTokens(f.body),
+            })),
+          });
+        }
+
+        // PUT /api/projects/:id/instructions — replace them. Returns the same
+        // shape as GET so the caller sees the consequence of what it wrote
+        // without a second round trip.
+        if (req.method === "PUT" && segments.length === 4 && segments[3] === "instructions") {
+          const data = await readJsonBody();
+          if (typeof data.text !== "string") {
+            return sendJson(400, { error: "'text' (string) is required" });
+          }
+          if (data.instructionBudget !== undefined) {
+            await projectStore.update(segments[2], { instructionBudget: data.instructionBudget });
+          }
+          const record = await projectStore.setInstructions(segments[2], data.text);
+          projectFoldCache.delete(segments[2]);
+          const budgetTokens = projectBudget(segments[2]);
+          const { folds, report } = compileInstructionFolds(record.text, { idPrefix: "proj", budgetTokens });
+          return sendJson(200, {
+            ...record,
+            report,
+            folds: folds.map((f) => ({
+              id: f.id, title: f.title, always: f.always,
+              signals: f.signals, fingerprint: f.fingerprint,
+              tokens: gateCountTokens(f.body),
+            })),
+          });
+        }
+
+        // POST /api/projects/:id/instructions/preview — given a question, show
+        // exactly which rules WOULD be in force and which would be folded away.
+        //
+        // LAWS.md L2b: the path to evidence begins at the thing in question.
+        // "Why did it not follow my rule?" is asked about a specific question,
+        // so it must be answerable by asking about that specific question —
+        // not by reading the gate's source or guessing at its keywords.
+        if (req.method === "POST" && segments.length === 5 && segments[3] === "instructions" && segments[4] === "preview") {
+          const data = await readJsonBody();
+          const record = await projectStore.getInstructions(segments[2]);
+          const budgetTokens = projectBudget(segments[2]);
+          const { folds, report } = compileInstructionFolds(record.text, { idPrefix: "proj", budgetTokens });
+          if (!folds.length) {
+            return sendJson(200, {
+              question: data.question || "", report, active: [], folded: [],
+              gap: true,
+              note: "This project has no instructions, so nothing is in force. That is an empty manual, not a silent one.",
+            });
+          }
+          const gate = createInstructionGate({ folds, budgetTokens, label: "PROJECT INSTRUCTION GATE" });
+          const r = gate.gate({ question: String(data.question || ""), history: data.history || [], debug: true });
+          // A rule that matched but did not fit is the failure most easily
+          // mistaken for the gate working. It is called out by name here, with
+          // the remedy, rather than left as a count in a stats object.
+          const crowdedOut = (r.stats.crowdedOutIds || []).map((id) => {
+            const f = folds.find((x) => x.id === id);
+            return { id, title: f?.title || id, tokens: f ? gateCountTokens(f.body) : null };
+          });
+          return sendJson(200, {
+            question: data.question || "",
+            report,
+            active: r.surfaced.map((f) => ({ id: f.id, title: f.title, always: f.always, tokens: gateCountTokens(f.body) })),
+            folded: r.folded.map((f) => ({ id: f.id, title: f.title, fingerprint: f.fingerprint })),
+            crowdedOut,
+            ...(crowdedOut.length ? {
+              warning: `${crowdedOut.length} instruction(s) matched this question but did not fit the ${budgetTokens}-token budget, so the model would not see them. This is not "no rule applies" — raise the project's instructionBudget or split these sections with more headings.`,
+            } : {}),
+            scores: r.scores,
+            stats: r.stats,
+            systemMessage: r.systemMessage,
+          });
+        }
+
         // ── Project knowledge sources ──
 
         // GET /api/projects/:id/sources — list sources in the project's pool
@@ -3672,9 +4025,9 @@ const server = http.createServer((req, res) => {
 
           if (content) {
             const sourceId = `source:${name || "upload"}:${Date.now()}`;
-            const result = await engineIngestText(content.slice(0, 500000), sourceId, name || "upload", { pool: project.pool });
+            const result = await engineIngestText(content, sourceId, name || "upload", { pool: project.pool });
             await projectStore.addSource(segments[2], sourceId);
-            return sendJson(200, { ...result, pool: project.pool });
+            return sendJson(200, admitWhole({ ...result, sourceId, pool: project.pool }));
           }
 
           if (ingestUrl) {
@@ -3689,9 +4042,9 @@ const server = http.createServer((req, res) => {
             } catch { label = ingestUrl.replace(/\//g, "_"); }
             const srcName = name || label || ingestUrl;
             const sourceId = `source:${srcName}`;
-            const result = await engineIngestText(fetched.text.slice(0, 500000), sourceId, srcName, { pool: project.pool });
+            const result = await engineIngestText(fetched.text, sourceId, srcName, { pool: project.pool });
             await projectStore.addSource(segments[2], sourceId);
-            return sendJson(200, { ...result, name: srcName, url: ingestUrl, pool: project.pool });
+            return sendJson(200, admitWhole({ ...result, sourceId, name: srcName, url: ingestUrl, pool: project.pool }));
           }
 
           if (ingestPath) {

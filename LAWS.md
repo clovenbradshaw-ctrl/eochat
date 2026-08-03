@@ -202,12 +202,35 @@ Both were invisible while the app auto-loaded three books from disk. Removing
 that boot ingest did not cause the bug; it removed the only sources that
 happened to work around it.
 
-### Known violation (open)
+### Also fixed under this law
 
-- **L2e — the gap is not named.** A no-match search returns `gaps: null`. The
-  response echoes the query and a `total` of 0, so the reader can tell the
-  search ran, but the field that exists to describe *why* the corpus was silent
-  is left empty.
+- **L2e — the gap is not named.** A no-match search returned `gaps: null`, so
+  an empty corpus, a corpus still warming, a source filter that excluded
+  everything, and a corpus that genuinely does not discuss the query all
+  produced byte-identical responses. Measured before the fix: with nothing
+  ingested at all, `/api/verbatim?q=…` answered `{total: 0, gaps: null}` — the
+  same bytes it returns for a book that simply does not mention the query.
+
+  `describeAbsence()` (proxy.js) now names which silence it was, as a typed gap
+  in the shape the UI already renders: `no_sources_ingested`,
+  `corpus_warming`, `source_filter_matched_nothing`, or `no_evidence_matched`,
+  each carrying `sourcesSearched` so "nothing is loaded" cannot read as
+  "nothing was found". The engine's own gap still wins when it has one.
+
+  The same gap is emitted on the two grounding paths a reader actually meets —
+  the `grounding` SSE event and `/api/ground` — where the fixed banner text
+  ("No matching passage in your sources") asserted that a library had been
+  consulted even when no source existed. An ungrounded turn with an empty
+  corpus now says so and says what to do about it.
+
+- **Errors do not wear success** (promoted from the candidate list by writing
+  its check). `/api/verbatim/read`, `/segment` and `/context` wrapped the
+  engine's helpers — which report a failed read by *returning* `{error}` rather
+  than throwing — in an unconditional `writeHead(200)`. An unknown span id was
+  answered "HTTP 200: unknown span_id, search first", so every client branching
+  on `res.ok` treated a missing passage as a delivered one, on the audit hop
+  where that is most damaging. `sendVerbatim()` now sends 404 when the body
+  carries an error.
 
 ---
 
@@ -229,13 +252,80 @@ content rather than time: two different situations rendered identically.
 - **L3b — It says how much was lost,** because "some was dropped" does not tell
   the reader whether to re-ask.
 
-### Known violation (open)
+### Fixed under this law
 
-`POST /api/ingest` caps content at 500 000 characters
-(`content.slice(0, 500000)`) and returns no field recording it. Measured: a
-3216 KB book was accepted, silently reduced to 488 KB, and reported back as a
-successful ingest of 250 chunks. The reader believes the whole book is loaded.
-Every later answer about the missing six sevenths is unfalsifiably wrong.
+`POST /api/ingest` capped content at 500 000 characters
+(`content.slice(0, 500000)`) and returned no field recording it. Reproduced
+before the fix: a 700 106-character document was accepted, silently reduced to
+500 000, and reported back as a successful ingest of 250 chunks. A sentinel
+placed past the cap was then unfindable — and the search for it returned
+`total: 0, gaps: null`, which is exactly how the corpus reports a phrase a book
+genuinely does not contain. The two failures compounded: the reader was told
+the whole book was loaded, and then told, in the corpus's own voice, that the
+book does not mention what was cut out of it.
+
+**The cap is gone. Documents are admitted whole.**
+
+Reporting the cut was the first fix and it was the wrong ceiling to settle on.
+An announced truncation is still a truncation: the dropped six sevenths of the
+book are still unsearchable and still uncitable, and a reader told so is still
+without the thing they asked for. Honesty about a loss is not a substitute for
+not losing it. Every ingest surface now admits the full text — plain JSON, SSE,
+the project-scoped route, and the web-search ingest alike.
+
+`truncated: false` is still on every ingest response, as a positive assertion
+of completeness rather than a field that appears only when something went
+wrong. `admitWhole()` is the one place that assertion is made, so a
+reintroduced cap has to come back through it, and the UI that would display it
+is already wired.
+
+Two related silent cuts went with it:
+
+- **The client cut first.** `ui/index.html` sliced to 500 000 characters
+  *before* sending, which put the truncation on the one side of the wire that
+  could never report it — the server received a 500 000-character document,
+  saw nothing unusual, and answered honestly. The whole text is sent now.
+- **The attachment sidecar was shorter than the corpus.** `fetch_attachment`
+  reads a sidecar file that was itself capped, which would have made the
+  drill-down path quietly blinder than the search path over the very same
+  source. It is stored whole, matching admission.
+
+What remains bounded, deliberately, is the **transport ceiling**
+(`INGEST_MAX_BODY`) — and it is a refusal, not a truncation. Nothing is cut and
+nothing is admitted: a body too large to hold in memory is answered with a 413
+naming the limit, because the alternative is a heap failure that takes the
+process down and loses the document anyway. An oversized upload used to be
+answered by destroying the socket, which is L1d's "dies quietly" in its purest
+form.
+
+One announced cut is left, and it is not the corpus: `fetch_attachment` returns
+at most 15 000 characters of a document into a single tool result, because that
+result has to fit the model's context window alongside everything else — an
+unbounded one would overflow `NUM_CTX` and produce an answer that reads like a
+retrieval failure when retrieval was fine. It says so in its own return value
+and points at `verbatim_search` for the rest. That is a bound on one model
+call, not on what the corpus holds.
+
+### Measurement
+
+`checkSilentTruncation` used to look for a checkout-local file bigger than the
+cap and SKIP when it found none, which is what happened on every machine
+without War and Peace in `~/Downloads` — the violation above was real the whole
+time and went unmeasured, because the check could not reach the only condition
+that triggers it. **A law whose check silently skips is not enforced.**
+
+The document is synthesized now rather than hoped for, and because the cap is
+gone the assertion is stronger than it was. The check no longer asks whether a
+cut was *declared*; it asks whether anything was cut at all, and it does not
+take the response's word for it. A sentinel is placed in the **last line** of a
+700 KB document — the position that sat in the discarded remainder under the
+old cap — and the check requires that sentinel to come back out of
+`/api/verbatim`. A flag can lie; a retrieved passage cannot.
+
+It also holds three edges: a document that fits must not claim it was cut
+(otherwise "always report truncated" would pass), and a body past the transport
+ceiling must be refused with a 413 that names the limit rather than dropped on
+the floor.
 
 ---
 
@@ -248,22 +338,34 @@ writing the check first; a law without one is a slogan.
   inspectable gap, never a plausible number. Already the rule for coref priors
   and holonic citations; not yet mechanically verified across all surfaces.
   Enforced for instruction sets as R2 (INSTRUCTION-LAW.md).
-- **Two facts that differ must not read alike.** "Still loading" and "your
-  sources do not say this" are different, and an interface that renders them
-  identically is lying by collapse. The `corpusWarmup` flag exists for exactly
-  this distinction. Enforced for instruction sets as R8 (INSTRUCTION-LAW.md).
 - **Content against the instructions is not given out.** A forbidden request is
   refused, and the refusal is mechanically verified — a small model, shown the
   escalation fold, invented a manager's name rather than refuse. Enforced for
   instruction sets as R9: every served answer is reviewed against the folds
   that were in force, and a flagged answer is corrected (bounded) or ships
   flagged, never hidden (INSTRUCTION-LAW.md).
-- **One name per thing.** `/api/ingest` returns `sourceId`; `/api/sources`
-  calls the same value `path`. Every caller must know both, and a reader
-  following an id between surfaces finds it renamed.
-- **Errors do not wear success.** `/api/verbatim/context` returns HTTP 200 with
-  an `{error}` body on a failed read. An earlier version of check-laws.mjs
-  passed it for exactly that reason — the harness believed the status line.
+- **Two facts that differ must not read alike.** "Still loading" and "your
+  sources do not say this" are different, and an interface that renders them
+  identically is lying by collapse. The `corpusWarmup` flag exists for exactly
+  this distinction. Enforced for instruction sets as R8 (INSTRUCTION-LAW.md),
+  and now partially enforced here: L2e's check requires a no-match search to
+  report *which* silence it was, so an empty corpus and a silent one can no
+  longer render identically.
+
+### Promoted
+
+- **One name per thing.** `/api/ingest` returned `sourceId`; `/api/sources`
+  called the same value `path`, so a reader following an id between surfaces
+  found it renamed — and `path` is not a filesystem path at all for anything
+  ingested as content. Both names are carried on both surfaces now, identical
+  in value, so neither direction requires knowing the other spelling. Not yet
+  enforced by a check of its own; the cleanup sweep in check-laws.mjs reads
+  either spelling.
+- **Errors do not wear success.** Promoted by writing its check
+  (`checkErrorsDoNotWearSuccess`) and then fixing what the check found. See
+  L2's "also fixed" above. An earlier version of check-laws.mjs passed these
+  routes for exactly the reason the law names — the harness believed the
+  status line.
 
 ---
 

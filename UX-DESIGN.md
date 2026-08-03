@@ -89,16 +89,30 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 - `POST /api/chat/tools` with `ingest` tool — LLM can ingest on request
 - `GET /extract?url=` (memory-server) — fetch URL content
 
+- **Documents are admitted whole.** There is no admission cap: every ingest
+  response carries `truncated: false` as a positive assertion of completeness.
+  The only bound is a transport ceiling (`INGEST_MAX_BODY`), and crossing it is
+  a *refusal* — HTTP 413 naming the limit, nothing cut and nothing admitted —
+  not a silent shortening.
+
 **Success criteria:**
 - User can drop a 1000-page book and search it in < 10s
 - Duplicate files are detected (SHA hash) and rejected
 - Multiple file formats supported
+- The last page of an ingested book is as searchable as the first. Nothing is
+  dropped on admission, because a shortened source makes every later "the text
+  does not mention X" about the missing remainder confidently and invisibly
+  wrong (LAWS.md L3)
 
 **How to test:**
 1. Ingest `pg84.txt` (Frankenstein, 438KB)
 2. Check `/api/sources` → file appears with chunk count
 3. Ingest same file again → should return "duplicate" error
 4. Ingest a URL → content extracted and stored
+5. Ingest a document well over 500 000 characters, with a distinctive sentinel
+   in its **final line** → searching for that sentinel must return it.
+   `node scripts/check-laws.mjs` measures exactly this (L3a): it does not trust
+   the response's `truncated` flag, it retrieves the tail.
 
 ---
 
@@ -307,6 +321,71 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 
 ---
 
+### 10b. Project Instructions
+
+**What it is:** Per-project rules the model must obey, written by the reader, of
+any length, delivered by surf-and-fold so a long manual costs a bounded block
+rather than the context window.
+
+**Why users need it:** A project is not just a pile of documents, it is a way of
+working — cite the statute, never promise a delivery date, never name a client
+beside a matter number. Those rules have to reach the model *as written*: an
+instruction is read to be obeyed, so a paraphrased one produces an answer that
+was correct according to a manual nobody wrote.
+
+**How it manifests:**
+- `GET /api/projects/:id/instructions` — the text, plus the compile report and
+  the fold list it produced
+- `PUT /api/projects/:id/instructions` — `{ text, instructionBudget? }`
+- `POST /api/projects/:id/instructions/preview` — `{ question }` → exactly
+  which rules would be in force for that question, which would be folded away,
+  and which matched but did not fit
+- `server/project-instructions.js` segments the text into folds; the *same*
+  `instruction-gate.js` that serves the built-in instruction set gates them
+  (INSTRUCTION-LAW R3: one relevance mechanism, not two)
+- The left panel's **Instructions** row opens the editor; the sources log
+  reports how the text was folded
+
+**How length is handled:**
+- Under the per-turn budget → handed over whole, always in force. Folding
+  exists to fit a budget; applying it to text that already fits would hide
+  rules behind a relevance test for no reason.
+- Over it → segmented at `##` headings (verbatim slices, asserted), each fold
+  declaring signals derived from its own distinctive terms. The matching folds
+  are surfaced verbatim; the rest are named in the folded index (R4).
+- Granularity is derived from the budget by *measuring* the resulting block,
+  not predicting it, so the index can name every fold (R4) without the block
+  overrunning its budget (R5).
+
+**Success criteria:**
+- Instructions are stored and surfaced byte for byte — never summarized (R1)
+- A rule surfaces on the turns it applies to and is named, not vanished, on the
+  turns it does not (R4)
+- A turn matching no rule says so rather than letting the model improvise
+  policy (R2)
+- The block fits its budget regardless of how long the instructions are (R5)
+- **A rule that matched but did not fit is named as such** — "matched but
+  crowded out" must never read like "no rule applies"
+
+**Measured:** a 333 KB / 95 000-token manual (300 sections) stores verbatim and
+gates within budget. At the default 2800-token budget the matching rule is
+crowded out — and says so, naming the fold and the remedy. Raising the
+project's `instructionBudget` to 6000 compiles it to 101 folds and surfaces the
+exact rule verbatim in a 5352-token block with no overflow.
+
+**How to test:**
+1. Open a project → **Instructions** → paste rules with `##` headings → Save
+2. The log reports whether they were kept whole or folded, and into how many
+3. `POST /api/projects/:id/instructions/preview` with a question that matches
+   one section → that section is `active`, the others `folded`
+4. Preview a question matching nothing → `stats.gap` is true
+5. Paste a very long manual → if a matching rule cannot fit, the response
+   carries `crowdedOut` and a `warning` naming it
+6. `node scripts/test-project-instructions.mjs` — 18 checks covering R1–R5,
+   verbatim round-tripping at ~900 KB, and sidecar cleanup on project delete
+
+---
+
 ### 11. Complex Task Decomposition (Holonic)
 
 **What it is:** Break big asks ("write a 5-page essay") into grounded sub-tasks with mechanical citations.
@@ -432,6 +511,14 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 3. Report should show detected terrains
 4. Verify Born-gate signal check passes
 
+**Note:** the perceiver this depends on lives in the vendored `eoreader5`
+checkout, whose own workspace packages must be linked into its own
+`node_modules` — `npm install` does this via `scripts/link-vendor-workspaces.mjs`.
+Without it, `@eoreader/spec/cube` resolves to eoreader6's spec, which has no
+`cube/` at all. When the perceiver is genuinely absent the tool now says so as
+a *setup* gap, explicitly disclaiming any conclusion about the document, rather
+than returning the module error as if it were a terrain finding.
+
 ---
 
 ## Testing Matrix
@@ -499,20 +586,35 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 - `GET /api/discourse/stats` — discourse statistics
 
 ### Document Management
-- `POST /api/ingest` — ingest a file
-- `GET /api/sources` — list ingested sources
+- `POST /api/ingest` — ingest a file, admitted whole. Returns the id as **both**
+  `sourceId` and `path` (the same value; `/api/sources` publishes it under the
+  latter name), plus `truncated: false`. A body past `INGEST_MAX_BODY` is
+  refused with 413 and `ingested: false`
+- `GET /api/sources` — list ingested sources (each entry carries `path` and the
+  identical `sourceId`)
 - `DELETE /api/sources/<key>` — delete source (recycle bin)
 - `GET /api/recycle-bin` — list deleted sources
 - `POST /api/recycle-bin/restore` — restore source
 - `DELETE /api/recycle-bin` — purge recycle bin
 
 ### Search & Retrieval
-- `GET /api/verbatim?q=<query>` — verbatim search
-- `GET /api/verbatim/read?span_id=<id>` — read specific span
+- `GET /api/verbatim?q=<query>` — verbatim search. A zero-result search returns
+  a typed `gaps` entry naming *which* silence it was — `no_sources_ingested`,
+  `corpus_warming`, `source_filter_matched_nothing` or `no_evidence_matched` —
+  each with `sourcesSearched`, so an empty library never reads as a silent one
+- `GET /api/verbatim/read?span_id=<id>` — read specific span. An unresolvable
+  span id answers **404**, not 200-with-an-error-body
 - `GET /api/verbatim/segment?q=<query>` — read surrounding context
 - `GET /api/verbatim/context?span_id=<id>` — get span context
 - `GET /api/fold?source=<ref>` — fold projection of a source
 - `GET /api/source/text?source=<ref>` — read source text by byte range
+
+### Project instructions
+- `GET /api/projects/:id/instructions` — text + compile report + fold list
+- `PUT /api/projects/:id/instructions` — `{ text, instructionBudget? }`; any
+  length, stored verbatim
+- `POST /api/projects/:id/instructions/preview` — `{ question }` → which rules
+  would be active, which folded, and which `crowdedOut` by the budget
 
 ### Priors
 - `GET /api/priors` — list priors (each entry carries `disabled: boolean`)
