@@ -44,7 +44,7 @@ import path from "path";
 
 // Every path reaching outside this repo resolves here — no hardcoded
 // home-directory absolutes, no walking up out of the source tree.
-import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies } from "./paths.js";
+import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies, PERCEIVER_DISPATCH, perceiverDispatchUrl } from "./paths.js";
 import { createModelRouter } from "./model-router.js";
 import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
@@ -1696,9 +1696,7 @@ const toolHandlers = {
       // Run terrain analysis via engine dispatch
       let terrainInfo = null;
       try {
-        const { buildReadingFromBytes } = await import(
-          "/Users/mlacy/Documents/Default Project/eoreader5/packages/engine/perceiver/dispatch.js"
-        );
+        const { buildReadingFromBytes } = await import(perceiverDispatchUrl());
         const reading = await buildReadingFromBytes(bytes);
         terrainInfo = {
           covered: reading.terrain_report?.covered ?? [],
@@ -1783,10 +1781,18 @@ const toolHandlers = {
   },
 
   async terrain_report(args) {
+    // A missing perceiver is a SETUP failure, and it must not be reported as a
+    // terrain finding. Before this, the import pointed at one developer's home
+    // directory, so on every other machine the ENOENT was caught below and
+    // returned as `[Terrain analysis failed: Cannot find module …]` — which
+    // reads, to a model and a reader alike, like something about the document.
+    if (!fs.existsSync(PERCEIVER_DISPATCH)) {
+      return `[Terrain analysis unavailable: the eoreader5 perceiver is not present at ${PERCEIVER_DISPATCH}. ` +
+        `This is a setup gap, not a property of "${args.path}" — run "git submodule update --init --recursive", ` +
+        `or set EOCHAT_LEGACY_ENGINE_PATH. No terrain conclusion should be drawn from this message.]`;
+    }
     try {
-      const { buildReadingFromBytes } = await import(
-        "/Users/mlacy/Documents/Default Project/eoreader5/packages/engine/perceiver/dispatch.js"
-      );
+      const { buildReadingFromBytes } = await import(perceiverDispatchUrl());
       const bytes = await fsp.readFile(args.path);
       const reading = await buildReadingFromBytes(bytes);
       const report = reading.terrain_report;

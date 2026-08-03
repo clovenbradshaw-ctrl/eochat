@@ -511,6 +511,14 @@ exact rule verbatim in a 5352-token block with no overflow.
 3. Report should show detected terrains
 4. Verify Born-gate signal check passes
 
+**Note:** the perceiver this depends on lives in the vendored `eoreader5`
+checkout, whose own workspace packages must be linked into its own
+`node_modules` — `npm install` does this via `scripts/link-vendor-workspaces.mjs`.
+Without it, `@eoreader/spec/cube` resolves to eoreader6's spec, which has no
+`cube/` at all. When the perceiver is genuinely absent the tool now says so as
+a *setup* gap, explicitly disclaiming any conclusion about the document, rather
+than returning the module error as if it were a terrain finding.
+
 ---
 
 ## Testing Matrix
