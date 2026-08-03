@@ -1761,13 +1761,19 @@ const LINK_ROW_CAP = 60;
 // to a space; the orphaned key is inert, not migrated.
 const SPACES_KEY = 'eochat.spaces.v2';
 
+// A project has no server record until one is actually created there — this
+// is the same "keep a browser copy so an unreachable proxy doesn't erase
+// what the reader already built" fallback SPACES_KEY gives conversations.
+const PROJECTS_KEY = 'eochat.projects.v1';
+
 // GitHub Pages serves this file as a static site with no backend of its
-// own — the provider:'ollama' generation path only works once a reader
-// points ?proxyUrl= at a proxy they run themselves. Defaulting Local mode
-// on there means a first-time visitor gets a real, in-tab reply without
-// first finding and flipping the toggle by hand. Anywhere else (npm run
-// ui, or index.html served against a real proxy) the server-generated
-// path stays the default, unchanged.
+// own, so this is a synchronous, best-guess head start for that specific
+// deployment — before the first health check has had a chance to run,
+// defaulting Local mode on there means a first-time visitor gets a real,
+// in-tab reply without first finding and flipping the toggle by hand. The
+// general case — any deployment where no engine answers at all, GitHub
+// Pages or otherwise — is handled once the first health check resolves;
+// see _defaultToLocalModelIfNoEngine below.
 const ON_GH_PAGES = typeof window !== 'undefined' && /(^|\.)github\.io$/.test(window.location.hostname);
 
 class Component extends DCLogic {
@@ -1783,7 +1789,9 @@ class Component extends DCLogic {
     // mirrors window.EOWebLLM's own state machine, so the toggle can want
     // local mode before the download is ready — or after it has failed —
     // without those two facts being confused with each other. Defaults on
-    // for the GitHub Pages deployment (see ON_GH_PAGES above).
+    // for the GitHub Pages deployment (see ON_GH_PAGES above), and turns on
+    // for everyone else too once the first health check finds no engine at
+    // all (see _defaultToLocalModelIfNoEngine).
     localModel: ON_GH_PAGES, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
     spacesOpen: false, activeSpaceId: 'default', chatMode: 'chat', leftCollapsed: false, selectedEntity: null, activeTurnId: null,
     entityRung: 'Entity', entityPath: [], entityRungHelp: false,
@@ -2118,8 +2126,25 @@ class Component extends DCLogic {
   async _pingHealth() {
     try {
       const res = await fetch(this.proxyUrl() + '/health', { signal: AbortSignal.timeout(3000) });
-      if (res.ok) this.setState({ proxyAlive: new Date() });
+      if (res.ok) { this.setState({ proxyAlive: new Date() }); return; }
     } catch {}
+    this._defaultToLocalModelIfNoEngine();
+  }
+
+  // No engine reachable means the server-generated answer path can never
+  // respond — this is the general form of what ON_GH_PAGES only covered for
+  // one specific deployment (see state init above). Only defaults the
+  // toggle ON, and only before the reader has touched it themselves
+  // (toggleLocalModel sets _localModelUserTouched): a proxy that recovers
+  // mid-session shouldn't yank a running local model out from under an
+  // answer in progress, and a reader who deliberately turned it off is not
+  // second-guessed just because the next 15s poll still finds no engine.
+  _defaultToLocalModelIfNoEngine() {
+    if (this._localModelUserTouched || this.state.localModel) return;
+    this.setState({ localModel: true });
+    if (window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
+      window.EOWebLLM.init();
+    }
   }
 
   // Re-entrant: the "retry" control calls this again, so clear any existing
@@ -2245,30 +2270,57 @@ class Component extends DCLogic {
   // ── Projects — Claude-style named collections with their own knowledge base ──
 
   async fetchProjects() {
+    const localProjects = this._loadLocal(PROJECTS_KEY) || [];
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects', { signal: AbortSignal.timeout(5000) });
-      if (res.ok) {
-        const { projects } = await res.json();
-        this.setState({ projects: projects || [] });
-        if (projects.length && !this.state.activeProjectId) {
-          this.setState({ activeProjectId: projects[0].id });
-        }
+      if (!res.ok) throw new Error('proxy returned ' + res.status);
+      const { projects } = await res.json();
+      // A project created while no engine was reachable (see createProject's
+      // fallback) has no server record to be listed here — keep it alongside
+      // the server's list rather than letting a later successful fetch
+      // silently erase it.
+      const serverIds = new Set((projects || []).map(p => p.id));
+      const merged = (projects || []).concat(localProjects.filter(p => !serverIds.has(p.id)));
+      this.setProjects(() => merged);
+      if (merged.length && !this.state.activeProjectId) {
+        this.setState({ activeProjectId: merged[0].id });
       }
-    } catch {}
+    } catch {
+      // Offline/unreachable proxy — fall back to whatever was local so
+      // project setup still works; checkHealth()'s retry banner covers the rest.
+      if (localProjects.length) {
+        this.setState({ projects: localProjects });
+        if (!this.state.activeProjectId) this.setState({ activeProjectId: localProjects[0].id });
+      }
+    }
   }
 
   async createProject(name) {
+    const finalName = name || 'Untitled project';
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name || 'Untitled project' }),
+        body: JSON.stringify({ name: finalName }),
       });
+      if (!res.ok) throw new Error('proxy returned ' + res.status);
       const project = await res.json();
-      this.setState(s => ({ projects: s.projects.concat([project]), activeProjectId: project.id, view: 'chat' }));
+      this.setProjects(projects => projects.concat([project]), { activeProjectId: project.id, view: 'chat' });
       await this.switchProject(project.id);
       this.logAdd('●', `Project "${project.name}" created`, 'chat');
     } catch (err) {
-      this.logAdd('⊘', `Could not create project — ${err.message}`, 'chat');
+      // No engine reachable — a project is just a named container until
+      // documents can be indexed into one, so build it client-side rather
+      // than blocking setup on a server that may never exist for this
+      // deployment (same fallback loadConversations already uses for chats).
+      const project = {
+        id: 'local-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+        name: finalName, description: '', pool: null, conversationIds: [], sourceIds: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      project.pool = project.id;
+      this.setProjects(projects => projects.concat([project]), { activeProjectId: project.id, view: 'chat' });
+      await this.switchProject(project.id);
+      this.logAdd('●', `Project "${project.name}" created (offline — ${err.message})`, 'chat');
     }
   }
 
@@ -2283,7 +2335,7 @@ class Component extends DCLogic {
   renameProject(id, name) {
     const trimmed = (name || '').trim();
     if (!trimmed) return;
-    this.setState(s => ({ projects: s.projects.map(p => p.id === id ? { ...p, name: trimmed } : p) }));
+    this.setProjects(projects => projects.map(p => p.id === id ? { ...p, name: trimmed } : p));
     fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(id), {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: trimmed }),
     }).catch(() => {});
@@ -2291,10 +2343,8 @@ class Component extends DCLogic {
 
   async deleteProject(id) {
     const remaining = this.state.projects.filter(p => p.id !== id);
-    this.setState(s => {
-      const nextActive = s.activeProjectId === id ? (remaining[0] ? remaining[0].id : null) : s.activeProjectId;
-      return { projects: remaining, activeProjectId: nextActive, view: 'projects' };
-    });
+    const nextActive = this.state.activeProjectId === id ? (remaining[0] ? remaining[0].id : null) : this.state.activeProjectId;
+    this.setProjects(() => remaining, { activeProjectId: nextActive, view: 'projects' });
     fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {});
     this.logAdd('⊘', 'Project deleted', 'chat');
   }
@@ -2741,6 +2791,13 @@ class Component extends DCLogic {
     this.setState(
       s => ({ ...(extra || {}), spaces: fn(s.spaces) }),
       () => this._saveLocal(SPACES_KEY, this.state.spaces)
+    );
+  }
+
+  setProjects(fn, extra) {
+    this.setState(
+      s => ({ ...(extra || {}), projects: fn(s.projects) }),
+      () => this._saveLocal(PROJECTS_KEY, this.state.projects)
     );
   }
 
@@ -3844,6 +3901,7 @@ class Component extends DCLogic {
   }
 
   toggleLocalModel() {
+    this._localModelUserTouched = true;
     const turningOn = !this.state.localModel;
     this.setState({ localModel: turningOn });
     if (turningOn && window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
