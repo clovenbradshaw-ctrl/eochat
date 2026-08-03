@@ -569,8 +569,6 @@ export function createTurnController(deps) {
         completedAt: new Date().toISOString(),
       });
 
-<<<<<<< HEAD
-=======
       // The one citation table this whole answer is checked against — index,
       // byte range, and verbatim text together, so bracket resolution and
       // quote-fidelity checking can never drift apart into two different ideas
@@ -628,7 +626,6 @@ export function createTurnController(deps) {
         text: finalText, model, citations: brackets, gaps,
         fidelity, status: "completed", completedAt: new Date().toISOString(),
       });
->>>>>>> e113e05 (Default persona/safety layer, fold history instead of dropping it, reconcile L1d)
       sendEvent("completed", {
         turnId: turn.id, answerId, status: "completed", text: surfText,
         mode: "surf", model: null,

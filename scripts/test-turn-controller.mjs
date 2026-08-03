@@ -199,7 +199,17 @@ async function testRegenerateCreatesVariant(dir) {
   console.log("  ok: regenerate retains the user turn and adds a new assistant variant");
 }
 
-<<<<<<< HEAD
+// A fetch mock that, in addition to streaming canned deltas, records the
+// `messages` array each call was actually invoked with — so a test can
+// inspect what the model saw on turn N of a long-running conversation,
+// not just what got persisted.
+function makeRecordingFetchMock(replyText, sentMessages) {
+  return async (url, opts) => {
+    sentMessages.push(JSON.parse(opts.body).messages);
+    return makeFetchMock([{ message: { content: replyText } }, { done: true }])(url, opts);
+  };
+}
+
 async function testVerbatimSnippets(dir) {
   const { controller, conversationStore } = await withController(
     dir,
@@ -241,16 +251,6 @@ async function testUnresolvedCitationProducesNoSnippet(dir) {
 
   assert.equal(events.filter(e => e.type === "verbatim_snippet").length, 0, "an unresolved bracket must never produce a snippet card");
   console.log("  ok: an unresolved citation produces no verbatim snippet");
-=======
-// A fetch mock that, in addition to streaming canned deltas, records the
-// `messages` array each call was actually invoked with — so a test can
-// inspect what the model saw on turn N of a long-running conversation,
-// not just what got persisted.
-function makeRecordingFetchMock(replyText, sentMessages) {
-  return async (url, opts) => {
-    sentMessages.push(JSON.parse(opts.body).messages);
-    return makeFetchMock([{ message: { content: replyText } }, { done: true }])(url, opts);
-  };
 }
 
 // Ungrounded (ordinary conversational, ["everything ranks the same" logic
@@ -311,7 +311,7 @@ async function testLongThreadFoldsAndBoundsContext(dir) {
   assert.ok(userTurnsInPrompt <= HISTORY_TURNS + 1, `raw user turns in the prompt must stay capped at HISTORY_TURNS+current, got ${userTurnsInPrompt}`);
 
   console.log(`  ok: ${TURN_COUNT}-turn thread stays bounded (${justPastFold} msgs once folding starts, still ${wayPastFold} at turn ${TURN_COUNT}), older turns folded not dropped, persona present throughout`);
->>>>>>> e113e05 (Default persona/safety layer, fold history instead of dropping it, reconcile L1d)
+}
 }
 
 async function main() {
@@ -322,12 +322,9 @@ async function main() {
     await testUnresolvedCitationGap(dir);
     await testStopInterrupts(dir);
     await testRegenerateCreatesVariant(dir);
-<<<<<<< HEAD
     await testVerbatimSnippets(dir);
     await testUnresolvedCitationProducesNoSnippet(dir);
-=======
     await testLongThreadFoldsAndBoundsContext(dir);
->>>>>>> e113e05 (Default persona/safety layer, fold history instead of dropping it, reconcile L1d)
     console.log("ALL TURN-CONTROLLER TESTS PASSED");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
