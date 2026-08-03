@@ -450,6 +450,7 @@
         <button type="button" onClick="{{ tabPriors }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabPriorsColor }}; box-shadow: {{ tabPriorsUnderline }}; cursor:pointer;">Priors</button>
         <button type="button" onClick="{{ tabCompose }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabComposeColor }}; box-shadow: {{ tabComposeUnderline }}; cursor:pointer;">Compose</button>
         <button type="button" onClick="{{ tabGlassBox }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabGlassBoxColor }}; box-shadow: {{ tabGlassBoxUnderline }}; cursor:pointer;">Glass box</button>
+        <button type="button" onClick="{{ tabSenses }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabSensesColor }}; box-shadow: {{ tabSensesUnderline }}; cursor:pointer;">Senses</button>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
           <sc-if value="{{ proxyDead }}">
             <button type="button" onClick="{{ retryProxy }}" style="border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
@@ -838,6 +839,109 @@
           <sc-if value="{{ noPriors }}">
             <span style="font-size:12px; color:#A39D91; line-height:1.5;">{{ priorsMessage }}</span>
           </sc-if>
+        </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isSenses }}">
+      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Senses</span>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A library of vision models — screen grounding, general vision, OCR, and object detection. Subscribe to add one to your library; switch on "active" to run it on ingestion — several can be active at once. A sense needs an endpoint (self-hosted or cloud) before it actually runs; until then it's a library entry, not a working pipeline, and ingestion says so.</span>
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; max-width:100%;" class="eo-scrollbar">
+          <sc-for list="{{ senseGenres }}" as="genre">
+            <div style="border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4; overflow:hidden;">
+              <div style="display:flex; align-items:center; gap:4px; padding-right:10px;">
+                <button type="button" onClick="{{ genre.toggle }}" style="flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:1px; border:0; background:none; padding:10px 12px; cursor:pointer; font-family:inherit; text-align:left;">
+                  <span style="display:flex; align-items:center; gap:9px;">
+                    <i class="{{ genre.chevronClass }}" style="font-size:11px; color:#A39D91;"></i>
+                    <span style="font-size:13px; font-weight:500; color:#26241F;">{{ genre.name }}</span>
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ genre.subscribedCount }} subscribed · {{ genre.activeCount }} active</span>
+                  </span>
+                  <span style="font-size:11px; color:#A39D91; padding-left:20px;">{{ genre.detail }}</span>
+                </button>
+              </div>
+              <sc-if value="{{ genre.expanded }}">
+                <div style="display:flex; flex-direction:column; gap:6px; padding:0 12px 12px;">
+                  <sc-for list="{{ genre.items }}" as="item">
+                    <div style="border:1px solid #E7E2D8; border-radius:8px; background:#FFFDFA; overflow:hidden;">
+                      <div style="display:flex; align-items:center; gap:8px; padding:9px 10px;">
+                        <button type="button" onClick="{{ item.toggleContent }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:0; cursor:pointer; font-family:inherit;">
+                          <i class="{{ item.chevronClass }}" style="font-size:11px; color:#A39D91; flex:none;"></i>
+                          <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">{{ item.name }}<span style="color:#A39D91;"> · {{ item.vendor }}</span></span>
+                        </button>
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.03em; color: {{ item.connectedColor }}; background: {{ item.connectedBg }}; border-radius:5px; padding:2px 7px; flex:none;">{{ item.connectedLabel }}</span>
+                        <span style="display:flex; align-items:center; gap:4px; flex:none;">
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">sub</span>
+                          <button type="button" aria-label="Subscribe" onClick="{{ item.toggleSubscribed }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.subSwitchBg }}; position:relative; cursor:pointer; padding:0;">
+                            <span style="position:absolute; top:2px; left: {{ item.subKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                          </button>
+                        </span>
+                        <span style="display:flex; align-items:center; gap:4px; flex:none;">
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">active</span>
+                          <button type="button" aria-label="Activate on ingestion" onClick="{{ item.toggleActive }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.activeSwitchBg }}; opacity: {{ item.activeOpacity }}; position:relative; cursor: {{ item.activeCursor }}; padding:0;">
+                            <span style="position:absolute; top:2px; left: {{ item.activeKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                          </button>
+                        </span>
+                      </div>
+                      <sc-if value="{{ item.expanded }}">
+                        <div style="padding:0 10px 12px 29px; display:flex; flex-direction:column; gap:8px; border-top:1px solid #EBE6DC; margin:0 10px;">
+                          <span style="font-size:11.5px; color:#6E6A60; line-height:1.55; padding-top:8px;">{{ item.summary }}</span>
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">{{ item.license }} · {{ item.sizes }}</span>
+                          <sc-if value="{{ item.needsEndpoint }}">
+                            <div style="display:flex; align-items:center; gap:6px;">
+                              <input type="text" placeholder="https://…self-hosted or cloud endpoint" value="{{ item.endpointDraft }}" onChange="{{ item.onEndpointChange }}" style="flex:1; min-width:0; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; padding:6px 9px; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#26241F; outline:none;" />
+                              <button type="button" onClick="{{ item.saveEndpoint }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:6px 10px; font-family:inherit; font-size:11px; color:#4A463E; cursor:pointer; flex:none;">Save</button>
+                            </div>
+                          </sc-if>
+                          <sc-if value="{{ item.builtIn }}">
+                            <span style="font-size:10.5px; color:#A39D91;">Runs in-browser — no endpoint needed.</span>
+                          </sc-if>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <sc-if value="{{ noSenses }}">
+            <span style="font-size:12px; color:#A39D91; line-height:1.5;">{{ sensesMessage }}</span>
+          </sc-if>
+        </div>
+
+        <div style="flex:none; display:flex; flex-direction:column; gap:8px; padding-top:10px; border-top:1px solid #EBE6DC; max-height:280px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <div style="display:flex; flex-direction:column; gap:1px;">
+              <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Discover</span>
+              <span style="font-size:11px; color:#A39D91;">{{ discoverStatusLabel }}</span>
+            </div>
+            <button type="button" onClick="{{ checkHuggingFace }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:12px; color:#4A463E; cursor:pointer; flex:none;">{{ discoverButtonLabel }}</button>
+          </div>
+          <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:5px; min-height:0;" class="eo-scrollbar">
+            <sc-for list="{{ discoverRows }}" as="d">
+              <div style="display:flex; align-items:center; gap:8px; border:1px solid #E7E2D8; border-radius:8px; background:#FFFDFA; padding:7px 9px;">
+                <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:1px;">
+                  <span style="display:flex; align-items:center; gap:6px;">
+                    <span style="font-size:12px; color:#26241F; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ d.name }}</span>
+                    <sc-if value="{{ d.isNew }}">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#1F5A4C; background:#E4EEE9; border-radius:5px; padding:1px 6px;">new</span>
+                    </sc-if>
+                  </span>
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color: {{ d.licenseColor }};">{{ d.meta }}</span>
+                </div>
+                <a href="{{ d.hfUrl }}" target="_blank" rel="noopener" style="font-size:11px; color:#8C877C; flex:none;">HF ↗</a>
+                <sc-if value="{{ d.inLibrary }}">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; flex:none;">in library</span>
+                </sc-if>
+                <sc-if value="{{ d.notInLibrary }}">
+                  <button type="button" onClick="{{ d.add }}" style="border:1px solid #1F5A4C; background:none; border-radius:7px; padding:5px 9px; font-family:inherit; font-size:11px; color:#1F5A4C; cursor:pointer; flex:none;">Add</button>
+                </sc-if>
+              </div>
+            </sc-for>
+            <sc-if value="{{ noDiscoverRows }}">
+              <span style="font-size:11.5px; color:#A39D91; line-height:1.5;">{{ discoverEmptyMessage }}</span>
+            </sc-if>
+          </div>
         </div>
       </div>
       </sc-if>
@@ -1553,8 +1657,8 @@
 // knows how to display — pdf(text)/video/audio/link, falling back to an
 // opaque binary. Used both to render the open reader and to mark a freshly
 // uploaded source the same way, so an upload isn't a visually distinct thing.
-const TYPE_GLYPH = { pdf: '●', video: '●', audio: '○', spreadsheet: '▦', link: '○', binary: '◱' };
-const TYPE_LABEL = { pdf: 'Text', video: 'Video', audio: 'Audio', spreadsheet: 'Sheet', link: 'Article', binary: 'File' };
+const TYPE_GLYPH = { pdf: '●', video: '●', audio: '○', spreadsheet: '▦', link: '○', binary: '◱', image: '◱' };
+const TYPE_LABEL = { pdf: 'Text', video: 'Video', audio: 'Audio', spreadsheet: 'Sheet', link: 'Article', binary: 'File', image: 'Image' };
 
 // A display name that is layout, not a being. Section numbers ("II", "III"),
 // page figures ("1987"), and standalone structural headings ("Section",
@@ -1734,6 +1838,16 @@ class Component extends DCLogic {
     // from `_proxySources` (the corpus pool) because asking about the priors
     // and asking about the texts are different questions. null = not fetched.
     _priors: null, _priorsError: null, priorGenreOpen: {}, priorItemOpen: {},
+    // Senses catalog from /api/senses — the vision-model library the Senses
+    // tab subscribes and activates from. null = not fetched. senseEndpointDraft
+    // holds in-progress edits to a sense's endpoint URL, keyed by sense id,
+    // same draft-then-save shape as settingsDraftKeys.
+    _senses: null, _sensesError: null, senseCategoryOpen: {}, senseItemOpen: {}, senseEndpointDraft: {},
+    // Hub-discovery results from /api/senses/discover — separate from
+    // _senses because it's a search result, not the library: nothing here is
+    // subscribable-in-place, it has to be "added" first (which is what turns
+    // it into an ordinary entry in _senses). null = never checked.
+    _sensesDiscover: null, _sensesDiscoverError: null, sensesDiscoverLoading: false,
     // Per-source engine projections, keyed by source name.
     //
     // `folds` carries the cast: referents a per-text prior actually typed, the
@@ -1792,6 +1906,7 @@ class Component extends DCLogic {
     this.loadConversations();
     this.fetchSources();
     this.fetchPriors();
+    this.fetchSenses();
     this.fetchRecycleBin();
     this.fetchModels();
     this.loadSettings();
@@ -2299,6 +2414,186 @@ class Component extends DCLogic {
     this.fetchPriors();
   }
 
+  // ── Senses — the vision-model library the Senses tab subscribes and
+  // activates from. Same shape as Priors: a catalog fetch, optimistic
+  // toggles reconciled against the server's response. ──
+
+  async fetchSenses() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/senses', { signal: AbortSignal.timeout(20000) });
+      if (!res.ok) {
+        this.setState({ _sensesError: `proxy returned ${res.status} for /api/senses — restart the proxy if it predates the senses route` });
+        return;
+      }
+      const data = await res.json();
+      if (!data || !Array.isArray(data.senses)) {
+        this.setState({ _sensesError: 'proxy did not return a senses catalog' });
+        return;
+      }
+      this.setState(s => ({
+        _senses: data.senses, _sensesCategories: data.categories || [], _sensesError: null,
+        senseEndpointDraft: Object.fromEntries(data.senses.map(sn => [sn.id, sn.endpoint || ''])),
+      }));
+    } catch (err) {
+      this.setState({ _sensesError: `could not reach the proxy: ${err.message}` });
+    }
+  }
+
+  toggleSenseCategory(id) {
+    this.setState(s => ({ senseCategoryOpen: { ...s.senseCategoryOpen, [id]: !s.senseCategoryOpen[id] } }));
+  }
+
+  toggleSenseItem(id) {
+    this.setState(s => ({ senseItemOpen: { ...s.senseItemOpen, [id]: !s.senseItemOpen[id] } }));
+  }
+
+  // Subscribe/unsubscribe one or more senses. Optimistic locally, reconciled
+  // against the server (unsubscribing also deactivates server-side, so the
+  // reconcile is what actually clears a stale "active" switch here).
+  async setSensesSubscribed(ids, subscribed) {
+    this.setState(s => ({
+      _senses: (s._senses || []).map(sn => ids.includes(sn.id) ? { ...sn, subscribed, active: subscribed ? sn.active : false } : sn)
+    }));
+    try {
+      await fetch(this.proxyUrl() + '/api/senses/subscribe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, subscribed }), signal: AbortSignal.timeout(20000),
+      });
+      this.logAdd(subscribed ? '●' : '○', `${subscribed ? 'Subscribed to' : 'Unsubscribed from'} ${ids.length} sense${ids.length === 1 ? '' : 's'}`, 'sources');
+    } catch (err) {
+      this.logAdd('⊘', `Could not reach the proxy to subscribe: ${err.message}`, 'sources');
+    }
+    this.fetchSenses();
+  }
+
+  // Select which subscribed senses run on ingestion — multiple at once via a
+  // bucket click, same request shape as setPriorsEnabled. Activating an
+  // unsubscribed sense is refused server-side; the reconcile is what surfaces
+  // that refusal rather than leaving an optimistic switch lit that never took.
+  async setSensesActive(ids, active) {
+    this.setState(s => ({
+      _senses: (s._senses || []).map(sn => ids.includes(sn.id) && sn.subscribed ? { ...sn, active } : sn)
+    }));
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/senses/activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, active }), signal: AbortSignal.timeout(20000),
+      });
+      const data = await res.json();
+      const failed = (data.results || []).filter(r => r.error);
+      this.logAdd(
+        failed.length ? '⊘' : (active ? '●' : '○'),
+        failed.length
+          ? `Not active — subscribe first: ${failed.map(f => f.id).join(', ')}`
+          : `${active ? 'Activated' : 'Deactivated'} ${ids.length} sense${ids.length === 1 ? '' : 's'} for ingestion`,
+        'sources'
+      );
+    } catch (err) {
+      this.logAdd('⊘', `Could not reach the proxy to activate: ${err.message}`, 'sources');
+    }
+    this.fetchSenses();
+  }
+
+  onSenseEndpointChange(id, value) {
+    this.setState(s => ({ senseEndpointDraft: { ...s.senseEndpointDraft, [id]: value } }));
+  }
+
+  async saveSenseEndpoint(id) {
+    const url = (this.state.senseEndpointDraft[id] || '').trim();
+    try {
+      await fetch(this.proxyUrl() + '/api/senses/endpoint', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, url }), signal: AbortSignal.timeout(20000),
+      });
+      this.logAdd(url ? '●' : '○', url ? `Endpoint set for "${id}"` : `Endpoint cleared for "${id}"`, 'sources');
+    } catch (err) {
+      this.logAdd('⊘', `Could not reach the proxy to save the endpoint: ${err.message}`, 'sources');
+    }
+    this.fetchSenses();
+  }
+
+  // Checks the Hugging Face Hub for vision models beyond the curated 14 —
+  // see senses-hf.js for the task-taxonomy + author-watch approach and why
+  // OCR/grounding need the latter. Server-side cache is weekly; `force`
+  // (the tab's "Check Hugging Face" button) bypasses that.
+  async fetchSensesDiscover(force) {
+    this.setState({ sensesDiscoverLoading: true });
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/senses/discover' + (force ? '?refresh=1' : ''), { signal: AbortSignal.timeout(30000) });
+      const data = await res.json();
+      if (!res.ok) {
+        this.setState({ sensesDiscoverLoading: false, _sensesDiscoverError: data.error || `proxy returned ${res.status}` });
+        return;
+      }
+      this.setState({ sensesDiscoverLoading: false, _sensesDiscover: data, _sensesDiscoverError: null });
+      this.logAdd('○', `Hugging Face discovery: ${data.discovered.length} model(s), ${data.isNew.length} new since last check`, 'sources');
+    } catch (err) {
+      this.setState({ sensesDiscoverLoading: false, _sensesDiscoverError: `could not reach the proxy: ${err.message}` });
+    }
+  }
+
+  // Promotes a discovered Hub entry into the library and subscribes it in
+  // one action — refetches both lists so "in library" and the new switches
+  // in the category above show up from the same click.
+  async addDiscoveredSense(id) {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/senses/discover/add', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }), signal: AbortSignal.timeout(20000),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        this.logAdd('⊘', `Could not add "${id}" — ${data.error || res.status}`, 'sources');
+        return;
+      }
+      this.logAdd('●', `Added "${id}" to the Senses library`, 'sources');
+    } catch (err) {
+      this.logAdd('⊘', `Could not reach the proxy to add "${id}": ${err.message}`, 'sources');
+    }
+    this.fetchSenses();
+    this.fetchSensesDiscover(false);
+  }
+
+  // Every active, connected sense in a category — what the ingest paths
+  // actually have to work with. A sense that's active but has no endpoint is
+  // deliberately excluded here (not run) and reported separately by the
+  // caller, per LAWS.md L2e: an unreachable sense is a gap, not a skip.
+  _activeConnectedSenses(category) {
+    return (this.state._senses || []).filter(sn => sn.category === category && sn.active && sn.endpoint);
+  }
+
+  _activeDisconnectedSenses(category) {
+    return (this.state._senses || []).filter(sn => sn.category === category && sn.active && !sn.endpoint);
+  }
+
+  // Sends one image to one connected sense's endpoint and asks what it sees.
+  // The wire contract is generic — { image: dataURL, task: category, senseId }
+  // in, { text } (or { error }) out — because this file cannot special-case
+  // fourteen vendor APIs it has no credentials to test against. A reader
+  // pointing this at a real Holo2/Qwen3-VL/dots.ocr deployment needs a thin
+  // adapter in front of it that speaks this shape; that adapter is the part
+  // this repo cannot supply sight-unseen. Throws on any failure — callers
+  // catch per-sense so one bad endpoint doesn't take down a page's worth of
+  // other active senses.
+  async _callSenseEndpoint(sense, blob, extra = {}) {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('could not read image for ' + sense.name));
+      reader.readAsDataURL(blob);
+    });
+    const res = await fetch(sense.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: dataUrl, task: sense.category, senseId: sense.id, ...extra }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) throw new Error(`${sense.name} returned ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data;
+  }
+
   _baseName(name) { return String(name || '').replace(/^.*[/\\]/, ''); }
 
   // The rail lists everything a question can be answered FROM, not just what
@@ -2457,6 +2752,7 @@ class Component extends DCLogic {
     if (n.startsWith('prior:')) return 'pdf';
     if (n.match(/\.(mp4|mov|webm)$/)) return 'video';
     if (n.match(/\.(wav|mp3|m4a|ogg)$/)) return 'audio';
+    if (n.match(/\.(png|jpe?g|gif|webp|bmp|svg)$/)) return 'image';
     if (n.match(/\.(csv|tsv|xlsx|xls)$/)) return 'spreadsheet';
     if (n.match(/\.(pdf|docx|doc|txt|md)$/)) return 'pdf';
     if (n.startsWith('http')) return 'link';
@@ -3934,6 +4230,10 @@ class Component extends DCLogic {
         await this._uploadPDFBinary(file, projectId);
         continue;
       }
+      if (this.inferType(file.name) === 'image') {
+        await this._uploadImageBinary(file, projectId);
+        continue;
+      }
       const type = this.inferType(file.name);
       if (!this._isTextIngestible(file.name)) {
         if (!this._uploadBlobUrls) this._uploadBlobUrls = new Map();
@@ -4056,7 +4356,20 @@ class Component extends DCLogic {
       const eotEntries = [{ kind: 'extraction', method: hasText ? 'pdf-text-layer' : 'pdf-no-text-layer', pages: pdf.numPages, chars: text.length, layoutBlocks: layout.reduce((s, p) => s + p.blocks.length, 0) }];
 
       let ocrText = '';
-      if (!hasText && typeof Tesseract !== 'undefined') {
+      // Tesseract stays the unconditional baseline — it ran unconditionally
+      // before the Senses tab existed, and a reader who never opens that tab
+      // must see the same PDF-OCR behavior they always had. Anything
+      // subscribed and activated in Senses runs *alongside* it, additively —
+      // activating a sense never turns Tesseract off.
+      const otherOcrSenses = this._activeConnectedSenses('ocr').filter(sn => sn.id !== 'tesseract');
+      const disconnectedOcrSenses = this._activeDisconnectedSenses('ocr').filter(sn => sn.id !== 'tesseract');
+      const senseTexts = new Map();
+      const runTesseract = !hasText && typeof Tesseract !== 'undefined';
+      const runSenses = !hasText && otherOcrSenses.length > 0;
+      if (!hasText && disconnectedOcrSenses.length) {
+        this.logAdd('⊘', `Active for OCR but not connected — no endpoint set for ${disconnectedOcrSenses.map(s => s.name).join(', ')}. Add one in the Senses tab.`, 'sources');
+      }
+      if (runTesseract || runSenses) {
         this.logAdd('○', `No text layer in "${file.name}" — running OCR…`, 'sources');
         try {
           for (let i = 1; i <= pdf.numPages; i++) {
@@ -4069,17 +4382,31 @@ class Component extends DCLogic {
             await page.render({ canvasContext: ctx, viewport }).promise;
             const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
             if (!blob) continue;
-            const { data } = await Tesseract.recognize(blob, 'eng', {
-              logger: (m) => { if (m.status === 'recognizing text') this.logAdd('○', `OCR page ${i}/${pdf.numPages}: ${Math.round(m.progress * 100)}%`, 'sources'); }
-            });
-            const ocrBlocks = (data.lines || []).map(ln => ({
-              text: ln.text, confidence: ln.confidence,
-              bbox: ln.bbox ? { x0: ln.bbox.x0 / 2, y0: ln.bbox.y0 / 2, x1: ln.bbox.x1 / 2, y1: ln.bbox.y1 / 2 } : null,
-              page: i, kind: 'ocr-line'
-            }));
-            if (layout[i - 1]) layout[i - 1].blocks = ocrBlocks;
-            ocrText += (data.text || '') + '\n\n';
-            eotEntries.push({ kind: 'ocr', page: i, lines: (data.lines || []).length, meanConfidence: (data.lines || []).reduce((s, l) => s + (l.confidence || 0), 0) / ((data.lines || []).length || 1) });
+            if (runTesseract) {
+              const { data } = await Tesseract.recognize(blob, 'eng', {
+                logger: (m) => { if (m.status === 'recognizing text') this.logAdd('○', `OCR page ${i}/${pdf.numPages} (Tesseract.js): ${Math.round(m.progress * 100)}%`, 'sources'); }
+              });
+              const ocrBlocks = (data.lines || []).map(ln => ({
+                text: ln.text, confidence: ln.confidence,
+                bbox: ln.bbox ? { x0: ln.bbox.x0 / 2, y0: ln.bbox.y0 / 2, x1: ln.bbox.x1 / 2, y1: ln.bbox.y1 / 2 } : null,
+                page: i, kind: 'ocr-line'
+              }));
+              if (layout[i - 1]) layout[i - 1].blocks = ocrBlocks;
+              ocrText += (data.text || '') + '\n\n';
+              eotEntries.push({ kind: 'ocr', page: i, lines: (data.lines || []).length, meanConfidence: (data.lines || []).reduce((s, l) => s + (l.confidence || 0), 0) / ((data.lines || []).length || 1) });
+            }
+            for (const sense of otherOcrSenses) {
+              try {
+                this.logAdd('○', `OCR page ${i}/${pdf.numPages} (${sense.name})…`, 'sources');
+                const data = await this._callSenseEndpoint(sense, blob, { page: i, pages: pdf.numPages });
+                const t = (data && data.text) || '';
+                senseTexts.set(sense.id, (senseTexts.get(sense.id) || '') + t + '\n\n');
+                eotEntries.push({ kind: 'sense-ocr', sense: sense.name, page: i, chars: t.length });
+              } catch (senseErr) {
+                this.logAdd('⊘', `${sense.name} failed on page ${i}/${pdf.numPages} — ${senseErr.message}`, 'sources');
+                eotEntries.push({ kind: 'sense-ocr-failed', sense: sense.name, page: i, error: senseErr.message });
+              }
+            }
           }
         } catch (ocrErr) {
           this.logAdd('⊘', `OCR failed for "${file.name}" — ${ocrErr.message}`, 'sources');
@@ -4087,8 +4414,18 @@ class Component extends DCLogic {
         }
       }
 
-      const finalText = ocrText || text;
-      const extractMethod = ocrText ? 'ocr' : 'pdf-text-layer';
+      // Multiple active senses can each contribute — every one that produced
+      // text gets its own labeled section rather than one silently winning,
+      // so a reader comparing OCR quality across senses can actually do that
+      // from the ingested text itself.
+      const senseSections = otherOcrSenses
+        .map(sense => ({ name: sense.name, text: (senseTexts.get(sense.id) || '').trim() }))
+        .filter(s => s.text)
+        .map(s => `--- OCR via ${s.name} ---\n\n${s.text}`);
+      const combinedOcr = [ocrText.trim() ? `--- OCR via Tesseract.js ---\n\n${ocrText.trim()}` : '', ...senseSections]
+        .filter(Boolean).join('\n\n');
+      const finalText = combinedOcr || text;
+      const extractMethod = combinedOcr ? 'ocr' : 'pdf-text-layer';
       const result = await this._ingestTextContent(file.name, finalText, projectId);
       this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
       this.setState(s => ({
@@ -4100,6 +4437,68 @@ class Component extends DCLogic {
       }));
       this.fetchWindowOutline(file.name, finalText);
       this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
+    } catch (err) {
+      this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
+      this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
+    }
+  }
+
+  // Images have no text layer to fall back on the way a PDF does — the only
+  // way one becomes searchable is a connected vision sense. Every active,
+  // connected sense across all four categories gets a look (grounding, vlm,
+  // ocr, detection all return something usable: an element list, a caption,
+  // transcribed text, a list of detected objects) and whatever comes back is
+  // ingested, each contribution labeled by which sense produced it — several
+  // senses can and do run on the same image. No connected sense means
+  // exactly what it meant before the Senses tab existed: stored for reading,
+  // not indexed — now with a pointer to where that changes.
+  async _uploadImageBinary(file, projectId) {
+    this.markSource(file.name, { processing: true, glyph: '◌', color: '#A39D91' });
+    if (!this._uploadBlobUrls) this._uploadBlobUrls = new Map();
+    this._uploadBlobUrls.set(file.name, URL.createObjectURL(file));
+
+    const categories = ['grounding', 'vlm', 'ocr', 'detection'];
+    const senses = categories.flatMap(cat => this._activeConnectedSenses(cat));
+    const disconnected = categories.flatMap(cat => this._activeDisconnectedSenses(cat));
+
+    if (!senses.length) {
+      this.markSource(file.name, { processing: false, glyph: '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+      const gapNote = disconnected.length
+        ? ` — active but not connected: ${disconnected.map(s => s.name).join(', ')}. Add an endpoint in Senses.`
+        : ' — no vision sense is active. Pick one in the Senses tab and give it an endpoint.';
+      this.logAdd('◱', `Stored "${file.name}" for reading — image not parsed for search${gapNote}`, 'sources');
+      return;
+    }
+
+    this.logAdd('○', `Asking ${senses.length} sense${senses.length === 1 ? '' : 's'} about "${file.name}"…`, 'sources');
+    const sections = [];
+    for (const sense of senses) {
+      try {
+        const data = await this._callSenseEndpoint(sense, file);
+        const t = (data && data.text) || '';
+        if (t.trim()) sections.push(`--- ${sense.name} (${sense.category}) ---\n\n${t.trim()}`);
+        else this.logAdd('○', `${sense.name} returned nothing for "${file.name}"`, 'sources');
+      } catch (err) {
+        this.logAdd('⊘', `${sense.name} failed on "${file.name}" — ${err.message}`, 'sources');
+      }
+    }
+    if (disconnected.length) {
+      this.logAdd('⊘', `Also active but not connected: ${disconnected.map(s => s.name).join(', ')}`, 'sources');
+    }
+
+    if (!sections.length) {
+      this.markSource(file.name, { processing: false, glyph: '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+      this.logAdd('◱', `Stored "${file.name}" for reading — every active sense failed or returned nothing`, 'sources');
+      return;
+    }
+
+    const finalText = sections.join('\n\n');
+    try {
+      const result = await this._ingestTextContent(file.name, finalText, projectId);
+      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
+      this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: finalText } }));
+      this.fetchWindowOutline(file.name, finalText);
+      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${sections.length} sense(s) contributed (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
       this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
       this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
@@ -4984,7 +5383,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose');
+    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose'), se = tabStyle('senses');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // Selection is by referent id — the identity the engine assigned — so two
@@ -5676,7 +6075,7 @@ class Component extends DCLogic {
 
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose',
+      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose', isSenses: t === 'senses',
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
       webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
@@ -5744,12 +6143,14 @@ class Component extends DCLogic {
       tabChat: () => this.setState({ tab: 'chat' }), tabOutline: () => this.setState({ tab: 'outline' }),
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
       tabPriors: () => this.setState({ tab: 'priors' }), tabCompose: () => this.setState({ tab: 'compose' }),
+      tabSenses: () => this.setState({ tab: 'senses' }),
       tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
       tabChatColor: c.color, tabChatUnderline: c.underline,
       tabOutlineColor: o.color, tabOutlineUnderline: o.underline,
       tabOrbitColor: r.color, tabOrbitUnderline: r.underline,
       tabGlassBoxColor: g.color, tabGlassBoxUnderline: g.underline,
       tabPriorsColor: pr.color, tabPriorsUnderline: pr.underline,
+      tabSensesColor: se.color, tabSensesUnderline: se.underline,
       tabComposeColor: cp.color, tabComposeUnderline: cp.underline,
       composeTask: S.composeTask,
       onComposeTask: (e) => this.onComposeTask(e),
@@ -6357,6 +6758,121 @@ class Component extends DCLogic {
       priorsMessage: S._priorsError
         ? `Priors unavailable — ${S._priorsError}`
         : (S._priors === null ? 'Loading priors…' : 'No priors in the pool.'),
+      // Grouped by category (grounding/vlm/ocr/detection) in the server's
+      // declared order, not alphabetically — that order is "where on screen"
+      // → "what's in the image" → "what does it say" → "what real-world
+      // objects", which is the order a reader actually reasons about a
+      // capture in.
+      senseGenres: (() => {
+        const categories = S._sensesCategories && S._sensesCategories.length
+          ? S._sensesCategories
+          : [{ id: 'grounding', label: 'Screen grounding', detail: '' }, { id: 'vlm', label: 'General vision', detail: '' },
+             { id: 'ocr', label: 'OCR', detail: '' }, { id: 'detection', label: 'Object detection', detail: '' }];
+        const byCategory = new Map(categories.map(c => [c.id, []]));
+        (S._senses || []).forEach(sn => {
+          if (!byCategory.has(sn.category)) byCategory.set(sn.category, []);
+          byCategory.get(sn.category).push(sn);
+        });
+        return categories.filter(cat => (byCategory.get(cat.id) || []).length).map(cat => {
+          const items = (byCategory.get(cat.id) || []).slice().sort((a, b) => a.name.localeCompare(b.name)).map(sn => {
+            const opened = !!S.senseItemOpen[sn.id];
+            const draft = S.senseEndpointDraft[sn.id] ?? (sn.endpoint || '');
+            return {
+              id: sn.id,
+              name: sn.name,
+              vendor: sn.vendor,
+              summary: sn.summary,
+              license: sn.license,
+              sizes: sn.sizes,
+              needsEndpoint: sn.needsEndpoint,
+              builtIn: !sn.needsEndpoint,
+              connectedLabel: sn.connected ? 'connected' : 'not connected',
+              connectedColor: sn.connected ? '#1F5A4C' : '#A3592B',
+              connectedBg: sn.connected ? '#E4EEE9' : '#FBEFE3',
+              subSwitchBg: sn.subscribed ? '#1F5A4C' : '#E0DACE',
+              subKnobLeft: sn.subscribed ? '13px' : '2px',
+              toggleSubscribed: (e) => { e.stopPropagation(); this.setSensesSubscribed([sn.id], !sn.subscribed); },
+              // The active switch is only meaningful once subscribed — dimmed
+              // rather than hidden, so a reader sees ingestion activation
+              // exists before they've earned it, and clicking it while
+              // unsubscribed subscribes first instead of doing nothing.
+              activeSwitchBg: sn.active ? '#1F5A4C' : '#E0DACE',
+              activeKnobLeft: sn.active ? '13px' : '2px',
+              activeOpacity: sn.subscribed ? 1 : 0.45,
+              activeCursor: 'pointer',
+              toggleActive: (e) => {
+                e.stopPropagation();
+                if (!sn.subscribed && !sn.active) { this.setSensesSubscribed([sn.id], true).then(() => this.setSensesActive([sn.id], true)); return; }
+                this.setSensesActive([sn.id], !sn.active);
+              },
+              expanded: opened,
+              chevronClass: opened ? 'ph ph-caret-down' : 'ph ph-caret-right',
+              toggleContent: () => this.toggleSenseItem(sn.id),
+              endpointDraft: draft,
+              onEndpointChange: (e) => this.onSenseEndpointChange(sn.id, e.target.value),
+              saveEndpoint: (e) => { e.stopPropagation(); this.saveSenseEndpoint(sn.id); },
+            };
+          });
+          const subscribedCount = items.filter(it => it.subSwitchBg === '#1F5A4C').length;
+          const activeCount = items.filter(it => it.activeSwitchBg === '#1F5A4C').length;
+          return {
+            id: cat.id,
+            name: cat.label,
+            detail: cat.detail,
+            subscribedCount: `${subscribedCount}/${items.length}`,
+            activeCount: `${activeCount}`,
+            expanded: !!S.senseCategoryOpen[cat.id],
+            chevronClass: S.senseCategoryOpen[cat.id] ? 'ph ph-caret-down' : 'ph ph-caret-right',
+            toggle: () => this.toggleSenseCategory(cat.id),
+            items,
+          };
+        });
+      })(),
+      noSenses: !(S._senses || []).length,
+      sensesMessage: S._sensesError
+        ? `Senses unavailable — ${S._sensesError}`
+        : (S._senses === null ? 'Loading senses…' : 'No senses in the catalog.'),
+      checkHuggingFace: () => this.fetchSensesDiscover(true),
+      discoverButtonLabel: S.sensesDiscoverLoading ? 'Checking…' : 'Check Hugging Face',
+      // A 200 with every query failed and a 200 with a genuinely empty
+      // result read identically as JSON — `errors.length` is what tells them
+      // apart, and it must show up here, not just ride along unread in
+      // `_sensesDiscover.errors`. "0 found" and "couldn't check" are
+      // different facts and must not read alike.
+      discoverStatusLabel: S.sensesDiscoverLoading
+        ? 'Querying huggingface.co/api/models…'
+        : (S._sensesDiscoverError
+            ? `Last check failed — ${S._sensesDiscoverError}`
+            : (S._sensesDiscover
+                ? (S._sensesDiscover.errors && S._sensesDiscover.errors.length
+                    ? (S._sensesDiscover.discovered.length
+                        ? `Last checked ${new Date(S._sensesDiscover.lastRefreshed).toLocaleString()} · ${S._sensesDiscover.discovered.length} found · ${S._sensesDiscover.errors.length} quer${S._sensesDiscover.errors.length === 1 ? 'y' : 'ies'} failed`
+                        : `Could not reach Hugging Face — ${S._sensesDiscover.errors.length} quer${S._sensesDiscover.errors.length === 1 ? 'y' : 'ies'} failed, none succeeded`)
+                    : `Last checked ${new Date(S._sensesDiscover.lastRefreshed).toLocaleString()} · ${S._sensesDiscover.discovered.length} found`)
+                : 'Not checked yet — searches the Hub by task, plus known grounding/OCR publishers')),
+      discoverRows: ((S._sensesDiscover && S._sensesDiscover.discovered) || []).map(d => {
+        const isNew = (S._sensesDiscover.isNew || []).includes(d.id);
+        const inLibrary = !!d.alreadyInLibrary;
+        return {
+          id: d.id,
+          name: d.id,
+          hfUrl: d.hfUrl,
+          isNew,
+          meta: `${d.category} · ${d.license}${d.licenseFlag ? ' ⚠' : ''} · ${(d.downloads || 0).toLocaleString()} downloads`,
+          licenseColor: d.licenseFlag ? '#A3592B' : '#A39D91',
+          inLibrary,
+          notInLibrary: !inLibrary,
+          add: () => this.addDiscoveredSense(d.id),
+        };
+      }),
+      noDiscoverRows: !((S._sensesDiscover && S._sensesDiscover.discovered) || []).length,
+      discoverEmptyMessage: S._sensesDiscoverError
+        ? 'Could not reach the proxy.'
+        : (S._sensesDiscover
+            ? (S._sensesDiscover.errors && S._sensesDiscover.errors.length
+                ? `Could not reach Hugging Face — every query failed (${S._sensesDiscover.errors.length}).`
+                : 'No models found.')
+            : 'Nothing checked yet.'),
       // Headings from the engine's boundary detector, not from lines that
       // happen to be uppercase — that heuristic returned Gutenberg's licence
       // banner and missed every "Chapter 5". Each entry carries the byte offset
