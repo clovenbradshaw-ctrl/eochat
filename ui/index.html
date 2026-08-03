@@ -1166,26 +1166,36 @@
         </sc-if>
 
         <sc-if value="{{ readerModeScroll }}">
+          <div style="max-width:720px; margin:0 auto;">
           <sc-for list="{{ readerSections }}" as="sec">
             <div id="{{ sec.anchorId }}" style="margin:{{ sec.secMargin }}; background:{{ sec.secBg }}; border-left:{{ sec.secRail }}; padding:{{ sec.secPad }};">
               <sc-if value="{{ sec.showHeading }}">
                 <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; margin-bottom:9px;">{{ sec.heading }}</span>
               </sc-if>
-              <span style="font-family:Georgia, 'Times New Roman', serif; font-size:15.5px; line-height:1.85; color:#26241F; text-wrap:pretty; white-space:pre-wrap;">{{ sec.bodyNodes }}</span>
+              <span style="font-family:Georgia, 'Times New Roman', serif; font-size:16px; line-height:1.85; color:#26241F; text-wrap:pretty; white-space:pre-wrap;">{{ sec.bodyNodes }}</span>
             </div>
           </sc-for>
+          </div>
         </sc-if>
 
         <sc-if value="{{ readerModePaginated }}">
+          <div style="max-width:720px; margin:0 auto;">
           <div style="margin-bottom:22px;">
             <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:11.5px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; margin-bottom:9px;">{{ readerCurrentHeading }}</span>
-            <span style="font-family:Georgia, 'Times New Roman', serif; font-size:15.5px; line-height:1.85; color:#26241F; text-wrap:pretty; white-space:pre-wrap;">{{ readerCurrentBodyNodes }}</span>
+            <span style="font-family:Georgia, 'Times New Roman', serif; font-size:16px; line-height:1.85; color:#26241F; text-wrap:pretty; white-space:pre-wrap;">{{ readerCurrentBodyNodes }}</span>
           </div>
             <div style="display:flex; align-items:center; justify-content:space-between; padding-top:20px; border-top:1px solid #EBE6DC;">
               <button type="button" onClick="{{ readerSectionPrev }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:6px 12px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">← Prev</button>
               <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#A39D91;">{{ readerSectionPos }}</span>
               <button type="button" onClick="{{ readerSectionNext }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:6px 12px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Next →</button>
             </div>
+            <sc-if value="{{ readerShowMoreBeyondWindow }}">
+              <div style="display:flex; align-items:center; gap:6px; justify-content:center; padding-top:12px;">
+                <span style="font-size:11px; color:#A39D91;">more of this document hasn't been loaded yet</span>
+                <button type="button" onClick="{{ jumpReaderOverview }}" style="border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; cursor:pointer; padding:0;">open the table of contents →</button>
+              </div>
+            </sc-if>
+          </div>
           </sc-if>
 
           <span style="display:block; margin-top:8px; font-size:11px; color:#A39D91;">click a highlighted name to open its profile →</span>
@@ -1727,6 +1737,15 @@ class Component extends DCLogic {
     // `outlines` carries real headings with byte offsets, from the same
     // detector the engine uses — not lines that happen to be uppercase.
     folds: {}, outlines: {}, foldPending: {},
+    // The structure of whatever is CURRENTLY LOADED in readerContent[name] —
+    // as opposed to `outlines`, which is the whole document's structure,
+    // measured against the file on disk and possibly reaching past what's
+    // loaded. This one is always computed against the exact string sitting in
+    // readerContent, so its offsets always slice cleanly — it's what Scroll
+    // and Paginate actually cut into sections, and the only structure a
+    // source with no on-disk file (a prior card, a content-ingested upload)
+    // ever gets.
+    readerWindowOutlines: {},
     _recycleBin: [],
     recycleBinOpen: false,
     // PDF reader state: view mode (rendered/extracted/split), current page,
@@ -1772,6 +1791,24 @@ class Component extends DCLogic {
       if (e.key === 'Escape') {
         if (this.state.modal) this.closeModal();
         else if (this.state.settingsOpen) this.setState({ settingsOpen: false });
+        return;
+      }
+      // Kindle-style page turning while the reader is actually paginating —
+      // not while typing, and not in Overview (there's nothing to page
+      // through, only sections to pick).
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        const s = this.state;
+        if (!s.readerOpen || s.readerOverview || s.readerViewMode !== 'paginated') return;
+        const tag = (document.activeElement && document.activeElement.tagName) || '';
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        e.preventDefault();
+        // Over/under-shoot is harmless — render() clamps readerSectionIndex
+        // to the real section count every time, same as the Prev/Next buttons.
+        this.setState(s2 => ({
+          readerSectionIndex: e.key === 'ArrowRight'
+            ? s2.readerSectionIndex + 1
+            : Math.max(0, s2.readerSectionIndex - 1),
+        }));
       }
     };
     document.addEventListener('keydown', this._onWindowKeyDown);
@@ -2149,17 +2186,26 @@ class Component extends DCLogic {
   // readerContent), so opening one never re-fetches what the other already
   // pulled down. The card layer is the readable projection; the raw JSON is
   // the authority, and is what this falls back to when no card was built.
-  async fetchPriorContent(id) {
+  // `max` widens the byte cap past the server's 40,000-byte default — the
+  // full reader passes a larger one so a substantial card doesn't open
+  // pre-truncated; the Priors tab's inline peek doesn't need it. A cache hit
+  // still short-circuits UNLESS a wider max is being asked of an entry that
+  // is already known to be truncated — otherwise opening the full reader
+  // after peeking in the tab would just be stuck with the small read.
+  async fetchPriorContent(id, { max } = {}) {
     const name = 'prior:' + id;
-    if (this.state.readerContent[name]) return;
+    const cached = this.state.readerContent[name];
+    const cachedTruncated = typeof cached === 'string' && cached.endsWith('(truncated — the rest is readable by byte range)');
+    if (cached && !(max && cachedTruncated)) return cached;
     this.setState(s => ({ readerContent: { ...s.readerContent, [name]: 'Loading prior…' } }));
     let text;
+    const maxParam = max ? '&max=' + max : '';
     try {
-      const res = await fetch(this.proxyUrl() + '/api/priors/read?id=' + encodeURIComponent(id) + '&layer=card', { signal: AbortSignal.timeout(20000) });
+      const res = await fetch(this.proxyUrl() + '/api/priors/read?id=' + encodeURIComponent(id) + '&layer=card' + maxParam, { signal: AbortSignal.timeout(20000) });
       const data = await res.json();
       // No card built is a typed gap, not a failure — fall back to raw bytes.
       if (data.error) {
-        const rawRes = await fetch(this.proxyUrl() + '/api/priors/read?id=' + encodeURIComponent(id) + '&layer=raw', { signal: AbortSignal.timeout(20000) });
+        const rawRes = await fetch(this.proxyUrl() + '/api/priors/read?id=' + encodeURIComponent(id) + '&layer=raw' + maxParam, { signal: AbortSignal.timeout(20000) });
         const raw = await rawRes.json();
         text = raw.error ? `(prior unreadable — card: ${data.error}; raw: ${raw.error})` : raw.text;
         if (raw.truncated) text += '\n\n(truncated — the rest is readable by byte range)';
@@ -2171,6 +2217,7 @@ class Component extends DCLogic {
       text = `(could not read prior "${id}": ${err.message})`;
     }
     this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
+    return text;
   }
 
   // Expands a prior's content right inside the Priors tab. This is the
@@ -2184,16 +2231,23 @@ class Component extends DCLogic {
   }
 
   // Priors open by id through /api/priors/read, not through the attachments
-  // endpoint the corpus reader uses — they are not session uploads.
+  // endpoint the corpus reader uses — they are not session uploads. Opens the
+  // same way any other source does now — Overview first, structure detected
+  // from the card's own text — instead of dumping straight into a raw scroll,
+  // which is what made a prior read like a JSON export instead of a document.
   async openPrior(id) {
+    const name = 'prior:' + id;
     this.setState({
-      readerOpen: true, readerSourceName: 'prior:' + id, readerViewMode: 'scroll', readerSectionIndex: 0,
-      readerOverview: false,
+      readerOpen: true, readerSourceName: name, readerViewMode: 'scroll', readerSectionIndex: 0,
+      readerOverview: true, readerHighlight: null,
       readerSortCol: null, readerSortDir: 'asc',
       readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
     });
     this.logAdd('◱', `Opened prior "${id}" in reader`, 'reader');
-    await this.fetchPriorContent(id);
+    // A wider cap than the Priors tab's inline peek — the full reader is
+    // where a large card should actually be read, not just previewed.
+    const text = await this.fetchPriorContent(id, { max: 400000 });
+    if (typeof text === 'string' && !text.startsWith('(')) this.fetchWindowOutline(name, text);
   }
 
   // Switches one or more priors on/off — a single item, or every item in a
@@ -2894,6 +2948,29 @@ class Component extends DCLogic {
       else this.logAdd('◱', `Outline "${name}": ${(data.headings || []).length} heading(s)`, 'perception');
     } catch (e) {
       this.setState(s => ({ outlines: { ...s.outlines, [name]: { error: String(e.message || e) } } }));
+    }
+  }
+
+  // The structure of the text actually sitting in readerContent[name] right
+  // now — recomputed every time that text changes (a fresh open, a seek to a
+  // new byte window, a prior's card finishing its fetch). Always safe to
+  // slice: this asks the same boundary detector to find headings in exactly
+  // the string the reader already holds, so an offset it returns can never
+  // point past what's loaded. That's what makes it usable for sources
+  // fetchOutline can't reach at all — a prior's card is a real file on disk
+  // but in the "priors" pool, not the corpus pool fetchOutline's `source`
+  // path searches, and a content-ingested upload has no file on disk to
+  // measure in the first place.
+  async fetchWindowOutline(name, text) {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/verbatim/outline', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }), signal: AbortSignal.timeout(30000)
+      });
+      const data = await res.json();
+      this.setState(s => ({ readerWindowOutlines: { ...s.readerWindowOutlines, [name]: data } }));
+    } catch (e) {
+      this.setState(s => ({ readerWindowOutlines: { ...s.readerWindowOutlines, [name]: { error: String(e.message || e) } } }));
     }
   }
 
@@ -3859,6 +3936,7 @@ class Component extends DCLogic {
         // Cache locally so the reader can render it (e.g. the spreadsheet grid)
         // without a round trip back through the proxy's attachment store.
         this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: text } }));
+        if (type !== 'spreadsheet') this.fetchWindowOutline(file.name, text);
         this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
       } catch (err) {
         this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
@@ -4004,6 +4082,7 @@ class Component extends DCLogic {
         readerPDFNumPages: pdf.numPages,
         readerPDFBlob: this._uploadBlobUrls.get(file.name),
       }));
+      this.fetchWindowOutline(file.name, finalText);
       this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
       this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
@@ -4176,6 +4255,7 @@ class Component extends DCLogic {
         const data = await res.json();
         if (!data.error && typeof data.text === 'string') {
           put(data.text);
+          this.fetchWindowOutline(name, data.text);
           this.logAdd('◱', `Read "${name}" — bytes ${data.byte_start}–${data.byte_end} of ${data.total_bytes}${data.truncated ? ' (truncated)' : ''}`, 'reader');
           return;
         }
@@ -4183,7 +4263,12 @@ class Component extends DCLogic {
     } catch {}
     try {
       const res = await fetch(this.proxyUrl() + '/api/attachments/content?session=' + this.sessionId() + '&name=' + encodeURIComponent(name), { signal: AbortSignal.timeout(5000) });
-      if (res.ok) { put(await res.text()); return; }
+      if (res.ok) {
+        const text = await res.text();
+        put(text);
+        this.fetchWindowOutline(name, text);
+        return;
+      }
     } catch {}
     put('(Content not available from proxy)');
   }
@@ -4298,6 +4383,7 @@ class Component extends DCLogic {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       this.setState(s => ({ readerContent: { ...s.readerContent, [name]: data.text } }));
+      this.fetchWindowOutline(name, data.text);
       this.logAdd('◱', `Seek "${name}" → byte ${data.byte_start}${data.truncated ? ` (window ends ${data.byte_end} of ${data.total_bytes})` : ''}`, 'reader');
     } catch (e) {
       this.setState(s => ({ readerContent: { ...s.readerContent, [name]: `(Could not read from byte ${byteStart} — ${e.message || e})` } }));
@@ -5301,18 +5387,29 @@ class Component extends DCLogic {
     // an overview; a real PDF keeps its own rendered/extracted/split modes and
     // video/audio/spreadsheet have no structure to show.
     const readerOverviewMode = S.readerOverview && readerType === 'pdf' && !readerIsPDFKind && !!S.readerSourceName;
-    const outlineObj = S.readerSourceName ? (S.outlines[S.readerSourceName] || null) : null;
-    const outlineHasHeadings = !!(outlineObj && !outlineObj.error && !outlineObj.gap && (outlineObj.headings || []).length);
-    const readerOutlineRows = outlineHasHeadings
-      ? outlineObj.headings.map((h, i) => ({
-          num: String(i + 1).padStart(2, '0'),
-          label: h.label || `Section ${i + 1}`,
-          // Byte-addressed seek, same as the Outline tab — jumps into the text
-          // at exactly where the engine measured the heading to start.
-          seek: () => this.openReaderAtByte(S.readerSourceName, h.byte_start),
-        }))
-      : [];
-    const readerOverviewContentLoaded = !!contentText && contentText !== 'Loading content…';
+    // Two outlines can exist for the one open document:
+    //  - the DOCUMENT outline (S.outlines) is byte-addressed, measured
+    //    against the file on disk, and can name a heading past what's
+    //    currently loaded — seeking it fetches a fresh byte window.
+    //  - the WINDOW outline (S.readerWindowOutlines) is measured against
+    //    exactly the text sitting in readerContent right now, so it can
+    //    never name anything the reader can't already slice — see
+    //    fetchWindowOutline.
+    // The document outline is preferred where it exists (it can reach
+    // further into a large book); the window outline is the fallback, and
+    // the only structure a source with no on-disk file — a prior's card, a
+    // content-ingested upload — is ever going to get.
+    const docOutlineObj = S.readerSourceName ? (S.outlines[S.readerSourceName] || null) : null;
+    const docOutlineUsable = !!(docOutlineObj && !docOutlineObj.error && !docOutlineObj.gap && (docOutlineObj.headings || []).length);
+    const winOutlineObj = S.readerSourceName ? (S.readerWindowOutlines[S.readerSourceName] || null) : null;
+    const winOutlineUsable = !!(winOutlineObj && !winOutlineObj.error && !winOutlineObj.gap && (winOutlineObj.headings || []).length);
+    const outlineObj = docOutlineUsable ? docOutlineObj : (winOutlineObj || docOutlineObj);
+    const outlineHasHeadings = docOutlineUsable || winOutlineUsable;
+    // readerOutlineRows (the Overview panel's table of contents) is built
+    // below, once readerSections exists — a window-outline row pages
+    // straight into those sections rather than fetching anything, and needs
+    // to know their index.
+    const readerOverviewContentLoaded = !!contentText && contentText !== 'Loading content…' && contentText !== 'Loading prior…';
     const readerOverviewTitle = readerOverviewContentLoaded
       ? this._extractTitle(contentText.replace(/\s+/g, ' ').trim(), S.readerSourceName || '')
       : (S.readerSourceName || '');
@@ -5373,12 +5470,58 @@ class Component extends DCLogic {
     const readerHighlightNote = hlFound ? hlFound.note : null;
     const hlRange = contentLines.length && hlFound ? hlFound.range : null;
 
-    // The document's real sections. Pagination and the outline chips key off
-    // this and only this — marking a citation must not invent structure the
-    // source does not have.
-    const readerSections = contentLines.length
-      ? [{ heading: 'Content', body: contentText }]
-      : [{ heading: 'No content', body: 'Source content not yet loaded.' }];
+    // The reader's real sections. Scroll's dividers, Paginate's pages, and
+    // the outline chips key off this and only this. Built from the WINDOW
+    // outline, never the document one — every offset in it was measured
+    // against this exact contentText, so a section here is never invented
+    // past what's actually loaded, and slicing it can never land mid-word.
+    const readerSections = (() => {
+      if (!contentLines.length) return [{ heading: 'No content', body: 'Source content not yet loaded.' }];
+      if (!winOutlineUsable) return [{ heading: 'Content', body: contentText }];
+      const secs = [];
+      // Text before the first heading is real content (a title page, a
+      // preamble) and gets its own unlabeled section, same as the engine's
+      // own outline treats it — see outlineOfText's preambleEnd.
+      const preEnd = winOutlineObj.preambleEnd;
+      if (typeof preEnd === 'number' && preEnd > 0 && preEnd <= contentText.length) {
+        const pre = contentText.slice(0, preEnd);
+        if (pre.trim()) secs.push({ heading: '', body: pre });
+      }
+      for (const h of winOutlineObj.headings) {
+        secs.push({ heading: h.label, body: contentText.slice(h.bodyStart, Math.min(h.end, contentText.length)) });
+      }
+      return secs.length ? secs : [{ heading: 'Content', body: contentText }];
+    })();
+
+    // The Overview panel's table of contents. Prefers the document outline —
+    // its rows can seek to a chapter the reader hasn't loaded yet, exactly
+    // like the Outline tab does. Falls back to the window outline, whose rows
+    // page straight into the readerSections just built (the offset arithmetic
+    // accounts for a leading preamble section, if one was added above).
+    const readerOutlineRows = docOutlineUsable
+      ? docOutlineObj.headings.map((h, i) => ({
+          num: String(i + 1).padStart(2, '0'),
+          label: h.label || `Section ${i + 1}`,
+          // Byte-addressed seek, same as the Outline tab — jumps into the text
+          // at exactly where the engine measured the heading to start.
+          seek: () => this.openReaderAtByte(S.readerSourceName, h.byte_start),
+        }))
+      : winOutlineUsable
+        ? winOutlineObj.headings.map((h, i) => ({
+            num: String(i + 1).padStart(2, '0'),
+            label: h.label || `Section ${i + 1}`,
+            seek: () => this.setState({
+              readerOverview: false, readerViewMode: 'paginated',
+              readerSectionIndex: i + (readerSections.length - winOutlineObj.headings.length),
+            }),
+          }))
+        : [];
+    // Paginate's last loaded section isn't necessarily the document's last —
+    // the document outline can name chapters the window outline never saw,
+    // because they're past what's currently fetched. Reaching the last
+    // loaded page with no signal of that would read as the end of the book.
+    const readerMoreBeyondWindow = docOutlineUsable && winOutlineUsable
+      && docOutlineObj.headings.length > winOutlineObj.headings.length;
 
     // Display-only split: the same single section cut into before / cited /
     // after so the cited run can carry its own styling.
@@ -5477,7 +5620,7 @@ class Component extends DCLogic {
     }
     const readerSectionIndex = Math.min(S.readerSectionIndex, Math.max(0, readerSections.length - 1));
     const docOutline = readerSections.length > 1 ? readerSections.map((sec, i) => ({
-      label: sec.heading, bg: i === (S.readerViewMode === 'paginated' ? readerSectionIndex : -1) ? '#F2EFE8' : 'transparent', color: '#26241F',
+      label: sec.heading || 'Beginning', bg: i === (S.readerViewMode === 'paginated' ? readerSectionIndex : -1) ? '#F2EFE8' : 'transparent', color: '#26241F',
       jump: () => this.setState({ readerViewMode: 'paginated', readerSectionIndex: i })
     })) : [];
 
@@ -6018,6 +6161,12 @@ class Component extends DCLogic {
       readerSectionPos: `${readerSectionIndex + 1} of ${readerSections.length || 1}`,
       readerSectionPrev: () => this.setState(s => ({ readerSectionIndex: Math.max(0, s.readerSectionIndex - 1) })),
       readerSectionNext: () => this.setState(s => ({ readerSectionIndex: Math.min(readerSections.length - 1, s.readerSectionIndex + 1) })),
+      // Shown only at the last loaded page — the document has more structure
+      // than what's currently fetched, and the Overview panel is where the
+      // full table of contents (and the seek that reaches past this window)
+      // actually lives.
+      readerShowMoreBeyondWindow: readerMoreBeyondWindow && readerSectionIndex === readerSections.length - 1,
+      jumpReaderOverview: () => this.setState({ readerOverview: true }),
       entityRows,
       entityRungRows, entityGroupPathRows, entityLadderRows, entityListShowing,
       ladderRungName: ladderRung, ladderNote, ladderIsFilter, ladderViewShowing,
