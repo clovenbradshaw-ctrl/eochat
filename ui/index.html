@@ -69,6 +69,12 @@
   .eo-scrollbar::-webkit-scrollbar-thumb { background: #E0DACE; border-radius: 4px; }
   .eo-fade-in { animation: eoFadeIn .2s ease-out; }
   @keyframes eoFadeIn { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
+  /* Mobile-only affordances (hamburger/entities triggers, drawer close buttons)
+     and the shared tap-outside backdrop. Both are inert on desktop: the buttons
+     stay hidden and the backdrop only ever renders as an open overlay inside
+     the narrow-screen media query below. */
+  .eo-mobile-only { display: none; }
+  .eo-backdrop { display: none; }
   .eo-md { line-height:1.72; text-wrap:pretty; word-break:break-word; }
   .eo-md p { margin:0 0 .6em; }
   .eo-md p:last-child { margin-bottom:0; }
@@ -98,30 +104,75 @@
      about where the decision belongs. Layout is CSS's job; the state only says
      which panel the reader opened.
 
-     Below 900px the reader and the right rail are dropped rather than
-     squeezed: at that width they are narrower than the passage text they
-     exist to show, so keeping them would cost the chat its column and give
-     nothing back. The left panel keeps its collapsed 52px rail, which is what
-     makes it reopenable — hiding it outright on mobile would strand a reader
-     with no route back to their sources. When expanded, it floats over the
-     chat instead of stealing a track from it. */
+     Below 900px the four-column grid collapses to a single column and the
+     Sources and Entities panels become off-canvas drawers (slide-in via
+     translateX, tap-outside backdrop, close buttons) rather than being
+     squeezed into phone-width columns — the same drawer-vs-stack decision the
+     design reference defines. The reader takes the whole screen when open,
+     and the chat is the only in-flow column, so main needs no pinned grid
+     column: it is the sole grid item left. */
   @media (max-width: 900px) {
-    .eo-shell { grid-template-columns: auto minmax(0, 1fr) !important; }
-    .eo-reader-col, .eo-right-rail { display: none !important; }
-    .eo-left.eo-left-expanded {
-      position: absolute !important;
+    .eo-shell { grid-template-columns: minmax(0, 1fr) !important; }
+
+    .eo-mobile-only { display: inline-flex; }
+    .eo-strap { display: none; }
+
+    /* Tabs row scrolls horizontally instead of wrapping, so eight tabs never
+       crowd a narrow screen. */
+    .eo-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; flex-wrap: nowrap !important; }
+    .eo-tabs::-webkit-scrollbar { display: none; }
+    .eo-tabs > button { flex: none; }
+
+    .eo-panel-pad { padding: 16px !important; }
+    .eo-composer-pad { padding: 12px 14px !important; }
+    .eo-reader-header-pad { padding: 12px 14px !important; }
+    .eo-reader-scroll-pad { padding: 20px 0 !important; }
+    /* Below 16px, iOS Safari auto-zooms the page on input focus. */
+    input.eo-input-text, textarea.eo-input-text, .eo-composer textarea { font-size: 16px !important; }
+    /* The space switcher dropdown clamps to the viewport instead of its
+       desktop anchor, which would otherwise clip off a narrow phone. */
+    .eo-space-dropdown { left: 0 !important; width: min(84vw, 260px) !important; }
+
+    /* Sources panel → off-canvas drawer (left). */
+    .eo-left {
+      position: fixed !important;
       top: 0; bottom: 0; left: 0;
-      width: min(86vw, 300px) !important;
-      z-index: 40;
-      box-shadow: 0 12px 40px -12px rgba(28,26,23,.45);
+      width: min(86vw, 320px);
+      z-index: 50;
+      box-shadow: 0 20px 60px -20px rgba(28,26,23,.45);
+      transition: transform .22s ease;
+      overflow-y: auto;
+      transform: translateX(-100%);
+      border-right: 1px solid #EBE6DC !important;
     }
-    /* An absolutely positioned grid child leaves auto-placement, so without
-       this the chat slides up into the rail's track and the track meant for
-       it collapses to zero — measured at 390px wide: "372px 0px", a full-width
-       sidebar and a chat column with no width at all. Pinning the chat to
-       column 2 makes the track assignment independent of whether the panel is
-       currently in flow. */
-    .eo-shell > .eo-main { grid-column: 2 !important; }
+    .eo-left.is-open { transform: translateX(0); }
+
+    /* Entities rail → off-canvas drawer (right). */
+    .eo-right-rail {
+      position: fixed !important;
+      top: 0; bottom: 0; right: 0;
+      width: min(86vw, 320px);
+      z-index: 50;
+      box-shadow: 0 20px 60px -20px rgba(28,26,23,.45);
+      transition: transform .22s ease;
+      overflow-y: auto;
+      transform: translateX(100%);
+      border-left: 1px solid #EBE6DC !important;
+    }
+    .eo-right-rail.is-open { transform: translateX(0); }
+
+    /* Reader → full-screen when open, out of flow when closed. */
+    .eo-reader-col { display: none !important; }
+    .eo-reader-col.eo-reader-open {
+      position: fixed !important; inset: 0;
+      z-index: 45; background: #FFFDFA;
+      display: flex !important;
+    }
+
+    .eo-backdrop.is-open {
+      display: block; position: fixed; inset: 0;
+      background: rgba(20,18,15,.4); z-index: 40;
+    }
   }
 
   @media (max-width: 620px) {
@@ -130,7 +181,10 @@
     /* Touch targets: a 24px icon button is below every platform's minimum and
        is the difference between a control and a coin toss on a phone. */
     .eo-shell button { min-height: 32px; }
-    .eo-composer textarea { font-size: 16px !important; } /* iOS zooms below 16 */
+  }
+
+  @media (max-width: 480px) {
+    .eo-panel-pad { padding: 14px !important; }
   }
 </style>
 </helmet>
@@ -140,6 +194,7 @@
 
   <div class="eo-topbar" style="display:flex; align-items:center; justify-content:space-between; padding:0 2px;">
     <div style="display:flex; align-items:center; gap:10px; position:relative;">
+      <button type="button" class="eo-mobile-only" aria-label="Open sources" onClick="{{ openMobileLeft }}" style="width:34px; height:34px; align-items:center; justify-content:center; border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; color:#4A463E; cursor:pointer; padding:0; flex:none;"><i class="ph ph-list" style="font-size:16px;"></i></button>
       <sc-if value="{{ showingProjects }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C;">eochat</span>
       </sc-if>
@@ -149,7 +204,7 @@
         <span style="font-size:13px; color:#26241F; font-weight:500;">{{ activeProjectName }}</span>
       </sc-if>
       <sc-if value="{{ spacesOpen }}">
-      <div style="position:absolute; top:36px; left:76px; width:260px; max-height:60vh; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:6px; z-index:20; display:flex; flex-direction:column; gap:1px;" class="eo-scrollbar">
+      <div class="eo-space-dropdown eo-scrollbar" style="position:absolute; top:36px; left:76px; width:260px; max-height:60vh; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:6px; z-index:60; display:flex; flex-direction:column; gap:1px;">
         <button type="button" onClick="{{ addSpace }}" style="display:flex; align-items:center; gap:8px; border:0; background:none; border-radius:7px; padding:8px 9px; cursor:pointer; font-family:inherit; font-size:12.5px; color:#1F5A4C; margin-bottom:4px;">
           <span style="font-size:13px;">+</span><span>New chat</span>
         </button>
@@ -175,6 +230,7 @@
       </sc-if>
     </div>
     <div style="display:flex; align-items:center; gap:12px;">
+      <div class="eo-strap" style="display:flex; align-items:center; gap:12px;">
       <sc-if value="{{ proxyLive }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91; letter-spacing:.04em;">{{ proxyStatusText }}</span>
       </sc-if>
@@ -186,6 +242,10 @@
       </sc-if>
       <sc-if value="{{ model }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#8C877C;">{{ model }}</span>
+      </sc-if>
+      </div>
+      <sc-if value="{{ notShowingProjects }}">
+      <button type="button" class="eo-mobile-only" aria-label="Open entities" onClick="{{ openMobileRight }}" style="width:34px; height:34px; align-items:center; justify-content:center; border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; color:#4A463E; cursor:pointer; padding:0; flex:none;"><i class="ph ph-graph" style="font-size:16px;"></i></button>
       </sc-if>
       <button type="button" aria-label="Settings" onClick="{{ toggleSettings }}" style="width:30px; height:30px; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:#8C877C; cursor:pointer; font-size:16px;"><i class="ph ph-gear"></i></button>
     </div>
@@ -220,6 +280,8 @@
 
   <div class="eo-shell" style="position:relative; flex:1; min-height:0; display:grid; grid-template-columns: {{ leftColWidth }} minmax(0, 1fr) {{ readerColWidth }} {{ rightRailWidth }}; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:14px; box-shadow:0 1px 2px rgba(28,26,23,.04), 0 12px 28px -22px rgba(28,26,23,.35); overflow:hidden;">
 
+    <div class="eo-backdrop{{ backdropClass }}" onClick="{{ closeMobileDrawers }}"></div>
+
     <div class="{{ leftPanelClass }}" style="background:#FAF8F4; border-right:1px solid #EBE6DC; padding: {{ leftPadding }}; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; align-items: {{ leftAlign }};">
       <sc-if value="{{ leftCollapsed }}">
         <button type="button" aria-label="Expand sources" onClick="{{ toggleLeftCollapsed }}" style="width:26px; height:26px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-sidebar-simple" style="font-size:13px;"></i></button>
@@ -234,6 +296,7 @@
           <button type="button" aria-label="Add source" onClick="{{ addSource }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-plus" style="font-size:13px;"></i></button>
           </sc-if>
           <button type="button" aria-label="Collapse sources" onClick="{{ toggleLeftCollapsed }}" style="width:24px; height:24px; display:flex; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-sidebar-simple" style="font-size:13px;"></i></button>
+          <button type="button" class="eo-mobile-only" aria-label="Close sources" onClick="{{ closeMobileLeft }}" style="width:30px; height:30px; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-x" style="font-size:14px;"></i></button>
         </div>
       </div>
 
@@ -458,7 +521,7 @@
 
       <sc-if value="{{ notShowingProjects }}">
       <sc-if value="{{ showTabs }}">
-      <div style="display:flex; flex-wrap:wrap; gap:2px; padding:12px 20px 0; border-bottom:1px solid #EBE6DC;">
+      <div class="eo-tabs" style="display:flex; flex-wrap:wrap; gap:2px; padding:12px 20px 0; border-bottom:1px solid #EBE6DC;">
         <button type="button" onClick="{{ tabDocuments }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabDocumentsColor }}; box-shadow: {{ tabDocumentsUnderline }}; cursor:pointer;">Documents</button>
         <button type="button" onClick="{{ tabChat }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabChatColor }}; box-shadow: {{ tabChatUnderline }}; cursor:pointer;">Chat</button>
         <button type="button" onClick="{{ tabOutline }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOutlineColor }}; box-shadow: {{ tabOutlineUnderline }}; cursor:pointer;">Outline</button>
@@ -475,7 +538,7 @@
       </div>
 
       <sc-if value="{{ isChat }}">
-      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:20px; overflow:hidden;">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:20px; overflow:hidden;">
         <div ref="{{ chatScrollRef }}" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; align-items:center; gap:20px;" class="eo-scrollbar">
           <div style="width:100%; max-width:768px; display:flex; flex-direction:column; gap:20px;">
           <sc-if value="{{ showEmptyChat }}">
@@ -683,7 +746,7 @@
             <input type="text" placeholder="Waiting for response…" value="" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#8C877C; padding:6px 0; cursor:default;" readonly />
           </sc-if>
           <sc-if value="{{ !inputDisabled }}">
-            <textarea aria-label="Ask across your sources" placeholder="{{ composerPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" ref="{{ setComposerInput }}" rows="{{ 1 }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; line-height:1.5; color:#1B1A17; padding:6px 0; resize:none; overflow-y:auto; max-height:40vh;"></textarea>
+            <textarea class="eo-input-text" aria-label="Ask across your sources" placeholder="{{ composerPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" ref="{{ setComposerInput }}" rows="{{ 1 }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; line-height:1.5; color:#1B1A17; padding:6px 0; resize:none; overflow-y:auto; max-height:40vh;"></textarea>
           </sc-if>
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
           <sc-if value="{{ hasModels }}">
@@ -729,7 +792,7 @@
       </sc-if>
 
       <sc-if value="{{ isOutline }}">
-      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:2px;" class="eo-scrollbar">
+      <div class="eo-panel-pad eo-scrollbar" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:2px;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60; margin-bottom:12px;">Outline</span>
         <sc-if value="{{ outlineEmpty }}">
           <span style="font-size:12px; color:#A39D91;">Outline available once sources are ingested.</span>
@@ -750,7 +813,7 @@
       </sc-if>
 
       <sc-if value="{{ isOrbit }}">
-      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0;">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0;">
         <div style="display:flex; align-items:baseline; justify-content:space-between;">
           <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Orbit</span>
           <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ orbitHint }}</span>
@@ -766,7 +829,7 @@
       </sc-if>
 
       <sc-if value="{{ isGlassBox }}">
-      <div style="flex:1; padding:22px 24px; min-height:0; overflow:hidden; display:flex; flex-direction:column;">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; min-height:0; overflow:hidden; display:flex; flex-direction:column;">
         <!-- One grid track set (logGridCols) drives the header and every row, so the
              mono columns line up down the page instead of drifting with content. -->
         <div style="flex:1; display:flex; flex-direction:column; gap:11px; min-height:0; background:#0B1210; border:1px solid #1B2622; border-radius:11px; padding:15px 17px; overflow:hidden;">
@@ -802,7 +865,7 @@
       </sc-if>
 
       <sc-if value="{{ isPriors }}">
-      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Priors</span>
         <span style="font-size:12px; color:#8C877C; line-height:1.5;">Witness-tier knowledge about corpora, grouped by what each prior is about — as it declares itself, not by filename. Click a prior to read it here; the switch on a bucket or a single prior takes it out of retrieval without deleting it.</span>
         <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; max-width:100%;" class="eo-scrollbar">
@@ -862,7 +925,7 @@
       </sc-if>
 
       <sc-if value="{{ isSenses }}">
-      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Senses</span>
         <span style="font-size:12px; color:#8C877C; line-height:1.5;">A library of vision models — screen grounding, general vision, OCR, and object detection. Subscribe to add one to your library; switch on "active" to run it on ingestion — several can be active at once. A sense needs an endpoint (self-hosted or cloud) before it actually runs; until then it's a library entry, not a working pipeline, and ingestion says so.</span>
         <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; max-width:100%;" class="eo-scrollbar">
@@ -965,12 +1028,12 @@
       </sc-if>
 
       <sc-if value="{{ isCompose }}">
-      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Compose</span>
         <span style="font-size:12px; color:#8C877C; line-height:1.5;">A deliberate long-form generation, not a chat reply — each section is drafted, mechanically checked against the source, and revised before moving on.</span>
 
         <div style="display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 12px; background:#FFFDFA;">
-          <input type="text" placeholder="e.g. write a 3-page essay about the Creature's intellectual development" value="{{ composeTask }}" onChange="{{ onComposeTask }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
+          <input type="text" class="eo-input-text" placeholder="e.g. write a 3-page essay about the Creature's intellectual development" value="{{ composeTask }}" onChange="{{ onComposeTask }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
           <button type="button" onClick="{{ runCompose }}" style="border:0; border-radius:8px; padding:8px 14px; font-family:inherit; font-size:12.5px; font-weight:500; background: {{ composeButtonBg }}; color:#FFFDFA; cursor:pointer; flex:none;">{{ composeButtonLabel }}</button>
         </div>
 
@@ -1028,7 +1091,7 @@
       </sc-if>
 
       <sc-if value="{{ isDocuments }}">
-      <div style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
         <div style="display:flex; align-items:center; justify-content:space-between;">
           <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Documents</span>
           <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ sourceCount }} file(s)</span>
@@ -1071,10 +1134,10 @@
       </sc-if>
     </div>
 
-    <div class="eo-reader-col" style="min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
+    <div class="eo-reader-col{{ readerDrawerClass }}" style="min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden;">
     <sc-if value="{{ readerOpen }}">
     <div style="min-width:0; min-height:0; display:flex; flex-direction:column; border-left:1px solid #EBE6DC;">
-      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; row-gap:8px; padding:14px 20px; border-bottom:1px solid #EBE6DC;">
+      <div class="eo-reader-header-pad" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; row-gap:8px; padding:14px 20px; border-bottom:1px solid #EBE6DC;">
         <div style="display:flex; align-items:center; gap:10px; min-width:0; flex:1 1 140px;">
           <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C; flex:none;">{{ readerGlyph }}</span>
           <span style="font-size:14.5px; font-weight:500; color:#26241F; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ readerName }}</span>
@@ -1119,7 +1182,7 @@
         </sc-for>
       </div>
       </sc-if>
-      <div style="flex:1; overflow-y:auto; padding:32px 0; display:flex; justify-content:center;" class="eo-scrollbar">
+      <div class="eo-reader-scroll-pad eo-scrollbar" style="flex:1; overflow-y:auto; padding:32px 0; display:flex; justify-content:center;">
         <div style="width:100%; max-width:100%; padding:0 24px;">
 
           <sc-if value="{{ readerOverviewMode }}">
@@ -1329,7 +1392,9 @@
     </div>
 
     <sc-if value="{{ notShowingProjects }}">
-    <div class="eo-right-rail" style="background:#FAF8F4; border-left:1px solid #EBE6DC; padding:18px 16px; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; overflow-y:auto;" class="eo-scrollbar">
+    <div class="eo-right-rail{{ rightDrawerClass }} eo-scrollbar" style="background:#FAF8F4; border-left:1px solid #EBE6DC; padding:18px 16px; display:flex; flex-direction:column; gap:14px; min-width:0; min-height:0; overflow-y:auto;">
+
+      <button type="button" class="eo-mobile-only" aria-label="Close entities" onClick="{{ closeMobileRight }}" style="align-self:flex-end; width:30px; height:30px; align-items:center; justify-content:center; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:0;"><i class="ph ph-x" style="font-size:14px;"></i></button>
 
       <sc-if value="{{ readerPreviewVisible }}">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
@@ -1589,10 +1654,10 @@
       <div style="display:flex; flex-direction:column; gap:6px;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ modalLabel }}</span>
         <sc-if value="{{ modalSingleLine }}">
-          <input type="text" ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" onKeyDown="{{ onModalKey }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:inherit; font-size:13.5px; color:#1B1A17; outline:none;" />
+          <input type="text" class="eo-input-text" ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" onKeyDown="{{ onModalKey }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:inherit; font-size:13.5px; color:#1B1A17; outline:none;" />
         </sc-if>
         <sc-if value="{{ modalMultiline }}">
-          <textarea ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" rows="{{ 16 }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:'IBM Plex Mono', monospace; font-size:12.5px; line-height:1.6; color:#1B1A17; outline:none; resize:vertical; min-height:220px;"></textarea>
+          <textarea class="eo-input-text" ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" rows="{{ 16 }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:'IBM Plex Mono', monospace; font-size:12.5px; line-height:1.6; color:#1B1A17; outline:none; resize:vertical; min-height:220px;"></textarea>
           <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ modalValueStats }}</span>
         </sc-if>
       </div>
@@ -1812,6 +1877,11 @@ class Component extends DCLogic {
     // all (see _defaultToLocalModelIfNoEngine).
     localModel: ON_GH_PAGES, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
     spacesOpen: false, activeSpaceId: 'default', chatMode: 'chat', leftCollapsed: false, selectedEntity: null, activeTurnId: null,
+    // Mobile off-canvas drawers for the Sources (left) and Entities (right)
+    // panels below 900px. The desktop layout never reads these — the CSS only
+    // turns them into fixed drawers inside the narrow-screen media query, so
+    // selecting an entity on desktop sets mobileRightOpen harmlessly.
+    mobileLeftOpen: false, mobileRightOpen: false,
     entityRung: 'Entity', entityPath: [], entityRungHelp: false,
     projectsOpen: true,
     sourcesOpen: true,
@@ -1919,11 +1989,12 @@ class Component extends DCLogic {
 
   componentDidMount() {
     this.tick = this.tick.bind(this);
-    // On a narrow screen the left panel floats over the chat rather than
-    // taking a column, so opening expanded would put a drawer across the
-    // conversation before the reader has asked for it. Which panel is open is
-    // a UX default, not layout, so it belongs here rather than in the CSS that
-    // decides how the panel is drawn once open.
+    // On a narrow screen the left panel is an off-canvas drawer, so the
+    // collapsed rail default is harmless and the drawer always forces the
+    // expanded face when it slides in. Keeping it here means a desktop reader
+    // who expands the panel isn't reset by a resize — that choice is theirs,
+    // and belongs in state rather than in the CSS that only decides how the
+    // panel is drawn once open.
     if (typeof window !== 'undefined' && window.innerWidth <= 900) {
       this.setState({ leftCollapsed: true });
     }
@@ -2364,6 +2435,7 @@ class Component extends DCLogic {
   }
 
   async deleteProject(id) {
+    this._saveLocalInstruction(id, '');
     const remaining = this.state.projects.filter(p => p.id !== id);
     const nextActive = this.state.activeProjectId === id ? (remaining[0] ? remaining[0].id : null) : this.state.activeProjectId;
     this.setProjects(() => remaining, { activeProjectId: nextActive, view: 'projects' });
@@ -2765,6 +2837,29 @@ class Component extends DCLogic {
   }
   _saveLocal(key, val) {
     try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+  }
+
+  // Project instructions are server-authoritative when the proxy answers, but
+  // this app is also designed to run with no engine at all (GitHub Pages, the
+  // WebLLM local model). A project TITLE already survives that world because
+  // createProject falls back to localStorage; the instructions did not — the
+  // save blindly PUT to a proxy that was never going to answer, so a reader
+  // could type a manual, watch it vanish, and conclude the editor was broken.
+  // These four helpers give instructions the same offline home: a per-project
+  // text map in localStorage, written on a failed save and read back whenever
+  // the proxy cannot answer.
+  _localInstructionsMap() {
+    return this._loadLocal('eochat.projectInstructions.v1') || {};
+  }
+  _localInstructionText(projectId) {
+    const map = this._localInstructionsMap();
+    return map[projectId] || '';
+  }
+  _saveLocalInstruction(projectId, text) {
+    const map = this._localInstructionsMap();
+    if (text) map[projectId] = text;
+    else delete map[projectId];
+    this._saveLocal('eochat.projectInstructions.v1', map);
   }
 
   loadSettings() {
@@ -4075,10 +4170,31 @@ class Component extends DCLogic {
     };
     patchTurn({ grounding });
 
+    // The proxy gates project instructions into the server answer; in local
+    // mode it never sees the generation call, so the reader's rules are loaded
+    // here — from the same store the editor writes when no proxy answers, and
+    // from the proxy when it can — and handed to the model whole. A rule the
+    // model never sees is a rule the reader believes they wrote; that gap is
+    // the whole reason the server path folds rather than drops.
+    const activeProjectId = this.state.activeProjectId;
+    let projectRules = '';
+    if (activeProjectId) {
+      projectRules = this._localInstructionText(activeProjectId);
+      if (!projectRules) {
+        try {
+          const pres = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(activeProjectId) + '/instructions', { signal: AbortSignal.timeout(6000) });
+          if (pres.ok) { const rec = await pres.json(); projectRules = rec.text || ''; }
+        } catch {}
+      }
+    }
+
     const messages = [
       { role: 'system', content: groundData.systemPrompt },
-      { role: 'user', content: question },
     ];
+    if (projectRules.trim()) {
+      messages.push({ role: 'system', content: 'PROJECT INSTRUCTIONS — the reader wrote these rules for this project; obey them.\n\n' + projectRules });
+    }
+    messages.push({ role: 'user', content: question });
 
     let answer = '';
     try {
@@ -4205,11 +4321,22 @@ class Component extends DCLogic {
     if (!projectId) return;
     const project = this.state.projects.find(p => p.id === projectId);
     let current = { text: '', report: null };
+    let proxyAnswered = true;
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/instructions', { signal: AbortSignal.timeout(10000) });
       if (res.ok) current = await res.json();
+      else proxyAnswered = false;
     } catch (err) {
-      this.logAdd('⊘', `Could not read instructions for this project — ${err.message}`, 'sources');
+      proxyAnswered = false;
+      this.logAdd('⊘', `Could not reach the proxy — ${err.message}`, 'sources');
+    }
+    // The proxy is the authority when it answers; when it cannot — no engine
+    // reachable, or a project created entirely in this browser — the reader's
+    // own store is the only copy that survives a reload, so it must be the one
+    // edited rather than a blank page that reads "no instructions exist".
+    const localText = this._localInstructionText(projectId);
+    if (!proxyAnswered && localText) {
+      this.logAdd('◐', 'No proxy answered — showing instructions saved in this browser', 'sources');
     }
     this.openModal({
       title: `Instructions for ${project ? project.name : 'project'}`,
@@ -4219,7 +4346,7 @@ class Component extends DCLogic {
       submitLabel: 'Save instructions',
       multiline: true,
       allowEmpty: true,
-      initialValue: current.text || '',
+      initialValue: current.text || localText || '',
       projectId,
       onSubmit: (text) => this.saveProjectInstructions(projectId, text),
     });
@@ -4235,6 +4362,9 @@ class Component extends DCLogic {
       });
       const result = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
+      // The server now owns the manual — a stale browser copy must not shadow
+      // a later edit made on another machine.
+      this._saveLocalInstruction(projectId, '');
       const r = result.report || {};
       if (!result.chars) {
         this.logAdd('⊘', 'Project instructions cleared — no rules are in force in this project', 'sources');
@@ -4251,7 +4381,17 @@ class Component extends DCLogic {
       }
       this.fetchProjects();
     } catch (err) {
-      this.logAdd('⊘', `Could not save instructions — ${err.message}`, 'sources');
+      // No proxy (GitHub Pages, engine-less deployment): the browser is the
+      // only store that survives a reload, and it is a real one — the local
+      // model reads it back on every answer. Say where the save went rather
+      // than letting the reader believe their manual was lost.
+      this._saveLocalInstruction(projectId, text);
+      this.setProjects(ps => ps.map(p => p.id === projectId ? { ...p, instructionsChars: text.length } : p));
+      if (!text.trim()) {
+        this.logAdd('⊘', 'Instructions cleared — no rules are in force in this project', 'sources');
+      } else {
+        this.logAdd('§', `Saved ${text.length.toLocaleString()} characters in this browser (no proxy answered) — these rules will govern local-model answers, but no other machine will see them.`, 'sources');
+      }
     }
   }
 
@@ -4886,6 +5026,10 @@ class Component extends DCLogic {
   // arrives asynchronously, so this fires on the update that first paints it,
   // not at click time.
   componentDidUpdate() {
+    // Lock body scroll while a mobile drawer is open, restore it on close.
+    const drawerOpen = this.state.mobileLeftOpen || this.state.mobileRightOpen;
+    if (drawerOpen && !this._scrollLocked) { document.body.style.overflow = 'hidden'; this._scrollLocked = true; }
+    else if (!drawerOpen && this._scrollLocked) { document.body.style.overflow = ''; this._scrollLocked = false; }
     const hl = this.state.readerHighlight;
     if (!hl || !this.state.readerOpen) { this._scrolledHl = null; return; }
     const key = `${this.state.readerSourceName} ${hl.num}`;
@@ -4905,6 +5049,10 @@ class Component extends DCLogic {
       readerHighlight: highlight,
       readerSortCol: null, readerSortDir: 'asc',
       readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
+      // The reader is the reason the user opened a drawer, so it must not be
+      // covered by one on mobile — close both so the content just asked for
+      // is what's on screen.
+      mobileLeftOpen: false, mobileRightOpen: false,
     });
     this.logAdd('◱', highlight ? `Opened "${name}" at [${highlight.num}]` : `Opened "${name}" in reader`, 'reader');
     if (!this.state.readerContent[name]) this.fetchSourceContent(name);
@@ -4922,7 +5070,8 @@ class Component extends DCLogic {
     this.setState({
       readerOpen: true, readerSourceName: name, readerViewMode: 'scroll',
       readerSectionIndex: 0, readerOverview: false, readerHighlight: highlight || null,
-      readerContent: { ...this.state.readerContent, [name]: 'Loading…' }
+      readerContent: { ...this.state.readerContent, [name]: 'Loading…' },
+      mobileLeftOpen: false, mobileRightOpen: false,
     });
     try {
       const res = await fetch(this.proxyUrl() + '/api/source/text?source=' + encodeURIComponent(name) + '&start=' + byteStart, { signal: AbortSignal.timeout(30000) });
@@ -4937,6 +5086,14 @@ class Component extends DCLogic {
     }
   }
   closeReader() { this.setState({ readerOpen: false, readerHighlight: null, readerPDFView: 'extracted', readerPDFPage: 0 }); this._pdfCanvasEl = null; this._audioCanvasEl = null; this._audioEl = null; }
+
+  // Selecting an entity also opens the Entities drawer on mobile — otherwise
+  // the result of the tap would render off-canvas and look like nothing
+  // happened. On desktop the open flag is harmless: the drawer positioning
+  // only exists inside the narrow-screen media query.
+  focusEntity(id) {
+    this.setState({ selectedEntity: id, mobileRightOpen: true });
+  }
 
   // Decodes the actual samples (Web Audio API) into per-bucket peak amplitude
   // and caches the result by blob URL, so switching Scroll/Paginate or
@@ -5532,7 +5689,7 @@ class Component extends DCLogic {
     const engineUnavailable = !live && !usingLocalModel;
     // Selection is by referent id — the identity the engine assigned — so two
     // surfaces of the same referent select the same thing.
-    const selectEntity = (id) => this.setState({ selectedEntity: id });
+    const selectEntity = (id) => this.focusEntity(id);
     const modal = S.modal;
     const modalValid = !!modal?.allowEmpty || (S.modalValue || '').trim().length > 0;
 
@@ -5661,7 +5818,7 @@ class Component extends DCLogic {
         barWidth: Math.max(4, Math.round(((e.mentions || 0) / maxCount) * 28)) + 'px',
         dotColor: enabledSourceCount > 1 && srcs[0] ? (sourceColorMap.get(srcs[0]) || null) : null,
         dotTitle: srcs.length > 1 ? `${shortName(srcs[0])} +${srcs.length - 1} more` : shortName(srcs[0] || ''),
-        select: () => this.setState({ selectedEntity: e.id })
+        select: () => this.focusEntity(e.id)
       };
     };
     // ── The Explorer's ladder ────────────────────────────────────────────────
@@ -6472,15 +6629,29 @@ class Component extends DCLogic {
       sourceFooterNote: enabledSourceCount === roomSources.length
         ? 'always canonical'
         : `${enabledSourceCount} switched on`,
-      leftCollapsed: S.leftCollapsed, leftExpanded: !S.leftCollapsed,
-      // The collapsed/expanded distinction has to reach CSS, because on a
-      // narrow screen an expanded panel floats over the chat while a collapsed
-      // one keeps its rail in the grid.
-      leftPanelClass: S.leftCollapsed ? 'eo-left eo-left-collapsed' : 'eo-left eo-left-expanded',
-      leftPadding: S.leftCollapsed ? '18px 8px' : '18px 16px',
-      leftAlign: S.leftCollapsed ? 'center' : 'stretch',
-      leftColWidth: S.leftCollapsed ? '52px' : '232px',
+      leftCollapsed: S.leftCollapsed && !S.mobileLeftOpen, leftExpanded: !S.leftCollapsed || S.mobileLeftOpen,
+      // The collapsed/expanded distinction has to reach CSS. On a narrow
+      // screen the panel is an off-canvas drawer, so opening it forces the
+      // expanded (full-content) face and carries the `is-open` flag that
+      // slides it in; the collapsed rail only exists on desktop.
+      leftPanelClass: (S.leftCollapsed && !S.mobileLeftOpen ? 'eo-left eo-left-collapsed' : 'eo-left eo-left-expanded') + (S.mobileLeftOpen ? ' is-open' : ''),
+      leftPadding: (S.leftCollapsed && !S.mobileLeftOpen) ? '18px 8px' : '18px 16px',
+      leftAlign: (S.leftCollapsed && !S.mobileLeftOpen) ? 'center' : 'stretch',
+      leftColWidth: (S.leftCollapsed && !S.mobileLeftOpen) ? '52px' : '232px',
       toggleLeftCollapsed: () => this.setState(s => ({ leftCollapsed: !s.leftCollapsed })),
+      // Mobile off-canvas drawers. Desktop ignores these flags (the drawer CSS
+      // lives inside the narrow-screen media query), so the handlers are plain
+      // state writes with no viewport guard.
+      mobileLeftOpen: S.mobileLeftOpen, mobileRightOpen: S.mobileRightOpen,
+      openMobileLeft: () => this.setState({ mobileLeftOpen: true }),
+      closeMobileLeft: () => this.setState({ mobileLeftOpen: false }),
+      openMobileRight: () => this.setState({ mobileRightOpen: true }),
+      closeMobileRight: () => this.setState({ mobileRightOpen: false }),
+      closeMobileDrawers: () => this.setState({ mobileLeftOpen: false, mobileRightOpen: false }),
+      leftDrawerClass: S.mobileLeftOpen ? ' is-open' : '',
+      rightDrawerClass: S.mobileRightOpen ? ' is-open' : '',
+      readerDrawerClass: S.readerOpen ? ' eo-reader-open' : '',
+      backdropClass: (S.mobileLeftOpen || S.mobileRightOpen) ? ' is-open' : '',
       insideProject: S.view !== 'projects' && !!S.activeProjectId,
       leftPanelHeader: S.view !== 'projects' && S.activeProjectId ? 'Workspace' : 'Projects',
       leftPanelCountLabel: S.view !== 'projects' && S.activeProjectId ? `${roomSources.length} sources` : `${S.projects.length} projects`,
