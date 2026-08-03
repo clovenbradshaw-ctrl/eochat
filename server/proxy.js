@@ -55,6 +55,9 @@ import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // catalogs on import — ingest stays lazy behind ensurePriorsIngested().
 import * as priorsSource from "./priors-source.js";
 import { HolonicTask } from "./holonic-task.js";
+import { sensesCatalog, SENSE_CATEGORIES } from "./senses-catalog.js";
+import * as sensesState from "./senses-state.js";
+import { refreshHfCatalog, discoverCacheStatus } from "./senses-hf.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
 import { createTurnController } from "./turn-controller.js";
 import { webSearchAndFetch } from "./web-search.js";
@@ -3691,6 +3694,192 @@ const server = http.createServer((req, res) => {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));
       }
+    });
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Senses — the vision-model library the Senses tab subscribes and
+  // activates from. This route only serves the catalog and the reader's
+  // subscribe/active/endpoint choices; it never calls a model. Invoking a
+  // connected sense happens client-side, straight from the browser to the
+  // endpoint the reader configured (same trust model as the proxy URL
+  // itself) — the same shape as the existing PDF-OCR-via-Tesseract path,
+  // just pointed at a URL instead of a bundled library.
+  // ══════════════════════════════════════════════════════════════
+  if (req.method === "GET" && req.url === "/api/senses") {
+    const endpoints = sensesState.senseEndpoints();
+    const subscribed = sensesState.subscribedSenseIds();
+    const active = sensesState.activeSenseIds();
+    // Curated catalog first, then whatever's been promoted from Hub
+    // discovery — same shape, same id space, so a reader can't tell which
+    // list an entry came from once it's in their library.
+    const all = [...sensesCatalog(), ...sensesState.customSensesList()];
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      categories: SENSE_CATEGORIES,
+      senses: all.map((s) => ({
+        ...s,
+        subscribed: subscribed.has(s.id),
+        active: active.has(s.id),
+        endpoint: endpoints[s.id] || "",
+        connected: !s.needsEndpoint || !!endpoints[s.id],
+      })),
+    }));
+    return;
+  }
+
+  // Discover more senses from the Hugging Face Hub — see senses-hf.js for
+  // why this can't just be one clean tag query. Refreshes at most weekly
+  // (senses-hf.js's own cache) unless ?refresh=1 forces it. A Hub outage or
+  // an offline dev box surfaces as `errors`, never as a silent empty list —
+  // the caller can tell "checked, found nothing new" from "couldn't check".
+  if (req.method === "GET" && req.url.startsWith("/api/senses/discover")) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    (async () => {
+      try {
+        const force = url.searchParams.get("refresh") === "1";
+        const result = await refreshHfCatalog({ force });
+        const subscribed = sensesState.subscribedSenseIds();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          ...result,
+          discovered: result.discovered.map((d) => ({ ...d, alreadyInLibrary: subscribed.has(d.id) || !!sensesState.customSense(d.id) })),
+        }));
+      } catch (err) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message, status: discoverCacheStatus() }));
+      }
+    })();
+    return;
+  }
+
+  // Promotes one discovered Hub entry into the library and subscribes it in
+  // the same call — discovery's "add" IS the subscribe step; a reader who
+  // clicked "add to library" on a search result did not mean "show it to me
+  // twice more before it counts."
+  if (req.method === "POST" && req.url === "/api/senses/discover/add") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", async () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+        return;
+      }
+      if (!parsed.id) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Missing 'id'" }));
+        return;
+      }
+      try {
+        const { discovered } = await refreshHfCatalog({});
+        const entry = discovered.find((d) => d.id === parsed.id);
+        if (!entry) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `"${parsed.id}" is not in the last-discovered list — refresh discovery first` }));
+          return;
+        }
+        sensesState.addCustomSense(entry);
+        const subscribeResult = sensesState.setSenseSubscribed(entry.id, true);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ added: entry, subscribed: subscribeResult }));
+      } catch (err) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Subscribe/unsubscribe one or more senses at once — the Senses tab's
+  // per-item and category-bucket switches. Unsubscribing also deactivates
+  // (senses-state.js) so a sense can never be active without being visibly
+  // in the library.
+  if (req.method === "POST" && req.url === "/api/senses/subscribe") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+        return;
+      }
+      const ids = Array.isArray(parsed.ids) ? parsed.ids : (parsed.id ? [parsed.id] : []);
+      if (!ids.length) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Missing 'id' or 'ids'" }));
+        return;
+      }
+      const subscribed = !!parsed.subscribed;
+      const results = ids.map((id) => sensesState.setSenseSubscribed(id, subscribed));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ subscribed, results }));
+    });
+    return;
+  }
+
+  // Select which subscribed senses run on ingestion — multiple at once, one
+  // request per bucket click same as /api/priors/toggle. Activating a sense
+  // that isn't subscribed is reported as a per-id error, not silently
+  // dropped or auto-subscribed.
+  if (req.method === "POST" && req.url === "/api/senses/activate") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+        return;
+      }
+      const ids = Array.isArray(parsed.ids) ? parsed.ids : (parsed.id ? [parsed.id] : []);
+      if (!ids.length) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Missing 'id' or 'ids'" }));
+        return;
+      }
+      const active = !!parsed.active;
+      const results = ids.map((id) => sensesState.setSenseActive(id, active));
+      const allErrored = results.length > 0 && results.every((r) => r.error);
+      res.writeHead(allErrored ? 409 : 200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ active, results }));
+    });
+    return;
+  }
+
+  // Set or clear a sense's endpoint — where the browser sends work for it.
+  // An empty/whitespace url clears it, which demotes the sense back to
+  // "library entry with nowhere to send work" without needing a separate
+  // delete route.
+  if (req.method === "POST" && req.url === "/api/senses/endpoint") {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON body" }));
+        return;
+      }
+      if (!parsed.id) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Missing 'id'" }));
+        return;
+      }
+      const result = sensesState.setSenseEndpoint(parsed.id, parsed.url || "");
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(result));
     });
     return;
   }
