@@ -15,7 +15,10 @@
 //
 // Depends on nothing in proxy.js, so proxy.js can import this without a cycle.
 
-import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
+import {
+  validateCitations, verifyQuotedFidelity, parseCitationRefs,
+  checkGrounding, groundingGaps, annotateVoids,
+} from "./citation-check.js";
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
 import { createInstructionGate, countTokens as gateCountTokens } from "./instruction-gate.js";
@@ -60,27 +63,30 @@ function newAnswerEventKey(conversationId, turnId) {
 
 // Every [n] the answer actually cites, matched against the engine's real
 // citation table. A bracket with no matching entry is a gap, never a guess.
+// Uses the shared bracket parser rather than a local /\[(\d+)\]/ so a
+// "[1,2]" or "[2-4]" resolves to the passages it names instead of vanishing
+// from the citation panel entirely.
 function resolveCitationBrackets(text, citations) {
   const table = new Map((citations || []).map((c) => [String(c.index), c]));
   const seen = new Set();
   const resolved = [];
   const unresolvedNums = [];
-  const re = /\[(\d+)\]/g;
-  let m;
-  while ((m = re.exec(text || "")) !== null) {
-    const num = m[1];
-    if (seen.has(num)) continue;
-    seen.add(num);
-    const c = table.get(num);
-    if (c) {
-      resolved.push({
-        num, resolved: true,
-        sourceId: c.source_id, spanId: c.span_id,
-        byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
-      });
-    } else {
-      unresolvedNums.push(num);
-      resolved.push({ num, resolved: false });
+  for (const ref of parseCitationRefs(text)) {
+    for (const n of ref.nums) {
+      const num = String(n);
+      if (seen.has(num)) continue;
+      seen.add(num);
+      const c = table.get(num);
+      if (c) {
+        resolved.push({
+          num, resolved: true,
+          sourceId: c.source_id, spanId: c.span_id,
+          byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
+        });
+      } else {
+        unresolvedNums.push(num);
+        resolved.push({ num, resolved: false });
+      }
     }
   }
   return { citations: resolved, unresolvedNums };
@@ -102,6 +108,41 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
  * @param {() => boolean} deps.isWarming - true while the corpus is still ingesting at boot
  * @param {(query: string, opts?: object) => Promise<Array<{rank:number,title:string,url:string,snippet:string,text:string}>>} deps.webSearchFn - performs web search + fetch, returns structured results
  */
+// The grounding instruction the talker actually receives.
+//
+// Module-level and exported rather than closed over the controller so a test
+// harness can drive the REAL prompt. A harness that reimplements the prompt
+// measures its own copy: the thing under test — how a weak model behaves when
+// told which numbers exist — is exactly the thing a copy stops testing the
+// moment the two drift.
+export function buildGroundedSystemMessage(groundResult, warming = false) {
+  if (!groundResult.context) {
+    const content = warming
+      ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+        `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
+        `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
+      : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+        `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
+        `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
+        `there are no source passages, and a bracket would look like a citation that does not exist.`;
+    return { message: { role: "system", content }, maxCitation: 0, warming };
+  }
+
+  const citationRange = groundResult.citations.length > 0
+    ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
+      `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
+    : "";
+  const content =
+    `Answer the reader's question using the material below, citing the passages you draw on ` +
+    `with bracketed numbers like [1], [2], etc. ` + citationRange +
+    `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
+    `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
+    `"the provided text", "your sources", or similar; just answer directly.\n\n` +
+    `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
+    `${groundResult.context}`;
+  return { message: { role: "system", content }, maxCitation: groundResult.citations.length, warming: false };
+}
+
 export function createTurnController(deps) {
   const {
     conversationStore, groundQuery, target, anthropicKey, anthropicModel,
@@ -120,35 +161,6 @@ export function createTurnController(deps) {
   // One in-flight generation per (conversation, turn) at a time — stop/regenerate
   // both need to find it by that key alone, before they know an answerId.
   const activeControllers = new Map();
-
-  function buildGroundedSystemMessage(groundResult) {
-    if (!groundResult.context) {
-      const warming = isWarming ? isWarming() : false;
-      const content = warming
-        ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
-          `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
-          `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
-        : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
-          `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
-          `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
-          `there are no source passages, and a bracket would look like a citation that does not exist.`;
-      return { message: { role: "system", content }, maxCitation: 0, warming };
-    }
-
-    const citationRange = groundResult.citations.length > 0
-      ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
-        `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
-      : "";
-    const content =
-      `Answer the reader's question using the material below, citing the passages you draw on ` +
-      `with bracketed numbers like [1], [2], etc. ` + citationRange +
-      `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
-      `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
-      `"the provided text", "your sources", or similar; just answer directly.\n\n` +
-      `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
-      `${groundResult.context}`;
-    return { message: { role: "system", content }, maxCitation: groundResult.citations.length, warming: false };
-  }
 
   function buildWebSystemMessage(webResults) {
     if (!webResults || webResults.length === 0) {
@@ -500,13 +512,32 @@ export function createTurnController(deps) {
 
     const fidelity = verifyQuotedFidelity(finalText, lastCitations);
     const snippets = buildVerbatimSnippets(brackets, lastCitations);
+
+    // The full mechanical fact-check: does every checkable atom (name, date,
+    // figure) in a cited sentence actually occur in the passage it cites? This
+    // is what catches the case fidelity/bracket-resolution above cannot — a
+    // perfectly well-formed [2] attached to a claim whose content is nowhere
+    // in passage 2. Computed from the answer and the engine's citation table
+    // alone — no second model call, nothing the writer could have influenced.
+    //
+    // Run against `display` (formatted, but pre-validateCitations) rather than
+    // `finalText`: validateCitations has already rewritten an invented [9]
+    // into "[⊘ no source 9]", which no longer parses as a bracket, so checking
+    // the rewritten text would report zero unresolved citations and erase the
+    // very finding it exists to make. `annotatedText` is the one derived
+    // artifact clients render, so no caller has to reconcile the two passes.
+    const groundingCheck = checkGrounding(display, lastCitations, { question });
+    const annotatedText = maxCitation > 0
+      ? validateCitations(annotateVoids(display, groundingCheck), maxCitation)
+      : annotateVoids(display, groundingCheck);
+
     const reviewReport = gate
       ? { verdict: review.verdict, flags: review.flags, corrected, iterations }
       : null;
     if (reviewReport) {
       sendEvent("review_report", { turnId, answerId, ...reviewReport });
     }
-    return { finalText, brackets, fidelity, snippets, review: reviewReport };
+    return { finalText, brackets, fidelity, snippets, review: reviewReport, groundingCheck, annotatedText };
   }
 
   // ── Surf mode: wide retrieval with no model generation ──
@@ -757,7 +788,7 @@ export function createTurnController(deps) {
         });
 
         const groundText = webResults.map((r) => `${r.title}\n${r.text || r.snippet || ""}`).join("\n\n");
-        const { finalText, brackets, fidelity, snippets, review } = await finalizeAndReview({
+        const { finalText, brackets, fidelity, snippets, review, groundingCheck, annotatedText } = await finalizeAndReview({
           rawText, lastCitations, maxCitation, question,
           gate: gateInfo, groundText, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
         });
@@ -770,7 +801,13 @@ export function createTurnController(deps) {
           sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
         }
 
-        const gaps = [];
+        // Emitted before the gaps it explains, and unconditionally — a turn
+        // with nothing wrong must still be able to say what was examined, or
+        // "clean" and "unchecked" render identically (LAWS.md candidate: two
+        // facts that differ must not read alike).
+        sendEvent("grounding_checked", { turnId: turn.id, answerId, ...groundingCheck, annotatedText });
+
+        const gaps = groundingGaps(groundingCheck);
         if (brackets.some((b) => !b.resolved)) {
           const unresolvedNums = brackets.filter((b) => !b.resolved).map((b) => b.num);
           gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no web source matches this bracket.` });
@@ -784,8 +821,8 @@ export function createTurnController(deps) {
         for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          text: finalText, model, citations: brackets, gaps, snippets,
-          fidelity, webSearch: true, status: "completed", completedAt: new Date().toISOString(),
+          text: finalText, annotatedText, model, citations: brackets, gaps, snippets,
+          fidelity, grounding_check: groundingCheck, webSearch: true, status: "completed", completedAt: new Date().toISOString(),
           review,
           instructionGate: gateInfo ? {
             activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
@@ -796,6 +833,7 @@ export function createTurnController(deps) {
         });
         sendEvent("completed", {
           turnId: turn.id, answerId, status: "completed", text: finalText,
+          annotatedText, groundingCheck,
           citations: brackets, gaps, snippets, model, webSearch: true,
           summary: `${webResults.length} web sources`,
         });
@@ -805,7 +843,8 @@ export function createTurnController(deps) {
           budget: 3000, maxUnits: 5, limit: 16,
           source: sourceScope, pool: pool || "corpus",
         });
-        const { message: systemMsg, maxCitation, warming } = buildGroundedSystemMessage(groundResult);
+        const { message: systemMsg, maxCitation, warming } =
+          buildGroundedSystemMessage(groundResult, isWarming ? isWarming() : false);
 
         sendEvent("witnesses_selected", {
           turnId: turn.id, answerId,
@@ -862,7 +901,7 @@ export function createTurnController(deps) {
         });
 
         const groundText = (groundResult.citations || []).map((c) => c.text).join("\n\n");
-        const { finalText, brackets, fidelity, snippets, review } = await finalizeAndReview({
+        const { finalText, brackets, fidelity, snippets, review, groundingCheck, annotatedText } = await finalizeAndReview({
           rawText, lastCitations, maxCitation, question,
           gate: gateInfo, groundText, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
         });
@@ -875,7 +914,13 @@ export function createTurnController(deps) {
           sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
         }
 
-        const gaps = [];
+        // Emitted before the gaps it explains, and unconditionally — a turn
+        // with nothing wrong must still be able to say what was examined, or
+        // "clean" and "unchecked" render identically (LAWS.md candidate: two
+        // facts that differ must not read alike).
+        sendEvent("grounding_checked", { turnId: turn.id, answerId, ...groundingCheck, annotatedText });
+
+        const gaps = groundingGaps(groundingCheck);
         if (brackets.some((b) => !b.resolved)) {
           const unresolvedNums = brackets.filter((b) => !b.resolved).map((b) => b.num);
           gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no engine passage matches this bracket.` });
@@ -895,8 +940,8 @@ export function createTurnController(deps) {
         for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          text: finalText, model, citations: brackets, gaps, snippets,
-          fidelity, review, status: "completed", completedAt: new Date().toISOString(),
+          text: finalText, annotatedText, model, citations: brackets, gaps, snippets,
+          fidelity, grounding_check: groundingCheck, review, status: "completed", completedAt: new Date().toISOString(),
           instructionGate: gateInfo ? {
             activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
             blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
@@ -906,6 +951,7 @@ export function createTurnController(deps) {
         });
         sendEvent("completed", {
           turnId: turn.id, answerId, status: "completed", text: finalText,
+          annotatedText, groundingCheck,
           citations: brackets, gaps, snippets, model, review,
           summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
         });
