@@ -168,6 +168,9 @@
       <sc-if value="{{ proxyLive }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91; letter-spacing:.04em;">{{ proxyStatusText }}</span>
       </sc-if>
+      <sc-if value="{{ usingLocalModelBadge }}">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; letter-spacing:.04em;">{{ localModelBadgeText }}</span>
+      </sc-if>
       <sc-if value="{{ proxyDead }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#c0341a; letter-spacing:.04em;">proxy off</span>
       </sc-if>
@@ -187,7 +190,10 @@
        the same two-facts-render-alike failure the engine's own laws forbid,
        reappearing at the level of the product, and it is exactly what a
        visitor to the deployed static build sees, since it defaults to a proxy
-       on a localhost they have never started. -->
+       on a localhost they have never started. `proxyDead` here means no
+       engine at all — it stays false once WebLLM has taken over (see
+       engineUnavailable in renderVals), so this banner doesn't linger
+       telling the reader nothing works when local mode already does. -->
   <sc-if value="{{ proxyDead }}">
     <div style="border:1px solid #E3C9A8; background:#FDF6EC; border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:8px;">
       <div style="display:flex; align-items:center; gap:8px;">
@@ -5469,6 +5475,13 @@ class Component extends DCLogic {
     const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose'), se = tabStyle('senses');
     const active = this.activeSpace();
     const live = this.proxyLive();
+    // The proxy being unreachable only means "no engine" if the in-browser
+    // WebLLM fallback isn't covering for it either (see
+    // _defaultToLocalModelIfNoEngine). Once it's loading or ready, the reader
+    // has a working answer path — the alarming "no engine" banner and its
+    // Retry/Set engine URL controls would be actively misleading there.
+    const usingLocalModel = S.localModel && (S.localModelStatus === 'ready' || S.localModelStatus === 'loading');
+    const engineUnavailable = !live && !usingLocalModel;
     // Selection is by referent id — the identity the engine assigned — so two
     // surfaces of the same referent select the same thing.
     const selectEntity = (id) => this.setState({ selectedEntity: id });
@@ -6202,8 +6215,12 @@ class Component extends DCLogic {
       settingsLocalBg: S.localModel ? '#1F5A4C' : 'none',
       settingsLocalColor: S.localModel ? '#FFFDFA' : '#8C877C',
       settingsLocalIcon: S.localModelStatus === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
-      proxyLive: live, proxyDead: !live,
+      proxyLive: live, proxyDead: engineUnavailable,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
+      usingLocalModelBadge: !live && usingLocalModel,
+      localModelBadgeText: S.localModelStatus === 'loading'
+        ? `local model · loading ${S.localModelProgress.percent}%`
+        : 'local model · ready',
       retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
       proxyUrlLabel: this.proxyUrl(),
       // Three different reasons the engine is unreachable, and they need three
