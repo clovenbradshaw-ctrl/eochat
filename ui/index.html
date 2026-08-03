@@ -1047,12 +1047,19 @@
           </sc-if>
 
           <sc-if value="{{ readerIsAudioType }}">
-            <!-- This drew 40 bars from Math.sin(i*1.7) — a waveform of nothing,
-                 rendered next to a label claiming on-device transcription. No
-                 audio perceiver runs here, so the panel says so instead. -->
-            <div style="display:flex; align-items:center; gap:8px; height:56px; margin-bottom:18px; padding:0 12px; border:1px dashed #E0DACE; border-radius:10px; color:#A39D91; font-size:11.5px;">
+            <!-- Audio's native medium is sound arriving over time, not a
+                 transcript — so the reader plays it and draws a REAL waveform
+                 (decoded PCM peaks, Web Audio API) instead of flattening it to
+                 text or, worse, faking one. A prior version of this panel drew
+                 40 bars from Math.sin(i*1.7) next to a label claiming
+                 transcription — a waveform of nothing. This one is honest in
+                 both directions: the trace is real amplitude, and the label
+                 still says no perceiver runs here, because none does. -->
+            <audio ref="{{ setAudioEl }}" src="{{ readerAudioSrc }}" controls="{{ true }}" onPlay="{{ onAudioProgress }}" onPause="{{ onAudioProgress }}" onTimeUpdate="{{ onAudioProgress }}" onSeeked="{{ onAudioProgress }}" onLoadedMetadata="{{ onAudioProgress }}" style="width:100%; display:block; margin-bottom:10px;"></audio>
+            <canvas ref="{{ setAudioCanvas }}" onClick="{{ seekAudioFromClick }}" style="width:100%; height:56px; display:block; margin-bottom:8px; border-radius:8px; background:#F7F4EE; cursor:pointer;"></canvas>
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:18px; padding:0 2px; color:#A39D91; font-size:11.5px;">
               <span style="font-size:13px;">⊘</span>
-              <span>No audio perceiver — bytes are stored and playable, not analysed or transcribed.</span>
+              <span>Waveform is a mechanical amplitude trace, click to seek — no perceiver runs here, nothing is transcribed or analysed.</span>
             </div>
           </sc-if>
 
@@ -4297,7 +4304,105 @@ class Component extends DCLogic {
       this.logAdd('⊘', `Seek failed for "${name}" — ${e.message || e}`, 'reader');
     }
   }
-  closeReader() { this.setState({ readerOpen: false, readerHighlight: null, readerPDFView: 'extracted', readerPDFPage: 0 }); this._pdfCanvasEl = null; }
+  closeReader() { this.setState({ readerOpen: false, readerHighlight: null, readerPDFView: 'extracted', readerPDFPage: 0 }); this._pdfCanvasEl = null; this._audioCanvasEl = null; this._audioEl = null; }
+
+  // Decodes the actual samples (Web Audio API) into per-bucket peak amplitude
+  // and caches the result by blob URL, so switching Scroll/Paginate or
+  // re-opening the same source never re-decodes. Anything decodeAudioData
+  // can't handle (format it doesn't recognise, no Web Audio API at all) leaves
+  // the canvas blank — a typed gap, not a fabricated trace, the same
+  // discipline the removed Math.sin placeholder violated.
+  async _renderAudioWaveform() {
+    const el = this._audioCanvasEl;
+    const name = this.state.readerSourceName;
+    if (!el || !name) return;
+    const blobUrl = this._uploadBlobUrls && this._uploadBlobUrls.get(name);
+    if (!blobUrl) return;
+    if (!this._audioWaveformCache) this._audioWaveformCache = new Map();
+    const cached = this._audioWaveformCache.get(blobUrl);
+    if (cached) { this._drawWaveform(el, cached, this._audioProgressFor(blobUrl)); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      const ctx = new AC();
+      const buf = await (await fetch(blobUrl)).arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(buf);
+      ctx.close();
+      // Downmixed to the first channel only — the same simplification
+      // server/pitch-track.js already makes for the same reason: a peak
+      // trace of channel 0 is a faithful reading of a mono source and an
+      // honest, declared simplification of a stereo one.
+      const channel = audioBuf.getChannelData(0);
+      const buckets = 240;
+      const step = Math.max(1, Math.floor(channel.length / buckets));
+      const peaks = new Float32Array(buckets);
+      for (let i = 0; i < buckets; i++) {
+        let max = 0;
+        const start = i * step;
+        const end = Math.min(start + step, channel.length);
+        for (let j = start; j < end; j++) { const v = Math.abs(channel[j]); if (v > max) max = v; }
+        peaks[i] = max;
+      }
+      this._audioWaveformCache.set(blobUrl, peaks);
+      if (this._audioCanvasEl === el && this.state.readerSourceName === name) this._drawWaveform(el, peaks, this._audioProgressFor(blobUrl));
+    } catch {} // best-effort — an undecodable format leaves the canvas blank
+  }
+
+  _audioProgressFor(blobUrl) {
+    const audio = this._audioEl;
+    if (!audio || !audio.duration || this._uploadBlobUrls.get(this.state.readerSourceName) !== blobUrl) return 0;
+    return audio.currentTime / audio.duration;
+  }
+
+  _drawWaveform(el, peaks, progress = 0) {
+    const rect = el.getBoundingClientRect();
+    const w = el.width = Math.max(1, Math.round(rect.width || 600));
+    const h = el.height = 56;
+    const c = el.getContext('2d');
+    c.clearRect(0, 0, w, h);
+    const barW = w / peaks.length;
+    c.fillStyle = '#D8D2C4';
+    for (let i = 0; i < peaks.length; i++) {
+      const barH = Math.max(1, peaks[i] * (h - 4));
+      c.fillRect(i * barW, (h - barH) / 2, Math.max(1, barW - 1), barH);
+    }
+    // Redraw everything left of the playhead in the reader's live-accent
+    // green so the trace itself shows what has played, not just a line
+    // crossing it.
+    if (progress > 0) {
+      c.fillStyle = '#1F5A4C';
+      const playedBars = Math.floor(peaks.length * progress);
+      for (let i = 0; i < playedBars; i++) {
+        const barH = Math.max(1, peaks[i] * (h - 4));
+        c.fillRect(i * barW, (h - barH) / 2, Math.max(1, barW - 1), barH);
+      }
+    }
+  }
+
+  // Fires on play/pause/timeupdate/seeked/loadedmetadata — cheap (native
+  // timeupdate cadence, no rAF loop to leak past reader close) and correct
+  // for both continuous playback and the native transport's own seek bar.
+  _drawAudioProgress() {
+    const el = this._audioCanvasEl;
+    const name = this.state.readerSourceName;
+    const blobUrl = el && name && this._uploadBlobUrls && this._uploadBlobUrls.get(name);
+    const peaks = blobUrl && this._audioWaveformCache && this._audioWaveformCache.get(blobUrl);
+    if (!el || !peaks) return;
+    this._drawWaveform(el, peaks, this._audioProgressFor(blobUrl));
+  }
+
+  // Clicking the waveform is clicking the native medium itself, not a proxy
+  // for it — the position clicked IS the position played.
+  _seekAudioFromClick(e) {
+    const el = this._audioCanvasEl;
+    const audio = this._audioEl;
+    if (!el || !audio || !audio.duration) return;
+    const rect = el.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    audio.currentTime = frac * audio.duration;
+    this._drawAudioProgress();
+  }
+
   async _renderPDFPage() {
     const el = this._pdfCanvasEl;
     if (!el) return;
@@ -5800,7 +5905,17 @@ class Component extends DCLogic {
       readerVideoSrc: readerType === 'video' && S.readerSourceName
         ? ((this._uploadBlobUrls && this._uploadBlobUrls.get(S.readerSourceName)) || S.readerSourceName)
         : '',
-      readerShowModeToggle: !readerOverviewMode && readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && !readerIsPDFKind,
+      // Same blob-URL door video already uses — an uploaded audio file exists
+      // only as an in-memory File, so its blob URL is the only thing that can
+      // be an <audio src>.
+      readerAudioSrc: readerType === 'audio' && S.readerSourceName
+        ? ((this._uploadBlobUrls && this._uploadBlobUrls.get(S.readerSourceName)) || S.readerSourceName)
+        : '',
+      setAudioEl: (el) => { this._audioEl = el; },
+      setAudioCanvas: (el) => { this._audioCanvasEl = el; if (el) this._renderAudioWaveform(); },
+      onAudioProgress: () => this._drawAudioProgress(),
+      seekAudioFromClick: (e) => this._seekAudioFromClick(e),
+      readerShowModeToggle: !readerOverviewMode && readerType !== 'video' && readerType !== 'audio' && readerType !== 'binary' && readerType !== 'spreadsheet' && !readerIsPDFKind,
       // PDF reader — rendered / extracted / split modes with page navigation
       readerIsPDF: readerType === 'pdf' && S.readerPDFLayout && S.readerPDFLayout[S.readerSourceName],
       readerPDFRenderedBg: S.readerPDFView === 'rendered' || S.readerPDFView === 'split' ? '#1F5A4C' : 'transparent',
@@ -5876,8 +5991,8 @@ class Component extends DCLogic {
       readerPreviewStatus: readerPreviewReady
         ? ''
         : ((S.readerSourceName ? S.readerContent[S.readerSourceName] : '') || 'Loading preview…'),
-      readerModeScroll: !readerOverviewMode && readerType !== 'video' && readerType !== 'binary' && readerType !== 'spreadsheet' && !readerIsPDFKind && S.readerViewMode !== 'paginated',
-      readerModePaginated: !readerOverviewMode && readerType !== 'video' && readerType !== 'spreadsheet' && !readerIsPDFKind && S.readerViewMode === 'paginated',
+      readerModeScroll: !readerOverviewMode && readerType !== 'video' && readerType !== 'audio' && readerType !== 'binary' && readerType !== 'spreadsheet' && !readerIsPDFKind && S.readerViewMode !== 'paginated',
+      readerModePaginated: !readerOverviewMode && readerType !== 'video' && readerType !== 'audio' && readerType !== 'spreadsheet' && !readerIsPDFKind && S.readerViewMode === 'paginated',
       setReaderScroll: () => this.setState({ readerViewMode: 'scroll' }),
       setReaderPaginated: () => this.setState({ readerViewMode: 'paginated' }),
       readerScrollColor: S.readerViewMode !== 'paginated' ? '#1F5A4C' : '#8C877C',
