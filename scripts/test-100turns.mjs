@@ -8,11 +8,14 @@ import http from "http";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { countTokens } from "../server/instruction-gate.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SERVER_URL = "http://localhost:11435";
+const SERVER_URL = "http://localhost:8899";
 const RESULTS_FILE = path.join(__dirname, "test-results-100turns.jsonl");
 const EVENTS_FILE = path.join(__dirname, "test-events-100turns.jsonl");
+const FORCE_MODEL = process.env.FORCE_MODEL || "gemma2:2b";
+const TURN_TIMEOUT_MS = 150_000;
 
 // Clear previous results
 if (fs.existsSync(RESULTS_FILE)) fs.unlinkSync(RESULTS_FILE);
@@ -423,7 +426,8 @@ const TEST_QUESTIONS = [
 ];
 
 async function main() {
-  console.log("=== 100-Turn Stress Test: Frankenstein + Instructions ===\n");
+  console.log("=== 100-Turn Stress Test: Frankenstein + Instructions ===");
+  console.log(`Model pinned: ${FORCE_MODEL} (per-turn timeout: ${TURN_TIMEOUT_MS}ms)\n`);
 
   // Check server health
   try {
@@ -435,18 +439,22 @@ async function main() {
     process.exit(1);
   }
 
-  // Create a test conversation
+  // Create a test conversation. The store's field is `title`, not `name` —
+  // sending the wrong key silently fell back to the literal default "New
+  // conversation" on every run, indistinguishable from any other test's
+  // conversation or the user's own, which is how a live run's conversation
+  // ended up in .trash mid-test (deleted by mistake, mistaken for clutter).
   console.log("Creating test conversation...");
   const convResp = await fetchJSON(`${SERVER_URL}/api/conversations`, {
     method: "POST",
-    body: JSON.stringify({ name: "100-turn-test", pool: "test-100turns" }),
+    body: JSON.stringify({ title: `100-turn-test ${new Date().toISOString()}` }),
   });
   const conversationId = convResp.id;
   console.log(`✓ Conversation created: ${conversationId}\n`);
 
   // Ingest Frankenstein
   console.log("Ingesting Frankenstein (pg84.txt)...");
-  const frankensteinPath = path.resolve(__dirname, "../pg84.txt");
+  const frankensteinPath = path.resolve(__dirname, "../../pg84.txt");
   const frankensteinContent = fs.readFileSync(frankensteinPath, "utf8");
   
   const ingestEvents = [];
@@ -460,6 +468,7 @@ async function main() {
         session: conversationId,
         stream: true,
       }),
+      signal: AbortSignal.timeout(180_000),
     },
     (event, data) => {
       ingestEvents.push({ event, data });
@@ -474,15 +483,29 @@ async function main() {
   );
   console.log();
 
-  // Create instruction folds
+  // Create instruction folds — idempotent by title. "corpus" is the app's
+  // real shared default pool, not a per-run sandbox, and re-POSTing the same
+  // 26 folds on every run (the previous behavior) silently quadrupled them
+  // to 50 across four runs: every "always: true" fold got surfaced on every
+  // turn regardless of relevance, crowding out the token budget that should
+  // hold the actual quoted source passages — the direct cause of a run
+  // where every answer's `citations` array came back empty. Checking by
+  // title first keeps this script safe to re-run without polluting the
+  // shared pool further.
   console.log("Creating instruction folds...");
+  const projectId = "corpus"; // Use corpus pool to match conversation's default pool
+  const existingFolds = await fetchJSON(`${SERVER_URL}/api/projects/${projectId}/instructions`);
+  const existingTitles = new Set((existingFolds.folds || []).map(f => f.title));
+  let created = 0, skipped = 0;
   for (const fold of INSTRUCTION_FOLDS) {
-    await fetchJSON(`${SERVER_URL}/api/projects/test-100turns/instructions`, {
+    if (existingTitles.has(fold.title)) { skipped++; continue; }
+    await fetchJSON(`${SERVER_URL}/api/projects/${projectId}/instructions`, {
       method: "POST",
       body: JSON.stringify(fold),
     });
+    created++;
   }
-  console.log(`✓ Created ${INSTRUCTION_FOLDS.length} instruction folds\n`);
+  console.log(`✓ Instruction folds ready: ${created} created, ${skipped} already present\n`);
 
   // Run 100 turns
   console.log("Running 100 turns...\n");
@@ -511,7 +534,8 @@ async function main() {
         `${SERVER_URL}/api/conversations/${conversationId}/turns`,
         {
           method: "POST",
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({ question, model: FORCE_MODEL }),
+          signal: AbortSignal.timeout(TURN_TIMEOUT_MS),
         },
         (event, data) => {
           turnResult.events.push({ event, data });
@@ -537,6 +561,11 @@ async function main() {
           } else if (event === "gap") {
             turnResult.gaps = turnResult.gaps || [];
             turnResult.gaps.push(data);
+          } else if (event === "usage") {
+            // Real tokens that hit the model — Ollama's own prompt_eval_count/
+            // eval_count (server/token-tally.js normalizeOllamaUsage), not an
+            // estimate. This is what actually crossed the wire this turn.
+            turnResult.usage = data.answer;
           } else if (event === "failed") {
             turnResult.errors.push(data);
             console.error(`  ✗ Failed: ${data.message}`);
@@ -559,13 +588,13 @@ async function main() {
   console.log("\n=== Test Complete ===");
   console.log(`Results saved to: ${RESULTS_FILE}`);
   console.log(`Events saved to: ${EVENTS_FILE}`);
-  
+
   // Summary
   const novelTurns = results.filter(r => r.category === "novel");
   const supportTurns = results.filter(r => r.category === "support");
   const errors = results.filter(r => r.errors.length > 0);
   const avgTime = results.reduce((sum, r) => sum + (r.timing.total || 0), 0) / results.length;
-  
+
   console.log("\n=== Summary ===");
   console.log(`Total turns: ${results.length}`);
   console.log(`Novel questions: ${novelTurns.length}`);
@@ -574,6 +603,54 @@ async function main() {
   console.log(`Average response time: ${Math.round(avgTime)}ms`);
   console.log(`Novel avg: ${Math.round(novelTurns.reduce((s, r) => s + (r.timing.total || 0), 0) / novelTurns.length)}ms`);
   console.log(`Support avg: ${Math.round(supportTurns.reduce((s, r) => s + (r.timing.total || 0), 0) / supportTurns.length)}ms`);
+
+  // Grounding — did the turn actually cite the ingested source, or answer
+  // from the model's own knowledge? A turn with zero citations is not
+  // necessarily wrong (some questions are legitimately about the assistant
+  // itself, not the novel), but the novel-category turns should be grounded.
+  const withCitations = results.filter(r => (r.citations || []).length > 0);
+  const novelGrounded = novelTurns.filter(r => (r.citations || []).length > 0);
+  console.log(`\n=== Grounding ===`);
+  console.log(`Turns with >=1 citation: ${withCitations.length}/${results.length}`);
+  console.log(`Novel turns grounded: ${novelGrounded.length}/${novelTurns.length}`);
+
+  // Real token accounting — every number below is Ollama's own
+  // prompt_eval_count/eval_count (server/token-tally.js), never an estimate.
+  const withUsage = results.filter(r => r.usage);
+  const totalRealTokens = withUsage.reduce((s, r) => s + (r.usage.totalTokens || 0), 0);
+  const totalInputTokens = withUsage.reduce((s, r) => s + (r.usage.inputTokens || 0), 0);
+  const totalOutputTokens = withUsage.reduce((s, r) => s + (r.usage.outputTokens || 0), 0);
+  const gatedTurns = results.filter(r => r.gate?.stats);
+  const avgGatedBlockTokens = gatedTurns.length
+    ? gatedTurns.reduce((s, r) => s + (r.gate.stats.blockTokens || 0), 0) / gatedTurns.length
+    : 0;
+
+  // The comparison system: what it would have cost to send the FULL 26-fold
+  // manual, unfolded, on every single turn — the thing the gate exists to
+  // avoid. Same tokenizer (instruction-gate.js::countTokens) as the gate
+  // itself uses, so the two numbers are directly comparable.
+  const ungatedManualTokens = countTokens(INSTRUCTION_FOLDS.map(f => f.body).join("\n"));
+  const ungatedTotalForRun = ungatedManualTokens * results.length;
+  const gatedTotalInstructionTokens = gatedTurns.reduce((s, r) => s + (r.gate.stats.blockTokens || 0), 0);
+  const savedTokens = ungatedTotalForRun - gatedTotalInstructionTokens;
+  const savedPct = ungatedTotalForRun > 0 ? (100 * savedTokens / ungatedTotalForRun) : 0;
+
+  console.log(`\n=== Real token accounting (Ollama-reported, not estimated) ===`);
+  console.log(`Turns with usage data: ${withUsage.length}/${results.length}`);
+  console.log(`Total real tokens (in+out): ${totalRealTokens}`);
+  console.log(`  input: ${totalInputTokens}  output: ${totalOutputTokens}`);
+  console.log(`Avg gated instruction-block tokens/turn: ${Math.round(avgGatedBlockTokens)}`);
+  console.log(`\n=== Gated (surf+fold) vs. ungated (full manual every turn) ===`);
+  console.log(`Full 26-fold manual, unfolded: ${ungatedManualTokens} tokens`);
+  console.log(`  x ${results.length} turns if sent ungated every time: ${ungatedTotalForRun} tokens`);
+  console.log(`Actual gated instruction tokens across the run: ${gatedTotalInstructionTokens} tokens`);
+  console.log(`Saved by gating: ${savedTokens} tokens (${savedPct.toFixed(1)}%)`);
+
+  return {
+    results, novelTurns, supportTurns, errors,
+    grounding: { withCitations: withCitations.length, novelGrounded: novelGrounded.length, novelTotal: novelTurns.length },
+    tokens: { totalRealTokens, totalInputTokens, totalOutputTokens, avgGatedBlockTokens, ungatedManualTokens, ungatedTotalForRun, gatedTotalInstructionTokens, savedTokens, savedPct },
+  };
 }
 
 main().catch(err => {
