@@ -18,8 +18,32 @@
 import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
 import { describeStopReason, streamAnthropicChat, describeApiError } from "./anthropic-provider.js";
 import { normalizeOllamaUsage, summarizeUsage } from "./token-tally.js";
+import { createInstructionGate } from "./instruction-gate.js";
+import { customInstructionStore } from "./custom-instruction-store.js";
+import { workspaceMemory } from "./workspace-memory.js";
+import { checkCompliance } from "./instruction-compliance.js";
+import { HolonicTask } from "./holonic-task.js";
 
 const HISTORY_TURNS = 6;
+
+function detectMultiSectionNeed(question) {
+  const q = question.toLowerCase();
+  const multiKeywords = [
+    'write', 'essay', 'report', 'analysis', 'explain', 'describe',
+    'compare', 'contrast', 'discuss', 'outline', 'summarize',
+    'what are the', 'list the', 'steps to', 'how to',
+  ];
+  const multiIndicators = [
+    'multiple', 'several', 'various', 'different',
+    'first', 'second', 'third',
+    'and', 'or', 'as well as',
+  ];
+  const hasMultiKeyword = multiKeywords.some(kw => q.includes(kw));
+  const hasMultiIndicator = multiIndicators.some(ind => q.includes(ind));
+  const isLongQuestion = question.length > 100;
+  const asksForStructure = /(\d+\.|\bbullet|\bstep|\bpart|\bsection|\bchapter)/i.test(q);
+  return (hasMultiKeyword && hasMultiIndicator) || isLongQuestion || asksForStructure;
+}
 
 function newAnswerEventKey(conversationId, turnId) {
   return `${conversationId}:${turnId}`;
@@ -72,6 +96,11 @@ export function createTurnController(deps) {
     modelRouter, heuristicModel, latencyBudgetMs, isWarming,
     settings = null, anthropicStream = streamAnthropicChat,
   } = deps;
+
+  // The instruction gate: loads custom folds per project, scores them against
+  // the turn's cue, and surfaces the relevant ones. Memory adjustments from
+  // workspace feedback influence the scoring.
+  const instructionGate = createInstructionGate();
 
   // One in-flight generation per (conversation, turn) at a time — stop/regenerate
   // both need to find it by that key alone, before they know an answerId.
@@ -316,8 +345,31 @@ export function createTurnController(deps) {
         byte_start: c.byte_start, byte_end: c.byte_end, score: c.score, text: c.text,
       }));
 
-      const history = buildHistoryMessages(conv, turn.id);
+      // Load custom instruction folds for this project and gate them.
+      const projectId = conv.pool || conv.id;
+      const customFolds = await customInstructionStore.loadFolds(projectId);
+      instructionGate.setFolds(customFolds);
+      const memoryAdjustments = await workspaceMemory.allAdjustments(projectId);
+      const gateResult = instructionGate.gate({
+        question,
+        history: history.map(h => h.content).filter(Boolean),
+        memoryAdjustments,
+        debug: true,
+      });
+
+      // Build messages array, inserting instruction gate system message if present.
       const messages = [systemMsg, ...history, { role: "user", content: question }];
+      if (gateResult.systemMessage) {
+        messages.splice(1, 0, { role: "system", content: gateResult.systemMessage });
+      }
+
+      sendEvent("instruction_gate", {
+        turnId: turn.id, answerId,
+        activeIds: gateResult.activeIds,
+        foldedIds: gateResult.foldedIds,
+        stats: gateResult.stats,
+        scores: gateResult.scores,
+      });
 
       let sawStart = false;
       // Held on the controller so the stop path can persist the tokens the
@@ -394,6 +446,38 @@ export function createTurnController(deps) {
       }
       for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
+      // DEF·EVA·REC compliance check: did the response follow the surfaced instructions?
+      let complianceResult = null;
+      if (gateResult.surfaced.length > 0) {
+        try {
+          complianceResult = await checkCompliance({
+            response: finalText,
+            activeFolds: gateResult.surfaced,
+            question,
+            model: null, // mechanical check only; model-based REC requires a speak function
+            speak: null,
+          });
+          sendEvent("compliance_checked", {
+            turnId: turn.id, answerId,
+            verdict: complianceResult.verdict,
+            method: complianceResult.method,
+            violations: complianceResult.violations || [],
+          });
+        } catch (err) {
+          // Compliance check failure should not break the turn
+          complianceResult = { verdict: "unknown", method: "error", error: err.message };
+        }
+      }
+
+      // Record the turn to workspace memory for future surf scoring.
+      await workspaceMemory.recordTurn(projectId, {
+        turnId: turn.id,
+        question,
+        activeFoldIds: gateResult.activeIds,
+        verdict: complianceResult?.verdict || "unknown",
+        compliance: complianceResult,
+      });
+
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
         text: finalText, model, provider, citations: brackets, gaps,
         fidelity, status: "completed", completedAt: new Date().toISOString(),
@@ -429,6 +513,106 @@ export function createTurnController(deps) {
     }
   }
 
+  async function runMultiSectionAnswer({ conv, turn, answerId, question, sourceScope, pool }, sendEvent) {
+    const key = newAnswerEventKey(conv.id, turn.id);
+    const controller = new AbortController();
+    activeControllers.set(key, controller);
+
+    try {
+      sendEvent("multi_section_started", { turnId: turn.id, answerId, question });
+
+      const task = new HolonicTask({
+        task: question,
+        model: heuristicModel([{ role: "user", content: question }]),
+        engine: {
+          search: (query, opts) => {
+            const groundResult = groundQuery(query, {
+              budget: 2000, maxUnits: 5, limit: 10,
+              source: sourceScope, pool: pool || "corpus",
+            });
+            return (groundResult.citations || []).map((c, i) => ({
+              text: c.text,
+              source: c.source_id,
+              score: c.score,
+              span_id: c.span_id,
+              byte_start: c.byte_start,
+              byte_end: c.byte_end,
+            }));
+          },
+          getPriors: null,
+        },
+      });
+
+      const sections = [];
+      let totalChars = 0;
+
+      const result = await task.run({
+        onProgress: (phase, msg, data) => {
+          sendEvent("multi_section_progress", {
+            turnId: turn.id, answerId,
+            phase, msg, ...data,
+          });
+        },
+      });
+
+      for (const sectionResult of result.results) {
+        const section = {
+          id: sectionResult.id,
+          label: sectionResult.label,
+          content: sectionResult.content,
+          citations: sectionResult.citations.map(c => {
+            const surf = sectionResult.surf[c.surfIndex];
+            return {
+              jaccard: c.evidence.jaccard,
+              source: surf ? surf.source : null,
+              quote: surf ? surf.text.slice(0, 200) : null,
+            };
+          }),
+        };
+        sections.push(section);
+        totalChars += section.content.length;
+
+        sendEvent("multi_section_completed", {
+          turnId: turn.id, answerId,
+          section,
+          sectionIndex: sections.length - 1,
+          totalSections: result.results.length,
+        });
+      }
+
+      await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+        text: result.output,
+        sections,
+        status: "completed",
+        completedAt: new Date().toISOString(),
+        multiSection: true,
+      });
+
+      sendEvent("completed", {
+        turnId: turn.id, answerId,
+        status: "completed",
+        text: result.output,
+        sections,
+        multiSection: true,
+        summary: `${sections.length} sections · ${totalChars} chars`,
+      });
+    } catch (err) {
+      if (err.name === "AbortError" || err.name === "APIUserAbortError") {
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          status: "interrupted", completedAt: new Date().toISOString(),
+        }).catch(() => {});
+        sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: "" });
+      } else {
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+        }).catch(() => {});
+        sendEvent("failed", { turnId: turn.id, answerId, message: err.message });
+      }
+    } finally {
+      activeControllers.delete(key);
+    }
+  }
+
   async function startTurn({ conversationId, question, sourceScope, pool, attachments }, sendEvent) {
     const conv = await conversationStore.require(conversationId);
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
@@ -441,10 +625,20 @@ export function createTurnController(deps) {
       sourceScope: effectiveScope, pool: pool || conv.pool || "corpus",
     });
 
-    const run = runAnswer({
-      conv, turn, answerId: answer.id,
-      question, sourceScope: effectiveScope, pool: pool || conv.pool,
-    }, sendEvent);
+    const useMultiSection = detectMultiSectionNeed(question);
+    
+    let run;
+    if (useMultiSection) {
+      run = runMultiSectionAnswer({
+        conv, turn, answerId: answer.id,
+        question, sourceScope: effectiveScope, pool: pool || conv.pool,
+      }, sendEvent);
+    } else {
+      run = runAnswer({
+        conv, turn, answerId: answer.id,
+        question, sourceScope: effectiveScope, pool: pool || conv.pool,
+      }, sendEvent);
+    }
 
     return { turnId: turn.id, answerId: answer.id, done: run };
   }

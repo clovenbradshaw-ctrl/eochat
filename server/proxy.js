@@ -62,6 +62,7 @@ import { addUsage, rollUpUsage } from "./token-tally.js";
 import { runSessionMessage } from "./code-longform-session.js";
 import { customInstructionStore } from "./custom-instruction-store.js";
 import { workspaceMemory } from "./workspace-memory.js";
+import { projectStore } from "./project-store.js";
 
 // ── CLI args with validation ──
 
@@ -3723,6 +3724,57 @@ const server = http.createServer((req, res) => {
         sendJson(status, { error: err.message });
       }
     })();
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Projects — list and create.
+  // ══════════════════════════════════════════════════════════════
+  if (req.url === "/api/projects") {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+    if (req.method === "GET") {
+      projectStore.list().then(projects => sendJson(200, { projects })).catch(err => sendJson(500, { error: err.message }));
+      return;
+    }
+
+    if (req.method === "POST") {
+      let body = "";
+      req.on("data", c => { body += c; });
+      req.on("end", () => {
+        try {
+          const { name, description } = JSON.parse(body || "{}");
+          projectStore.create({ name, description }).then(project => sendJson(201, project)).catch(err => sendJson(500, { error: err.message }));
+        } catch (err) {
+          sendJson(400, { error: err.message });
+        }
+      });
+      return;
+    }
+
+    sendJson(405, { error: "Method not allowed" });
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Models — list available models.
+  // ══════════════════════════════════════════════════════════════
+  if (req.url === "/api/models") {
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+    // Return the models the proxy knows about — local Ollama models plus
+    // the Anthropic models if a key is configured.
+    const models = [
+      { id: "local", name: "Local model", provider: "ollama" },
+    ];
+    if (settingsStore.anthropicKey()) {
+      models.push(
+        { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", provider: "anthropic" },
+        { id: "claude-3-5-sonnet-20241022", name: "Claude 3.5 Sonnet", provider: "anthropic" },
+        { id: "claude-3-haiku-20240307", name: "Claude 3 Haiku", provider: "anthropic" },
+      );
+    }
+    sendJson(200, { models });
     return;
   }
 
