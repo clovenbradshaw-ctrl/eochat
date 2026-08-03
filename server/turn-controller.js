@@ -23,6 +23,13 @@ import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
 import { createInstructionGate, countTokens as gateCountTokens } from "./instruction-gate.js";
 import { reviewOutput, buildCorrectionSystemContent } from "./output-review.js";
+import {
+  applyTurn, buildMemoryMessage, checkRecallDenial, emptyMemory,
+  isAcknowledgment,
+} from "./conversation-memory.js";
+import {
+  buildCabinetBlock, emptyCabinet, mergeDeskFacts, markAccessed, retrieveCabinet,
+} from "./project-memory.js";
 
 // Mechanical post-processing: read the model's own output and format it for
 // display — no model call, no learned system, just regexes and rules.
@@ -107,6 +114,7 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
  * @param {number} deps.latencyBudgetMs
  * @param {() => boolean} deps.isWarming - true while the corpus is still ingesting at boot
  * @param {(query: string, opts?: object) => Promise<Array<{rank:number,title:string,url:string,snippet:string,text:string}>>} deps.webSearchFn - performs web search + fetch, returns structured results
+ * @param {object|null} deps.cabinetStore - project file-cabinet store (has .get(pool) and .set(pool, cabinet)); null disables cabinet memory
  */
 // The grounding instruction the talker actually receives.
 //
@@ -175,6 +183,7 @@ export function createTurnController(deps) {
     conversationStore, groundQuery, target, anthropicKey, anthropicModel,
     numCtx,
     modelRouter, heuristicModel, latencyBudgetMs, isWarming, webSearchFn,
+    cabinetStore,
   } = deps;
 
   const _getAnthropicKey = () => typeof anthropicKey === 'function' ? anthropicKey() : anthropicKey;
@@ -212,6 +221,71 @@ export function createTurnController(deps) {
     return (conv.turns || []).filter((t) => t.id !== beforeTurnId).slice(-HISTORY_TURNS).map((t) => t.question);
   }
 
+  // The desk (conversation-memory.js) and the cabinet (project-memory.js),
+  // resolved together for one turn. The desk is always injected, from the
+  // conversation record's own persisted state; the cabinet is cued by the
+  // question and only its matching memos are injected. Returns the blocks to
+  // place in the model context AND the raw state the turn's own memory update
+  // will advance from.
+  async function loadDiscourseBlocks({ question, conv, pool }) {
+    const state = conv.memory && (conv.memory.hot?.length || conv.memory.facts?.length)
+      ? conv.memory
+      : emptyMemory();
+    const memoryMsg = buildMemoryMessage(state);
+
+    const poolId = pool || conv.pool;
+    let cabinet = null;
+    let retrieval = null;
+    let cabinetBlock = null;
+    if (cabinetStore && poolId && poolId !== "corpus") {
+      cabinet = await cabinetStore.get(poolId);
+      retrieval = cabinet ? retrieveCabinet(cabinet, { question }) : null;
+      cabinetBlock = retrieval?.memos.length ? buildCabinetBlock(retrieval.memos) : null;
+    }
+
+    return { state, memoryMsg, cabinet, retrieval, cabinetBlock };
+  }
+
+  // Advance the desk by this turn and persist it, then fold any newly confirmed
+  // facts into the project cabinet (and mark the memos that were actually
+  // injected this turn as accessed — being reached for IS use). Emits the
+  // discourse_report the UI and the audit trail both read. No-op-safe: a
+  // conversation with no pool and no cabinet still persists its desk.
+  async function persistTurnMemory({ conv, turn, question, answerText, denial, discourse, answerId, sendEvent }) {
+    const turnNumber = (conv.turns || []).length;
+    const confirmed = isAcknowledgment(answerText);
+    const next = applyTurn(discourse.state, turnNumber, {
+      userText: question,
+      assistantText: answerText,
+      confirmed,
+    });
+
+    await conversationStore.setMemory(conv.id, next);
+
+    const poolId = conv.pool;
+    if (cabinetStore && poolId && poolId !== "corpus") {
+      const merged = mergeDeskFacts(discourse.cabinet || emptyCabinet(), {
+        facts: next.facts,
+        conversationId: conv.id,
+        turn: turnNumber,
+      });
+      const accessed = discourse.retrieval?.memos.length
+        ? markAccessed(merged, discourse.retrieval.memos.map((m) => m.id))
+        : merged;
+      await cabinetStore.set(poolId, accessed);
+    }
+
+    const nextMsg = buildMemoryMessage(next);
+    sendEvent("discourse_report", {
+      turnId: turn.id, answerId,
+      facts: next.facts.length,
+      acknowledged: confirmed,
+      denial: denial ? { verdict: denial.verdict, flags: denial.flags } : null,
+      deskTokens: gateCountTokens(nextMsg || ""),
+    });
+    return next;
+  }
+
   // Gate one turn's instruction context. Returns null when there is no corpus
   // (an empty gate is a no-op, never a crash), otherwise the report for SSE +
   // persistence plus the system message to prepend to the model call.
@@ -223,7 +297,7 @@ export function createTurnController(deps) {
   // different fold sets and their own budgets, so a long project manual cannot
   // crowd out the app's identity and citation rules or vice versa. Each keeps
   // its own block so the model can tell whose rule it is reading.
-  function gateInstructionBlock({ question, conv, turnId }) {
+  function gateInstructionBlock({ question, conv, turnId, evidence }) {
     const history = recentUserQuestions(conv, turnId);
     const blocks = [];
     const reports = [];
@@ -231,7 +305,7 @@ export function createTurnController(deps) {
     const inForce = [];
 
     if (instructionGate.folds.length) {
-      const r = instructionGate.gate({ question, history });
+      const r = instructionGate.gate({ question, history, evidence });
       blocks.push(r.systemMessage);
       reports.push({ corpus: "app", ...summarizeGate(r) });
       inForce.push(...instructionGate.folds);
@@ -244,7 +318,7 @@ export function createTurnController(deps) {
         budgetTokens: project.budgetTokens,
         label: "PROJECT INSTRUCTION GATE",
       });
-      const r = projectGate.gate({ question, history });
+      const r = projectGate.gate({ question, history, evidence });
       blocks.push(r.systemMessage);
       reports.push({ corpus: "project", ...summarizeGate(r) });
       inForce.push(...project.folds);
@@ -469,33 +543,52 @@ export function createTurnController(deps) {
   }
 
   // Finalize the model's raw output AND review it against the instruction
-  // folds that were in force (grounding). When the mechanical review flags the
-  // answer, a bounded correction loop (≤2) re-asks the model to fix ONLY the
-  // flagged violations, then re-reviews. The text that ships is the reviewed
-  // one; the review itself is emitted as `review_report` and persisted.
+  // folds that were in force (grounding) and the conversation's working memory
+  // (recall-denial). When either mechanical review flags the answer, a bounded
+  // correction loop (≤2) re-asks the model to fix ONLY the flagged violations,
+  // then re-reviews. The text that ships is the reviewed one; both reviews are
+  // emitted (`review_report` for instruction folds, `discourse_report` via the
+  // caller) and persisted.
   //
   // Order matters: citations/brackets/fidelity are resolved on the final text,
   // whether that text is the original or a correction.
-  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, sendEvent, turnId, answerId, provider, modelOverride }) {
+  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride }) {
     let text = rawText;
     let display = formatOutput(text);
     let brackets = resolveCitationBrackets(text, lastCitations).citations;
     let finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
 
+    const facts = memory?.state?.facts || [];
+    const runReviews = () => ({
+      review: gate
+        ? reviewOutput({
+            question, answer: finalText,
+            gate: { activeIds: gate.activeIds, folds: gate.folds || instructionGate.folds, stats: gate.stats || {} },
+            groundText,
+          })
+        : { verdict: "PASS", flags: [] },
+      denial: facts.length
+        ? checkRecallDenial({ question, answer: finalText, facts })
+        : { verdict: "PASS", flags: [], denialSentences: [] },
+    });
+
     let corrected = false, iterations = 0;
-    let review = null;
-    if (gate) {
-      review = reviewOutput({
-        question, answer: finalText,
-        gate: { activeIds: gate.activeIds, folds: gate.folds || instructionGate.folds, stats: gate.stats || {} },
-        groundText,
-      });
-      while (review.verdict === "FLAGGED" && iterations < 2) {
-        const correction = buildCorrectionSystemContent(review.flags, gate.activeIds);
+    let { review, denial } = runReviews();
+    // The denial flags as first seen, kept even when a correction resolves
+    // them: an audit trail that says "the answer denied, then was fixed" must
+    // say what it denied, not just that something was fixed.
+    let denialSeen = denial.verdict === "FLAGGED" ? denial : null;
+    const allFlags = () => [...(review.flags || []), ...(denial.flags || [])];
+    const needCorrection = () => review.verdict === "FLAGGED" || denial.verdict === "FLAGGED";
+
+    if (gate || facts.length) {
+      while (needCorrection() && iterations < 2) {
+        const correction = buildCorrectionSystemContent(allFlags(), gate?.activeIds);
         let next;
         try {
           next = await callModelNonStreaming([
-            { role: "system", content: gate.systemMessage },
+            ...(gate?.systemMessage ? [{ role: "system", content: gate.systemMessage }] : []),
+            ...(memory?.message ? [{ role: "system", content: memory.message }] : []),
             { role: "system", content: correction },
             { role: "user", content: question },
           ], { provider, modelOverride });
@@ -509,11 +602,8 @@ export function createTurnController(deps) {
         display = formatOutput(text);
         brackets = resolveCitationBrackets(text, lastCitations).citations;
         finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
-        review = reviewOutput({
-          question, answer: finalText,
-          gate: { activeIds: gate.activeIds, folds: gate.folds || instructionGate.folds, stats: gate.stats || {} },
-          groundText,
-        });
+        ({ review, denial } = runReviews());
+        if (!denialSeen && denial.verdict === "FLAGGED") denialSeen = denial;
       }
     }
 
@@ -544,7 +634,20 @@ export function createTurnController(deps) {
     if (reviewReport) {
       sendEvent("review_report", { turnId, answerId, ...reviewReport });
     }
-    return { finalText, brackets, fidelity, snippets, review: reviewReport, groundingCheck, annotatedText };
+    const denialReport = denial
+      ? {
+          verdict: denial.verdict,
+          wasFlagged: !!denialSeen,
+          flags: (denialSeen || denial).flags,
+          denialSentences: (denialSeen || denial).denialSentences,
+          corrected,
+          iterations,
+        }
+      : null;
+    if (denialReport && (denial.verdict === "FLAGGED" || corrected)) {
+      sendEvent("discourse_review", { turnId, answerId, ...denialReport });
+    }
+    return { finalText, brackets, fidelity, snippets, review: reviewReport, denial: denialReport, groundingCheck, annotatedText };
   }
 
   // ── Surf mode: wide retrieval with no model generation ──
@@ -788,11 +891,19 @@ export function createTurnController(deps) {
         });
 
         const history = buildHistoryMessages(conv, turn.id);
-        const messages = [systemMsg, ...history, { role: "user", content: question }];
+        const discourse = await loadDiscourseBlocks({ question, conv, pool });
+        const messages = [];
+        if (discourse.cabinetBlock) messages.push({ role: "system", content: discourse.cabinetBlock });
+        if (discourse.memoryMsg) messages.push({ role: "system", content: discourse.memoryMsg });
+        messages.push(systemMsg);
 
-        const gateInfo = gateInstructionBlock({ question, conv, turnId: turn.id });
+        const gateInfo = gateInstructionBlock({
+          question, conv, turnId: turn.id,
+          evidence: webResults.map((r) => [r.title, r.text || r.snippet || ""].join("\n")),
+        });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
-        if (gateInfo) messages.unshift({ role: "system", content: gateInfo.systemMessage });
+        if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
+        messages.push(...history, { role: "user", content: question });
 
         let sawStart = false;
         const { text: rawText, model } = await callModelStreaming(messages, {
@@ -805,9 +916,9 @@ export function createTurnController(deps) {
         });
 
         const groundText = webResults.map((r) => `${r.title}\n${r.text || r.snippet || ""}`).join("\n\n");
-        const { finalText, brackets, fidelity, snippets, review, groundingCheck, annotatedText } = await finalizeAndReview({
+        const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
           rawText, lastCitations, maxCitation, question,
-          gate: gateInfo, groundText, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
+          gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
         });
 
         for (const c of brackets) {
@@ -854,11 +965,21 @@ export function createTurnController(deps) {
           citations: brackets, gaps, snippets, model, webSearch: true,
           summary: `${webResults.length} web sources`,
         });
+        await persistTurnMemory({
+          conv, turn, question, answerText: finalText, denial,
+          discourse, answerId, sendEvent,
+        });
       } else {
         // ── Engine grounding path: retrieved is empty (reserved for web results) ──
+        // The desk loads BEFORE retrieval so the conversation's topic trace can
+        // condition the ground query (engineGroundQuery's `discourse` widening).
+        const discourse = await loadDiscourseBlocks({ question, conv, pool });
         const groundResult = groundQuery(question, {
           budget: 3000, maxUnits: 5, limit: 16,
           source: sourceScope, pool: pool || "corpus",
+          discourse: discourse.state.hot?.length
+            ? discourse.state.hot.slice(0, 4).map((t) => t.term).join(" ")
+            : undefined,
         });
         const { message: systemMsg, maxCitation, warming } =
           buildGroundedSystemMessage(groundResult, isWarming ? isWarming() : false);
@@ -880,6 +1001,7 @@ export function createTurnController(deps) {
           })),
           gaps: groundResult.gaps || [],
           priorWidening: groundResult.priorWidening || null,
+          discourse: groundResult.discourse || null,
         });
 
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
@@ -892,6 +1014,7 @@ export function createTurnController(deps) {
             empty: !groundResult.context,
             warming,
             priorWidening: groundResult.priorWidening || null,
+            discourse: groundResult.discourse || null,
           },
         });
 
@@ -901,11 +1024,18 @@ export function createTurnController(deps) {
         }));
 
         const history = buildHistoryMessages(conv, turn.id);
-        const messages = [systemMsg, ...history, { role: "user", content: question }];
+        const messages = [];
+        if (discourse.cabinetBlock) messages.push({ role: "system", content: discourse.cabinetBlock });
+        if (discourse.memoryMsg) messages.push({ role: "system", content: discourse.memoryMsg });
+        messages.push(systemMsg);
 
-        const gateInfo = gateInstructionBlock({ question, conv, turnId: turn.id });
+        const gateInfo = gateInstructionBlock({
+          question, conv, turnId: turn.id,
+          evidence: (groundResult.citations || []).map((c) => c.text),
+        });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
-        if (gateInfo) messages.unshift({ role: "system", content: gateInfo.systemMessage });
+        if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
+        messages.push(...history, { role: "user", content: question });
 
         let sawStart = false;
         const { text: rawText, model } = await callModelStreaming(messages, {
@@ -918,9 +1048,9 @@ export function createTurnController(deps) {
         });
 
         const groundText = (groundResult.citations || []).map((c) => c.text).join("\n\n");
-        const { finalText, brackets, fidelity, snippets, review, groundingCheck, annotatedText } = await finalizeAndReview({
+        const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
           rawText, lastCitations, maxCitation, question,
-          gate: gateInfo, groundText, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
+          gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
         });
 
         for (const c of brackets) {
@@ -971,6 +1101,10 @@ export function createTurnController(deps) {
           annotatedText, groundingCheck,
           citations: brackets, gaps, snippets, model, review,
           summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
+        });
+        await persistTurnMemory({
+          conv, turn, question, answerText: finalText, denial,
+          discourse, answerId, sendEvent,
         });
       }
     } catch (err) {

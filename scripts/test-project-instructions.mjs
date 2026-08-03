@@ -140,6 +140,101 @@ test("R2 — a turn matching nothing names the gap instead of going silent", () 
   assert.ok(/NO FOLD SURFACED THIS TURN/.test(r.systemMessage));
 });
 
+// ── the evidence-extended cue ──
+//
+// The retrieval that feeds the answer runs before the gate on every server
+// path, so the passages the answer will be built from are a second signal
+// channel: a fold the retrieved evidence is about must surface even when the
+// question itself does not name it, or the model would obey every rule except
+// the one governing the evidence it is quoting. Evidence hits are weighted
+// below cue hits and capped, so a fold the question names directly always
+// outranks a fold that only matches incidental passage text.
+
+test("the evidence-extended cue surfaces a fold the question does not name", () => {
+  const { folds } = compileInstructionFolds(LONG, { budgetTokens: TIGHT });
+  const gate = createInstructionGate({ folds, budgetTokens: TIGHT });
+  const r = gate.gate({
+    question: "Tell me what you know.",
+    evidence: ["Invoice ledger reconciliation remains the billing department's responsibility."],
+  });
+  const surfacedText = r.surfaced.map((f) => f.body).join("\n");
+  assert.ok(/issued on the first business day/.test(surfacedText),
+    `billing rule did not surface from evidence; active: ${r.activeIds.join(", ")}`);
+  assert.equal(r.stats.gap, false, "an evidence-matched turn must not read as a gap");
+});
+
+test("a fold the question names outranks a fold only the evidence names", () => {
+  const { folds } = compileInstructionFolds(LONG, { budgetTokens: TIGHT });
+  const gate = createInstructionGate({ folds, budgetTokens: TIGHT });
+  const r = gate.gate({
+    question: "What is our refund policy?",
+    evidence: ["Courier dispatch manifests are logged against each outbound bundle."],
+    debug: true,
+  });
+  const refund = r.scores.find((s) => s.id.includes("refund-policy"));
+  const shipping = r.scores.find((s) => s.id.includes("shipping-and-delivery"));
+  assert.ok(refund && refund.score > 0, "refund fold did not match its cue");
+  assert.ok(shipping && shipping.score > 0, "shipping fold did not match the evidence");
+  assert.ok(refund.score > shipping.score,
+    `cue-named fold (${refund.score}) must outrank evidence-only fold (${shipping.score})`);
+  assert.ok(shipping.matched.some((m) => m.startsWith("ev:")),
+    `shipping fold has no recorded evidence match: ${shipping.matched.join(", ")}`);
+});
+
+test("evidence relevance suppresses the false gap (R2)", () => {
+  const { folds } = compileInstructionFolds(LONG, { budgetTokens: TIGHT });
+  const gate = createInstructionGate({ folds, budgetTokens: TIGHT });
+  const noEvidence = gate.gate({ question: "zzyzx quixotropic bandersnatch" });
+  assert.equal(noEvidence.stats.gap, true);
+  const withEvidence = gate.gate({
+    question: "zzyzx quixotropic bandersnatch",
+    evidence: ["Refund adjudication follows the partner review calendar."],
+  });
+  assert.equal(withEvidence.stats.gap, false, "evidence-matched rules must suppress the no-fold marker");
+  assert.ok(/NO FOLD SURFACED THIS TURN/.test(noEvidence.systemMessage));
+  assert.ok(!/NO FOLD SURFACED THIS TURN/.test(withEvidence.systemMessage));
+});
+
+// ── history is a weaker channel than the current question ──
+//
+// The gate's cue used to be `history + question` at full weight, so a long
+// conversation that touched several topics kept every topic's folds in force
+// and crowded out the current question's own folds. History is now a capped
+// secondary channel: it keeps the thread for purely referential follow-ups,
+// but a topic the conversation has left can no longer outrank the fold the
+// reader is actually asking about right now.
+
+test("a topic only in history cannot outrank the current question's fold", () => {
+  const { folds } = compileInstructionFolds(LONG, { budgetTokens: TIGHT });
+  const gate = createInstructionGate({ folds, budgetTokens: TIGHT });
+  const r = gate.gate({
+    question: "What is our refund policy?",
+    history: ["Courier dispatch manifests are logged against each outbound bundle."],
+    debug: true,
+  });
+  const refund = r.scores.find((s) => s.id.includes("refund-policy"));
+  const shipping = r.scores.find((s) => s.id.includes("shipping-and-delivery"));
+  assert.ok(refund && refund.score > 0, "refund fold did not match its question");
+  assert.ok(shipping && shipping.score > 0, "shipping fold did not match the history");
+  assert.ok(refund.score > shipping.score,
+    `the question-named fold (${refund.score}) must outrank a fold only in history (${shipping.score})`);
+  assert.ok(shipping.matched.some((m) => m.startsWith("hist:")),
+    `shipping fold has no recorded history match: ${shipping.matched.join(", ")}`);
+});
+
+test("history keeps the thread for a referential follow-up (no false gap)", () => {
+  const { folds } = compileInstructionFolds(LONG, { budgetTokens: TIGHT });
+  const gate = createInstructionGate({ folds, budgetTokens: TIGHT });
+  const r = gate.gate({
+    question: "And what about the other one?",
+    history: ["What is our refund window?"],
+  });
+  const surfacedText = r.surfaced.map((f) => f.body).join("\n");
+  assert.ok(/fourteen days from dispatch/.test(surfacedText),
+    `refund rule did not surface from history; active: ${r.activeIds.join(", ")}`);
+  assert.equal(r.stats.gap, false, "a referential follow-up on a known topic must not read as a gap");
+});
+
 test("R5 — the block stays inside its budget however long the instructions are", () => {
   // Forty times the corpus against an unchanged budget. The point of the gate
   // is that the block does not grow with the manual.

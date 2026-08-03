@@ -8,14 +8,14 @@
 // eval'd as an ordinary script (dc-runtime's evalDcLogic — see support.js),
 // not a module, so it can only reach this through a global, not an import.
 //
-// Model choice: the smallest instruct build in WebLLM's prebuilt catalog —
-// SmolLM2-360M-Instruct-q4f16_1-MLC, ~376MB quantized. SmolLM2 is
-// HuggingFace's own small-model line, benchmarked specifically for the
-// best quality/size trade-off on short-prompt instruction-following, and
-// this is its smallest quantized WebLLM build — which is also the one most
-// likely to download reliably: fewer bytes over a flaky connection is a
-// stability property, not just a size one.
-const MODEL_ID = "SmolLM2-360M-Instruct-q4f16_1-MLC";
+// Model choice: the 3B instruct tier of WebLLM's prebuilt catalog —
+// Llama-3.2-3B-Instruct-q4f16_1-MLC (~2.3GB VRAM, ~2GB download). Nothing
+// smaller survives a real reading question well, and of the prebuilt 3B
+// instruct builds this is the one that does not also demand the shader-f16
+// adapter feature, so it has the widest device reach of the 3B candidates.
+// On the static (GitHub Pages) build this download is the entire answer
+// path, so it starts automatically the moment the page mounts.
+const MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
 // esm.run (jsdelivr) serves an ESM build with no bundler required — the
 // WebLLM README's own documented no-build integration path.
@@ -29,8 +29,22 @@ const WEBLLM_MODULE_URL = "https://esm.run/@mlc-ai/web-llm";
 const MAX_LOAD_ATTEMPTS = 3;
 const RETRY_BACKOFF_MS = [1000, 3000, 7000];
 
-function supportsWebGPU() {
-  return typeof navigator !== "undefined" && !!navigator.gpu;
+// Why local mode can be off. The three common reasons look nothing alike to
+// a reader — a browser with WebGPU disabled, a page served over plain http
+// (WebGPU requires a secure context), and a GPU that offers no adapter are
+// all "the model didn't load" from the reader's chair. Report which one, with
+// the specific fix, instead of one generic wall of text.
+function webgpuReadiness() {
+  if (typeof navigator === "undefined" || typeof window === "undefined") {
+    return { ok: false, key: "not-a-browser", hint: "This page is not running in a browser, so the in-tab model cannot load." };
+  }
+  if (window.isSecureContext === false) {
+    return { ok: false, key: "insecure-context", hint: "WebGPU only runs in a secure context (https:// or http://localhost). This page is served over plain http — serve it over https and reload." };
+  }
+  if (!navigator.gpu) {
+    return { ok: false, key: "no-webgpu", hint: "This browser exposes no WebGPU, which the in-tab model needs. In Chrome/Edge, turn on hardware acceleration (Settings → System) and check chrome://gpu; WebLLM does not run in Firefox at all. Then reload this tab." };
+  }
+  return { ok: true, key: "webgpu" };
 }
 
 let webllmModulePromise = null;
@@ -77,9 +91,29 @@ class LocalModel {
   }
 
   async _runInit() {
-    if (!supportsWebGPU()) {
+    const readiness = webgpuReadiness();
+    if (!readiness.ok) {
       this.status = "unsupported";
-      this.error = "No WebGPU in this browser — local mode needs it to run a model in the tab.";
+      this.error = readiness.hint;
+      this._emit();
+      return this.snapshot();
+    }
+
+    // The WebGPU API existing does not mean an adapter can be created
+    // (headless Chrome, GPU blocklisted, hardware acceleration off). Fail
+    // fast with the specific reason rather than letting CreateMLCEngine throw
+    // after the download has already started.
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) {
+        this.status = "unsupported";
+        this.error = "WebGPU is present but this device offers no GPU adapter — usually hardware acceleration being off or the GPU being blocklisted. Turn hardware acceleration on and reload.";
+        this._emit();
+        return this.snapshot();
+      }
+    } catch (adapterErr) {
+      this.status = "unsupported";
+      this.error = "WebGPU adapter could not be created: " + ((adapterErr && adapterErr.message) || adapterErr);
       this._emit();
       return this.snapshot();
     }

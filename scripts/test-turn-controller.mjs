@@ -10,6 +10,7 @@ import path from "node:path";
 import os from "node:os";
 import assert from "node:assert/strict";
 import { ConversationStore } from "../server/conversation-store.js";
+import { CabinetStore } from "../server/cabinet-store.js";
 import { createTurnController } from "../server/turn-controller.js";
 
 function encode(obj) { return new TextEncoder().encode(JSON.stringify(obj) + "\n"); }
@@ -68,6 +69,45 @@ async function withController(dir, fetchMock, groundResult, extra = {}) {
     ...extra,
   });
   return { conversationStore, controller, groundCalls };
+}
+
+// A fetch mock that records every request body (so a test can assert what the
+// model was actually told) AND serves both call shapes the pipeline makes:
+// the streaming /api/chat call and the non-streaming correction call.
+function makeRecordingFetchMock(chunks, { correctionText = "" } = {}) {
+  const requests = [];
+  const fetchMock = async (url, opts) => {
+    let parsed = null;
+    try { parsed = JSON.parse(opts.body); } catch { /* keep null */ }
+    requests.push({ url, body: parsed });
+    if (parsed && parsed.stream === false) {
+      return { ok: true, json: async () => ({ message: { content: correctionText } }) };
+    }
+    let i = 0;
+    const signal = opts.signal;
+    return {
+      ok: true,
+      body: {
+        getReader() {
+          return {
+            async read() {
+              if (signal?.aborted) {
+                const e = new Error("aborted"); e.name = "AbortError"; throw e;
+              }
+              if (i >= chunks.length) return { done: true, value: undefined };
+              const value = encode(chunks[i++]);
+              return { done: false, value };
+            },
+          };
+        },
+      },
+    };
+  };
+  return { fetchMock, requests };
+}
+
+function systemMessagesOf(request) {
+  return (request?.body?.messages || []).filter((m) => m.role === "system").map((m) => m.content);
 }
 
 function collectEvents() {
@@ -258,6 +298,121 @@ async function testUnresolvedCitationProducesNoSnippet(dir) {
   console.log("  ok: an unresolved citation produces no verbatim snippet");
 }
 
+async function testNeedleInHaystack(dir) {
+  // The failure this suite exists to prevent, end to end: a fact the reader
+  // stated early is planted, the assistant acknowledges it ("Noted."), eight
+  // unrelated turns push it out of the HISTORY_TURNS=6 sliding window, and a
+  // much later probe ("what is the vault access code?") must STILL be answered
+  // from the desk — the persisted conversation memory that is injected on
+  // every turn regardless of the window. Without the desk, the probe would
+  // reach the model with no trace of the code and it would deny, as it did.
+  const CODE = "X9-Falcon-42";
+  const stream = (answer) => makeRecordingFetchMock([{ message: { content: answer } }, { done: true }]).fetchMock;
+
+  const { conversationStore, controller } = await withController(dir, stream("Noted."), GROUNDED_RESULT);
+  const conv = await conversationStore.create({ title: "Needle" });
+  const events = [];
+  const sendEvent = (t, d) => events.push({ type: t, data: d });
+  const run = (question) => controller.startTurn({ conversationId: conv.id, question }, sendEvent);
+
+  await (await run(`The vault access code is '${CODE}'.`)).done;
+  for (let i = 0; i < 8; i++) {
+    // A neutral acknowledgment, never the code — the probe's history window
+    // must be free of any trace of it.
+    await (await run(`Distractor ${i + 1}: discuss the orchard harvest and the harbour ledger for the autumn quarter.`)).done;
+  }
+
+  const { fetchMock: probeFetch, requests } = makeRecordingFetchMock([{ message: { content: `The code is ${CODE}.` } }, { done: true }]);
+  globalThis.fetch = probeFetch;
+  await (await run("What is the vault access code?")).done;
+
+  // The probe's request must have carried the code in a system message, even
+  // though the code left the history window turns ago.
+  const probeRequest = requests.find((r) => r.body?.messages?.some((m) => m.role === "user" && m.content === "What is the vault access code?"));
+  assert.ok(probeRequest, "the probe must have reached the model");
+  const injected = systemMessagesOf(probeRequest).join("\n");
+  assert.ok(injected.includes(CODE), `the desk was not injected into the probe turn:\n${injected}`);
+
+  const completed = events.filter((e) => e.type === "completed" && e.data.status === "completed").pop();
+  assert.ok(completed.data.text.includes(CODE), `the needle was lost — the model answered: ${completed.data.text}`);
+
+  const stored = await conversationStore.get(conv.id);
+  const fact = (stored.memory?.facts || []).find((f) => f.text.includes(CODE));
+  assert.ok(fact, "the code fact must be persisted in the conversation's memory");
+  assert.equal(fact.confirmed, true, "an acknowledged fact must be recorded as confirmed");
+
+  const report = events.find((e) => e.type === "discourse_report");
+  assert.ok(report, "a discourse_report must be emitted");
+  assert.ok(report.data.facts >= 1);
+  console.log("  ok: needle-in-haystack survives 8 distractor turns via the desk, persisted and injected");
+}
+
+async function testDenialIsCorrected(dir) {
+  // The other half of the failure: even when a model denies a recorded fact,
+  // the mechanical recall-denial review must catch it and the correction loop
+  // must fix it — not ship a confident "never given" as the answer.
+  const CODE = "X9-Falcon-42";
+  const stream = (answer, correctionText = "") =>
+    makeRecordingFetchMock([{ message: { content: answer } }, { done: true }], { correctionText }).fetchMock;
+
+  const { conversationStore, controller } = await withController(dir, stream("Noted."), GROUNDED_RESULT);
+  const conv = await conversationStore.create({ title: "Denial" });
+  const events = [];
+  const sendEvent = (t, d) => events.push({ type: t, data: d });
+
+  await (await controller.startTurn({ conversationId: conv.id, question: `The vault access code is '${CODE}', it changes monthly.` }, sendEvent)).done;
+
+  const denial = "I was never given any vault access code in this conversation.";
+  globalThis.fetch = stream(denial, `The vault access code is '${CODE}', as noted earlier.`);
+  const probe = await controller.startTurn({ conversationId: conv.id, question: "What is the vault access code?" }, sendEvent);
+  await probe.done;
+
+  const review = events.find((e) => e.type === "discourse_review");
+  assert.ok(review, "a denial of a recorded fact must be mechanically reviewed");
+  assert.equal(review.data.wasFlagged, true);
+  assert.equal(review.data.corrected, true);
+  assert.ok(JSON.stringify(review.data.flags).includes(CODE), "the flag must name the denied fact");
+
+  const completed = events.filter((e) => e.type === "completed").pop();
+  assert.ok(completed.data.text.includes(CODE), `the correction must restore the fact: ${completed.data.text}`);
+  console.log("  ok: a denial of a recorded fact is flagged and corrected by the review loop");
+}
+
+async function testCabinetAcrossConversations(dir) {
+  // The desk is per-conversation; the cabinet is per-project. A fact confirmed
+  // in one conversation of a project must be retrievable in a LATER, fresh
+  // conversation of the same project — the desk of the second conversation is
+  // empty, so only the cabinet can answer the probe.
+  const CODE = "X9-Falcon-42";
+  const stream = (answer) => makeRecordingFetchMock([{ message: { content: answer } }, { done: true }]).fetchMock;
+  const cabinet = new CabinetStore({ dir: path.join(dir, "cabinet") });
+
+  const { conversationStore, controller } = await withController(dir, stream("Noted."), GROUNDED_RESULT, { cabinetStore: cabinet });
+  const convA = await conversationStore.create({ title: "Cabinet A", pool: "p-needle" });
+  const eventsA = [];
+  await (await controller.startTurn({ conversationId: convA.id, question: `The vault access code is '${CODE}' and it rotates monthly.` }, (t, d) => eventsA.push({ type: t, data: d }))).done;
+
+  const convB = await conversationStore.create({ title: "Cabinet B", pool: "p-needle" });
+  const { fetchMock: probeFetch, requests } = makeRecordingFetchMock([{ message: { content: `The code is ${CODE}.` } }, { done: true }]);
+  globalThis.fetch = probeFetch;
+  const eventsB = [];
+  await (await controller.startTurn({ conversationId: convB.id, question: "What is the vault access code?" }, (t, d) => eventsB.push({ type: t, data: d }))).done;
+
+  const probeRequest = requests.find((r) => r.body?.messages?.some((m) => m.role === "user" && m.content === "What is the vault access code?"));
+  assert.ok(probeRequest, "the probe must reach the model");
+  const injected = systemMessagesOf(probeRequest).join("\n");
+  assert.ok(injected.includes("PROJECT CABINET"), `the cabinet block must be injected in the second conversation:\n${injected}`);
+  assert.ok(injected.includes(CODE), "the cross-conversation memo must be retrieved");
+
+  const completedB = eventsB.filter((e) => e.type === "completed").pop();
+  assert.ok(completedB.data.text.includes(CODE), `the second conversation lost the fact: ${completedB.data.text}`);
+
+  const persisted = await cabinet.get("p-needle");
+  assert.ok(persisted && persisted.memos.some((m) => m.text.includes(CODE)), "the memo must be persisted in the cabinet store");
+  assert.ok(persisted.memos.some((m) => m.accessCount >= 1), "using the memo must strengthen its trace");
+  console.log("  ok: a fact confirmed in one conversation is retrieved in another via the project cabinet");
+}
+
 async function main() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "eochat-turn-test-"));
   try {
@@ -268,6 +423,9 @@ async function main() {
     await testRegenerateCreatesVariant(dir);
     await testVerbatimSnippets(dir);
     await testUnresolvedCitationProducesNoSnippet(dir);
+    await testNeedleInHaystack(dir);
+    await testDenialIsCorrected(dir);
+    await testCabinetAcrossConversations(dir);
     console.log("ALL TURN-CONTROLLER TESTS PASSED");
   } finally {
     await fs.rm(dir, { recursive: true, force: true });

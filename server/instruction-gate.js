@@ -14,6 +14,12 @@
 // stays auditable (LAWS.md L2e — an empty space where evidence should be must
 // not read like evidence of nothing).
 //
+// The cue is evidence-extended: retrieval runs before the gate, so the
+// passages the answer will be built from are scored as a second, capped signal
+// channel. A fold the retrieved evidence is about surfaces even when the
+// question does not name it — prediction of what the response needs, done
+// mechanically from what the response will actually engage.
+//
 // A fold declares its own relevance in front matter: `signals` (words/phrases
 // that point at this fold), `weight` (tie-break priority), `always` (core
 // folds surfaced on every turn regardless of budget), and `fingerprint` (the
@@ -131,19 +137,67 @@ function splitTerms(text) {
 // fold is relevant because its declared signals appear in the turn's cue. The
 // matched list makes the decision auditable: a fold is surfaced because these
 // exact terms hit, and nothing else.
-function scoreFold(fold, cueWords, cueLower) {
+//
+// Three signal channels, in decreasing strength, because they predict what
+// THIS response needs with decreasing accuracy:
+//
+//   1. the QUESTION — the reader's message right now, at full weight
+//   2. HISTORY (last few turns) — keeps the thread for referential follow-ups
+//      ("and what about the other one?"), but an old topic must not crowd out
+//      the current question's own folds, so it scores at half weight, capped.
+//   3. EVIDENCE — the retrieved passages the answer will be built from. These
+//      run before the gate on every server path, so a fold whose subject the
+//      evidence is about must surface even when the question does not name it
+//      (prediction of what the response needs, done mechanically from what the
+//      response will actually engage). Scored at the same sub-weight as
+//      history but capped lower, so a fold the question names directly always
+//      outranks a fold that only matches incidental passage text.
+//
+// Every non-question hit is tagged in the audit (`hist:`/`ev:` prefixes), so
+// the report can show WHICH channel surfaced each fold. The question channel
+// keeps its untagged form, and the R7 probes that gate without history or
+// evidence are unchanged.
+const HISTORY_CAP_PER_FOLD = 3;
+const EVIDENCE_CAP_PER_FOLD = 2;
+const SUB_WORD = 1; // history / evidence bare-word hit
+const SUB_PHRASE = 1.5; // history / evidence phrase hit
+const SUB_TITLE_WORD = 0.5; // history / evidence title-word hit
+
+// One channel of the mechanical score. `tag` is null for the question channel
+// (full weight, untagged audit) and a prefix for history/evidence (half
+// weight, capped, auditable as `hist:`/`ev:`).
+function scoreChannel(fold, words, lower, tag, cap) {
+  if (!words || !lower) return { score: 0, matched: [] };
   let score = 0;
   const matched = [];
+  const pre = tag ? `${tag}:` : "";
   for (const signal of fold.signals || []) {
     const s = String(signal).toLowerCase();
     if (!s) continue;
-    const hit = s.includes(" ") ? cueLower.includes(s) : cueWords.has(s);
-    if (hit) { score += s.includes(" ") ? 3 : 2; matched.push(s); }
+    const phrase = s.includes(" ");
+    const hit = phrase ? lower.includes(s) : words.has(s);
+    if (hit) {
+      score += phrase ? (tag ? SUB_PHRASE : 3) : (tag ? SUB_WORD : 2);
+      matched.push(pre + s);
+    }
   }
   for (const w of String(fold.title).toLowerCase().split(/\s+/)) {
-    if (w.length > 3 && cueWords.has(w)) { score += 1; matched.push(`title:${w}`); }
+    if (w.length > 3 && words.has(w)) {
+      score += tag ? SUB_TITLE_WORD : 1;
+      matched.push(pre + `title:${w}`);
+    }
   }
-  return { score, matched };
+  return { score: Math.min(score, cap), matched };
+}
+
+function scoreFold(fold, cueWords, cueLower, historyWords, historyLower, evidenceWords, evidenceLower) {
+  const cue = scoreChannel(fold, cueWords, cueLower, null, Infinity);
+  const hist = scoreChannel(fold, historyWords, historyLower, "hist", HISTORY_CAP_PER_FOLD);
+  const ev = scoreChannel(fold, evidenceWords, evidenceLower, "ev", EVIDENCE_CAP_PER_FOLD);
+  return {
+    score: cue.score + hist.score + ev.score,
+    matched: [...cue.matched, ...hist.matched, ...ev.matched],
+  };
 }
 
 // The static framing that surrounds the fold list, plus per-fold renderers, so
@@ -217,20 +271,38 @@ export function createInstructionGate({ dir = INSTRUCTION_DIR, folds: providedFo
      * @param {object} opts
      * @param {string} opts.question   the reader's message
      * @param {string[]} [opts.history] recent user messages from this conversation
+     *   (scored at half weight, so the current question's folds are never
+     *   crowded out by topics the conversation has already left)
+     * @param {string|string[]} [opts.evidence] text the answer will be built from
+     *   (retrieved passages / web results). Scored as a second, capped channel —
+     *   a fold the evidence is about surfaces even when the question itself does
+     *   not name it.
      * @param {number} [opts.budgetTokens] instruction-block token budget for this turn
      * @returns {{
      *   activeIds: string[], foldedIds: string[], surfaced: object[], folded: object[],
      *   systemMessage: string, stats: object
      * }}
      */
-    gate({ question = "", history = [], budgetTokens: perTurnBudget, debug = false } = {}) {
+    gate({ question = "", history = [], evidence = [], budgetTokens: perTurnBudget, debug = false } = {}) {
       const budget = Number.isFinite(perTurnBudget) ? perTurnBudget : this.budgetTokens;
-      const cue = [...history, question].join(" ");
-      const cueWords = new Set(splitTerms(cue));
-      const cueLower = cue.toLowerCase();
+
+      // The question is the strongest predictor of what this response needs;
+      // history only keeps the thread, so it is scored as a capped secondary
+      // channel rather than blended into the question at full weight.
+      const questionCue = String(question ?? "");
+      const cueWords = new Set(splitTerms(questionCue));
+      const cueLower = questionCue.toLowerCase();
+
+      const historyCue = (history || []).join(" ");
+      const historyWords = historyCue ? new Set(splitTerms(historyCue)) : null;
+      const historyLower = historyCue ? historyCue.toLowerCase() : null;
+
+      const evidenceText = Array.isArray(evidence) ? evidence.join(" ") : String(evidence ?? "");
+      const evidenceWords = evidenceText ? new Set(splitTerms(evidenceText)) : null;
+      const evidenceLower = evidenceText ? evidenceText.toLowerCase() : null;
 
       const scored = conditional
-        .map((fold) => ({ fold, ...scoreFold(fold, cueWords, cueLower) }))
+        .map((fold) => ({ fold, ...scoreFold(fold, cueWords, cueLower, historyWords, historyLower, evidenceWords, evidenceLower) }))
         .sort((a, b) =>
           (b.score - a.score) || (b.fold.weight - a.fold.weight) || a.fold.id.localeCompare(b.fold.id)
         );

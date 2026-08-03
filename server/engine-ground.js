@@ -38,6 +38,7 @@ import * as corpusFacade from "@eoreader/host/corpus";
 import { INDIVIDUATION_TYPES } from "@eoreader/engine/referents";
 import { loadCorefPrior, surfaceMatcher, activatePriors } from "./priors-bridge.js";
 import { runIngestInWorker } from "./ingest-worker-client.js";
+import { contentTerms } from "./conversation-memory.js";
 
 // v2 is additive over v1 — it adds documentIds/documentText/sessionOutline/
 // sessionReferents/sessionPivot and changes no signature this bridge calls
@@ -197,9 +198,17 @@ function sourceMatcher(sourceFilter) {
 // A pool whose sources have no coref priors (or a query that activates none)
 // returns the query unchanged, and `priorWidening` is null so a caller can
 // tell steering happened from a straight lexical search.
-function widenQueryWithPriors(query, poolName) {
+//
+// `discourseCue` is the conversation's own topic trace — the desk's hot terms
+// — and widens the query exactly the way prior surfaces do. It exists for the
+// vague-turn shape: "what was that again?", "remind me" — a question whose own
+// words carry no topic. The cue carries it. Only terms NOT already in the
+// query join it (the reader's own words are already there), so an on-topic
+// question is never padded with what it already said. The cue is reported as
+// `discourse`, like `priorWidening`, so a caller can tell steering happened.
+function widenQueryWithPriors(query, poolName, discourseCue) {
   const text = String(query ?? "");
-  if (!text.trim()) return { searchQuery: text, priorWidening: null };
+  if (!text.trim()) return { searchQuery: text, priorWidening: null, discourse: null };
   const p = pool(poolName);
   const widening = [];
   for (const [sourcePath, info] of p.sources) {
@@ -217,16 +226,30 @@ function widenQueryWithPriors(query, poolName) {
       });
     }
   }
-  if (!widening.length) return { searchQuery: text, priorWidening: null };
+
+  let discourse = null;
+  if (discourseCue != null) {
+    const cue = Array.isArray(discourseCue) ? discourseCue.join(" ") : String(discourseCue);
+    const cueTerms = [...new Set(contentTerms(cue))];
+    const already = new Set(contentTerms(text));
+    const added = cueTerms.filter((t) => !already.has(t));
+    if (added.length) {
+      discourse = { cue, terms: added };
+    }
+  }
+
+  const extraTerms = [...widening.flatMap((w) => w.surfaces), ...(discourse?.terms ?? [])];
+  if (extraTerms.length === 0) return { searchQuery: text, priorWidening: null, discourse };
   return {
-    searchQuery: [...text.split(/\s+/).filter(Boolean), ...widening.flatMap((w) => w.surfaces)].join(" "),
-    priorWidening: widening,
+    searchQuery: [...text.split(/\s+/).filter(Boolean), ...extraTerms].join(" "),
+    priorWidening: widening.length ? widening : null,
+    discourse,
   };
 }
 
-export function engineSearch(query, limit = 10, { maxChars = 800, source: sourceFilter, pool: poolName = DEFAULT_POOL } = {}) {
+export function engineSearch(query, limit = 10, { maxChars = 800, source: sourceFilter, pool: poolName = DEFAULT_POOL, discourse } = {}) {
   const s = ensureSession(poolName);
-  const { searchQuery, priorWidening } = widenQueryWithPriors(query, poolName);
+  const { searchQuery, priorWidening, discourse: discourseCue } = widenQueryWithPriors(query, poolName, discourse);
   let { spans, gaps } = searchSpans(s, { query: searchQuery, limit: Math.min(limit, 40) });
   const match = sourceMatcher(sourceFilter);
   if (match) spans = spans.filter(match);
@@ -234,6 +257,7 @@ export function engineSearch(query, limit = 10, { maxChars = 800, source: source
   return {
     query,
     priorWidening,
+    discourse: discourseCue,
     pool: poolName,
     total: spans.length,
     passages: spans.map((sp, i) => {
@@ -392,9 +416,9 @@ function buildCitedContext(kept, foldResult, gaps, poolName) {
 // found, invented plot detail and attributed it to that span's number.
 const MIN_RELEVANCE_SCORE = 0.2;
 
-export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit = 30, minScore = MIN_RELEVANCE_SCORE, source: sourceFilter, pool: poolName = DEFAULT_POOL } = {}) {
+export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit = 30, minScore = MIN_RELEVANCE_SCORE, source: sourceFilter, pool: poolName = DEFAULT_POOL, discourse } = {}) {
   const s = ensureSession(poolName);
-  const { searchQuery, priorWidening } = widenQueryWithPriors(query, poolName);
+  const { searchQuery, priorWidening, discourse: discourseCue } = widenQueryWithPriors(query, poolName, discourse);
   let { spans, gaps } = searchSpans(s, { query: searchQuery, limit });
   const match = sourceMatcher(sourceFilter);
   if (match) spans = spans.filter(match);
@@ -414,13 +438,28 @@ export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit =
   // fold should look there first. This changes NO score — a prior-activated
   // source still must earn its place — it only decides the order the fold
   // visits equal-score passages.
-  if (priorWidening?.length) {
-    const activatedPaths = priorWidening.map((w) => w.sourceId).filter(Boolean);
+  //
+  // A discourse cue breaks the same ties on content: when the conversation
+  // has been on a topic (its hot terms are in play) and two passages score
+  // equally, the one about the ongoing topic is visited first. Same
+  // principle, same scope — it reorders ties, never rescored, and it only
+  // runs when the caller actually passed a cue.
+  if (priorWidening?.length || discourseCue?.terms?.length) {
+    const activatedPaths = (priorWidening || []).map((w) => w.sourceId).filter(Boolean);
     const isActivated = (sourceId) =>
       activatedPaths.some((p) => String(sourceId || "").includes(String(p)));
+    const topicSet = discourseCue ? new Set(discourseCue.terms) : null;
+    const isOnTopic = (u) => {
+      if (!topicSet) return false;
+      const toks = contentTerms(String(u.text ?? ""));
+      for (const t of toks) if (topicSet.has(t)) return true;
+      return false;
+    };
     units.sort((a, b) => {
       const sc = (b.score || 0) - (a.score || 0);
       if (sc !== 0) return sc;
+      const tb = (isOnTopic(b) ? 1 : 0) - (isOnTopic(a) ? 1 : 0);
+      if (tb !== 0) return tb;
       return (isActivated(b.meta?.source_id) ? 1 : 0) - (isActivated(a.meta?.source_id) ? 1 : 0);
     });
   }
@@ -487,6 +526,7 @@ export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit =
   return {
     query,
     priorWidening,
+    discourse: discourseCue,
     context,
     citations: kept,
     retrieved,

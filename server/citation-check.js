@@ -359,7 +359,10 @@ function buildIndex(citations) {
 // that a source-grounded answer is full of ("Mrs. Saville", "vol. II", "p. 4").
 const ABBREV = /(?:\b(?:mr|mrs|ms|dr|st|prof|rev|hon|vol|no|pp?|ch|ed|fig|cf|vs|etc|al|inc|ltd|jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)|\b[A-Z])\.$/i;
 
-function splitSentences(text) {
+// Shared by citation-check's own grounding checks and conversation-memory.js's
+// stated-fact extraction — one sentence splitter, so "a sentence" means the
+// same thing in the two places that have to agree about what a stated fact is.
+export function splitSentences(text) {
   const out = [];
   const src = String(text || "");
   let start = 0;

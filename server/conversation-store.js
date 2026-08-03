@@ -155,6 +155,10 @@ export class ConversationStore {
       mode: conv.mode || "chat",
       childIds: conv.childIds || [],
       turnCount: (conv.turns || []).length,
+      memory: {
+        facts: (conv.memory?.facts || []).length,
+        acknowledged: (conv.memory?.facts || []).filter((f) => f.confirmed).length,
+      },
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
       deletedAt: conv.deletedAt || null,
@@ -187,6 +191,7 @@ export class ConversationStore {
       path: path || null,
       mode: mode || "chat",
       turns: [],
+      memory: { hot: [], facts: [] },
       createdAt: now,
       updatedAt: now,
     };
@@ -214,6 +219,22 @@ export class ConversationStore {
       if (patch.spaceId !== undefined) conv.spaceId = patch.spaceId;
       if (patch.mode !== undefined) conv.mode = patch.mode;
       if (patch.path !== undefined) conv.path = patch.path;
+      return this.#save(conv);
+    });
+  }
+
+  // ── Working memory (the desk) ──
+  //
+  // Per-conversation memory is stored INSIDE the conversation record — it is
+  // bounded by construction (conversation-memory.js caps both the fact list and
+  // its character budget), and a bounded record belongs with the record it
+  // describes, not in a second file that could fall out of sync with it. The
+  // turn controller owns what the desk SAYS; the store only promises it
+  // persists atomically like everything else here.
+  async setMemory(id, memory) {
+    return this.#withLock(id, async () => {
+      const conv = await this.require(id);
+      conv.memory = memory && (memory.hot || memory.facts) ? memory : { hot: [], facts: [] };
       return this.#save(conv);
     });
   }

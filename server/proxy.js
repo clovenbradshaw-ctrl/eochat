@@ -60,6 +60,9 @@ import * as sensesState from "./senses-state.js";
 import { refreshHfCatalog, discoverCacheStatus } from "./senses-hf.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
 import { createTurnController, buildWebSystemMessage } from "./turn-controller.js";
+import { cabinetStore } from "./cabinet-store.js";
+import { cabinetStats } from "./project-memory.js";
+import { buildMemoryMessage, emptyMemory } from "./conversation-memory.js";
 import { webSearchAndFetch, flattenDdgTopics } from "./web-search.js";
 import { runSessionMessage } from "./code-longform-session.js";
 
@@ -252,6 +255,7 @@ const turnController = createTurnController({
   latencyBudgetMs: LATENCY_BUDGET_MS,
   isWarming: () => corpusWarmup.started && !corpusWarmup.ready,
   webSearchFn: webSearchAndFetch,
+  cabinetStore,
 });
 
 // ── Retry helper ──
@@ -4349,6 +4353,30 @@ const server = http.createServer((req, res) => {
           return sendJson(200, { conversations: projectConvs });
         }
 
+        // ── Project cabinet (durable memory) ──
+
+        // GET /api/projects/:id/cabinet — the project's file cabinet: durable
+        // notes that were confirmed across its conversations, with usage stats
+        // and the terms each memo is retrieved by. The audit counterpart to
+        // /api/conversations/:id/memory: the desk shows what this conversation
+        // knows; the cabinet shows what the whole project remembers.
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "cabinet") {
+          const project = await projectStore.get(segments[2]);
+          if (!project) return sendJson(404, { error: `project not found: ${segments[2]}` });
+          const cabinet = await cabinetStore.get(project.pool);
+          return sendJson(200, {
+            pool: project.pool,
+            stats: cabinetStats(cabinet),
+            memos: (cabinet?.memos || []).map((m) => ({
+              id: m.id, keys: m.keys, text: m.text, confirmed: m.confirmed,
+              weight: m.weight, accessCount: m.accessCount,
+              lastTurn: m.lastTurn, lastAccessed: m.lastAccessed,
+              conversationId: m.conversationId,
+              createdAt: m.createdAt, updatedAt: m.updatedAt,
+            })),
+          });
+        }
+
         sendJson(404, { error: "no such projects route" });
       } catch (err) {
         if (res.headersSent) { try { res.end(); } catch { /* already closing */ } return; }
@@ -4463,6 +4491,28 @@ const server = http.createServer((req, res) => {
           if (!conv) return notFound(segments[2]);
           const crumbs = await conversationStore.breadcrumbs(segments[2]);
           return sendJson(200, { breadcrumbs: crumbs });
+        }
+
+        // GET /api/conversations/:id/memory — the conversation's working memory
+        // (the desk): the recorded facts and hot trace, plus the exact block
+        // that is injected into every turn's model context. LAWS.md L2b — the
+        // path to evidence begins at the thing in question: "why did it deny
+        // my code?" is answerable by reading what the model was told it was
+        // told, without knowing where the memory lives.
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "memory") {
+          const conv = await conversationStore.get(segments[2]);
+          if (!conv) return notFound(segments[2]);
+          const state = conv.memory && (conv.memory.hot?.length || conv.memory.facts?.length)
+            ? conv.memory
+            : emptyMemory();
+          const injected = buildMemoryMessage(state);
+          return sendJson(200, {
+            conversationId: conv.id,
+            facts: state.facts,
+            hot: state.hot,
+            injected,
+            tokens: gateCountTokens(injected || ""),
+          });
         }
 
         // POST /api/conversations/:id/turns — a new user turn, streamed as SSE.

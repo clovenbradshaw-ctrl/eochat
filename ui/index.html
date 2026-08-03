@@ -271,10 +271,12 @@
         <span style="font-size:13px; font-weight:600; color:#26241F;">No engine reachable at {{ proxyUrlLabel }}</span>
       </div>
       <span style="font-size:12.5px; color:#6E6A60; line-height:1.6;">{{ proxyHelpText }}</span>
+      <sc-if value="{{ engineRetryControls }}">
       <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:2px;">
         <button type="button" onClick="{{ retryProxy }}" style="border:1px solid #1F5A4C; background:#1F5A4C; color:#FFFDFA; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:12px; cursor:pointer;">Retry</button>
         <button type="button" onClick="{{ toggleSettings }}" style="border:1px solid #E0DACE; background:#FFFDFA; color:#4A463E; border-radius:8px; padding:6px 12px; font-family:inherit; font-size:12px; cursor:pointer;">Set engine URL</button>
       </div>
+      </sc-if>
     </div>
   </sc-if>
 
@@ -1690,7 +1692,7 @@
       <div style="display:flex; flex-direction:column; gap:12px; flex:1; overflow-y:auto; max-height:52vh;" class="eo-scrollbar">
         <div style="display:flex; flex-direction:column; gap:8px;">
           <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">API Keys</span>
-          <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">Keys are stored in this browser and sent to the proxy at runtime. They do not persist across a proxy restart.</span>
+          <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">{{ settingsKeysHint }}</span>
           <sc-for list="{{ settingsProviders }}" as="sp">
             <div style="display:flex; flex-direction:column; gap:4px;">
               <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">{{ sp.label }}</span>
@@ -1865,7 +1867,7 @@ class Component extends DCLogic {
     projects: [], activeProjectId: null,
     tab: 'documents', draft: '',
     webSearch: false,
-    provider: 'ollama', model: null, _availableModels: [], modelMenuOpen: false,
+    provider: ON_GH_PAGES ? 'local' : 'ollama', model: null, _availableModels: [], modelMenuOpen: false,
     // Local mode: answer entirely in this tab via WebLLM (see
     // webllm-client.js / window.EOWebLLM), no proxy generation call.
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
@@ -2329,8 +2331,24 @@ class Component extends DCLogic {
           provider: s.provider || data.defaultProvider || 'ollama',
           model: s.model || data.defaultModel || null,
         }));
+        return;
       }
     } catch {}
+    // Static build: no proxy to ask, so the model picker is synthesized from
+    // what this page itself can answer with — the in-browser WebLLM model
+    // (auto-downloaded) and the Anthropic API (direct browser call). Ollama
+    // is deliberately absent: there is no engine to reach on this build.
+    if (ON_GH_PAGES) {
+      const localId = window.EOWebLLM ? window.EOWebLLM.modelId : 'Llama-3.2-3B-Instruct-q4f16_1-MLC';
+      this.setState(s => ({
+        _availableModels: [
+          { id: 'local', label: 'Local (WebLLM)', defaultModel: localId },
+          { id: 'anthropic', label: 'Anthropic', defaultModel: 'claude-sonnet-4-20250514' },
+        ],
+        provider: s.provider || 'local',
+        model: s.model || localId,
+      }));
+    }
   }
 
   // The priors catalog is a separate pool from /api/sources. A proxy too old
@@ -4052,14 +4070,77 @@ class Component extends DCLogic {
     // shrink back, or the next prompt starts inside a tall empty field.
     if (this.composerEl) { this.composerEl.style.height = 'auto'; }
     this.logAdd('→', `Sending ${mode !== 'chat' ? mode + ' ' : ''}question…`, 'chat');
-    if (this.state.localModel && this.state.localModelStatus === 'ready') {
+    const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
+    const localReady = this.state.localModel && this.state.localModelStatus === 'ready';
+    if (anthropic) {
+      // Static build, Anthropic selected: generation happens in this tab via a
+      // direct browser call to the Anthropic API with the reader's own key.
+      if (this._anthropicApiKey()) {
+        await this.localAskConversation(q);
+      } else {
+        await this.localUnavailableTurn(q, mode, 'no-anthropic-key');
+      }
+    } else if (localReady) {
       await this.localAskConversation(q);
+    } else if (ON_GH_PAGES) {
+      // Static build: the in-browser WebLLM model is the ONLY other answer
+      // path — there is no proxy or Ollama to fall back to, and firing
+      // askConversation at a localhost URL the visitor does not own can only
+      // fail confusingly. Say why instead.
+      await this.localUnavailableTurn(q, mode);
     } else {
       await this.askConversation(q, mode);
     }
   }
 
+  // Static (GitHub Pages) deployments have no engine and no proxy: the
+  // in-browser WebLLM model and the Anthropic API are the only answer paths,
+  // so when the chosen one is not available there is nothing to fall back to.
+  // Put the actual reason in the conversation itself rather than quietly
+  // attempting the Ollama path, which cannot answer on this build.
+  async localUnavailableTurn(question, mode, reasonKey) {
+    const localId = 'local-' + Date.now();
+    this.updateActiveSpace(sp => ({
+      ...sp,
+      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
+    }));
+    const patchTurn = (patch) => this.updateActiveSpace(sp => ({
+      ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
+    }));
+
+    const status = this.state.localModelStatus;
+    const reason = reasonKey === 'no-anthropic-key'
+      ? 'Anthropic is selected as the answer provider but no API key is set. Open Settings, add your Anthropic API key, and try again.'
+      : status === 'unsupported'
+        ? (this.state.localModelError || 'This browser has no WebGPU, which the in-browser model needs.')
+        : status === 'error'
+          ? (this.state.localModelError || 'The in-browser model failed to download.')
+          : status === 'loading'
+            ? 'The in-browser model is still downloading — wait for it to finish, then ask again.'
+            : ON_GH_PAGES
+              ? 'The in-browser model has not started. Reload this tab and it will download automatically.'
+              : 'The in-browser model is not turned on. Open Settings and turn on Local, then wait for the download to finish.';
+
+    this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
+    patchTurn({
+      a: `(No answer path on this deployment: ${reason})`,
+      streaming: false,
+      model: this.state.provider === 'anthropic' ? 'anthropic' : 'local (WebLLM)',
+      trace: [
+        { kind: 'ground', name: 'Retrieval', detail: 'Static build has no engine — nothing to retrieve against.' },
+        { kind: 'model', name: 'Model', detail: reasonKey === 'no-anthropic-key'
+          ? 'Anthropic selected but no API key is set in Settings.'
+          : 'In-browser WebLLM model not ready, so no generation happened.' },
+      ],
+    });
+    this.logAdd('⊘', `Static build ${mode !== 'chat' ? mode + ' ' : ''}question refused — ${reason}`, 'chat');
+  }
+
   toggleLocalModel() {
+    // Static build: there is no engine and no proxy, so in-browser mode is the
+    // only mode — the toggle cannot be turned off, only the provider can move
+    // between the in-browser model and the Anthropic API.
+    if (ON_GH_PAGES) return;
     this._localModelUserTouched = true;
     const turningOn = !this.state.localModel;
     this.setState({ localModel: turningOn });
@@ -4087,15 +4168,25 @@ class Component extends DCLogic {
   _localModelProps(S) {
     const status = S.localModelStatus;
     const on = S.localModel && status === 'ready';
-    const label = status === 'unsupported'
-      ? 'Local model unavailable — this browser has no WebGPU'
-      : status === 'error'
-        ? 'Local model download failed — click to retry'
-        : status === 'loading'
-          ? 'Local model downloading…'
-          : on
-            ? 'Local model on — click to turn off'
-            : 'Local model off — click to download and use it for this reply';
+    const label = ON_GH_PAGES
+      ? (status === 'unsupported'
+        ? 'Local (WebLLM) — cannot run in this browser'
+        : status === 'error'
+          ? 'Local (WebLLM) — download failed, click to retry'
+          : status === 'loading'
+            ? 'Local (WebLLM) — downloading…'
+            : on
+              ? 'Local (WebLLM) — in-browser model'
+              : 'Local (WebLLM) — the static build has no engine')
+      : status === 'unsupported'
+        ? 'Local model unavailable — in-browser model cannot run here'
+        : status === 'error'
+          ? 'Local model download failed — click to retry'
+          : status === 'loading'
+            ? 'Local model downloading…'
+            : on
+              ? 'Local model on — click to turn off'
+              : 'Local model off — click to download and use it for this reply';
     const active = on;
     return {
       localModel: S.localModel,
@@ -4104,7 +4195,7 @@ class Component extends DCLogic {
       localColor: active ? '#FFFDFA' : (status === 'unsupported' ? '#C9C4B8' : '#8C877C'),
       localBorder: status === 'error' ? '#c0341a' : (active ? '#1F5A4C' : '#E0DACE'),
       localIcon: status === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
-      toggleLocalModel: status === 'unsupported' ? () => {} : () => this.toggleLocalModel(),
+      toggleLocalModel: (ON_GH_PAGES || status === 'unsupported') ? () => {} : () => this.toggleLocalModel(),
       retryLocalModel: () => this.retryLocalModel(),
       localShowRetry: status === 'error',
       localStatusText: !S.localModel ? null
@@ -4117,22 +4208,78 @@ class Component extends DCLogic {
     };
   }
 
+  // The reader's own Anthropic API key, from the same browser store the
+  // Settings panel writes to. On the static build this key never leaves the
+  // tab — it goes straight to api.anthropic.com with the request.
+  _anthropicApiKey() {
+    const keys = this._loadLocal('eochat.apiKeys') || {};
+    return keys.anthropic || '';
+  }
+
+  // Direct browser call to the Anthropic Messages API, mirroring the proxy's
+  // callAnthropicStreaming (server/turn-controller.js) exactly — same body,
+  // same headers, same SSE delta parsing — so the two paths cannot drift.
+  // Anthropic enables browser access only when the request carries the
+  // anthropic-dangerous-direct-browser-access header; the key itself is the
+  // reader's, so a key that leaks is a key the reader can rotate.
+  async *_streamAnthropic(messages) {
+    const key = this._anthropicApiKey();
+    const systemMessages = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+    const body = {
+      model: this.state.model || 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      messages: messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: m.content })),
+      stream: true,
+    };
+    if (systemMessages) body.system = systemMessages;
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      throw new Error(`Anthropic ${res.status}: ${String(errText).slice(0, 300)}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t || !t.startsWith('data: ')) continue;
+        const json = t.slice(6);
+        if (json === '[DONE]') continue;
+        let j;
+        try { j = JSON.parse(json); } catch { continue; }
+        if (j.type === 'content_block_delta' && j.delta && j.delta.text) {
+          yield j.delta.text;
+        }
+      }
+    }
+  }
+
   // Local mode: retrieval only through the proxy — either POST /api/ground
   // (engineGroundQuery against the local corpus) or, when the reader's "Web"
   // toggle is on, POST /api/web-ground (a live web search + fetch, see
   // server/web-search.js) — with no generation step either way. Generation
-  // itself happens entirely in this tab via window.EOWebLLM. Reuses the exact
-  // same turn shape and the exact same citation-instruction wording
-  // (buildGroundedSystemPrompt / buildWebSystemMessage) as the server-driven
-  // path, so the turn renders through the SAME template code as any other —
-  // but it is NOT sent to /api/conversations, so it does not persist across
-  // a reload, and its citation numbers are only checked against retrieved
-  // passages/results, never against the source text: the mechanical fidelity
-  // check in server/citation-check.js only runs inside the server's own tool
-  // loop. Both gaps are disclosed in the turn's own trace, not just here.
+  // itself happens entirely in this tab: via window.EOWebLLM on the server
+  // path, or via a direct browser call to the Anthropic API on the static
+  // build when the reader has selected the Anthropic provider and set a key.
   async localAskConversation(question) {
     const localId = 'local-' + Date.now();
     const useWeb = !!this.state.webSearch;
+    const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
     this.updateActiveSpace(sp => ({
       ...sp,
       turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
@@ -4141,10 +4288,11 @@ class Component extends DCLogic {
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
     }));
 
-    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: useWeb ? 'searching the web...' : 'surfing...', thinkingMeta: 'local model' });
-    this.logAdd('◱', `Asked (local model${useWeb ? ', web search' : ''}): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
+    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: useWeb ? 'searching the web...' : 'surfing...', thinkingMeta: anthropic ? 'anthropic api' : 'local model' });
+    this.logAdd('◱', `Asked (${anthropic ? 'Anthropic API' : 'local model'}${useWeb ? ', web search' : ''}): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
 
     let groundData;
+    let groundFailed = null;
     try {
       const gres = await fetch(this.proxyUrl() + (useWeb ? '/api/web-ground' : '/api/ground'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4154,28 +4302,16 @@ class Component extends DCLogic {
       groundData = await gres.json();
       if (groundData.error) throw new Error(groundData.error);
     } catch (err) {
-      this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
-      patchTurn({ a: '(Could not reach ' + (useWeb ? 'the web' : 'your sources') + ' — ' + err.message + ')', streaming: false });
-      this.logAdd('⊘', `Local ${useWeb ? 'web search' : 'ground'} failed — ${err.message}`, 'chat');
-      return;
+      groundFailed = err;
     }
-
-    this.setState({ thinkingPhase: null, thinkingMeta: null });
-    const grounding = {
-      empty: !groundData.grounded, warming: !!groundData.warming,
-      citations: groundData.citations || [], gaps: groundData.gaps || [],
-      sourceCount: groundData.total, foldedCount: useWeb ? groundData.total : groundData.folded,
-      tokens: groundData.tokens || 0, budget: groundData.budget || 0, dropped: groundData.dropped || 0,
-      web: useWeb,
-    };
-    patchTurn({ grounding });
 
     // The proxy gates project instructions into the server answer; in local
     // mode it never sees the generation call, so the reader's rules are loaded
     // here — from the same store the editor writes when no proxy answers, and
-    // from the proxy when it can — and handed to the model whole. A rule the
-    // model never sees is a rule the reader believes they wrote; that gap is
-    // the whole reason the server path folds rather than drops.
+    // from the proxy when it can — and handed to the model whole, whatever
+    // became of retrieval. A rule the model never sees is a rule the reader
+    // believes they wrote; that gap is the whole reason the server path folds
+    // rather than drops.
     const activeProjectId = this.state.activeProjectId;
     let projectRules = '';
     if (activeProjectId) {
@@ -4188,6 +4324,31 @@ class Component extends DCLogic {
       }
     }
 
+    if (groundFailed) {
+      // No retrieval path answered. The reader chose the local model; with the
+      // engine gone that model is all this tab has, so answer from the
+      // project's own rules and general knowledge — disclosed as such, with no
+      // invented citations — rather than refusing a reply this deployment was
+      // built to produce. On the static build this is the normal shape: there
+      // is no engine to reach.
+      this.logAdd('◱', `Local ${useWeb ? 'web search' : 'ground'} unavailable (${groundFailed.message}) — answering from project instructions and general knowledge only`, 'chat');
+      groundData = {
+        grounded: false, warming: false, citations: [], gaps: [],
+        total: 0, folded: 0, tokens: 0, budget: 0, dropped: 0,
+        systemPrompt: 'No sources were reachable from this tab, so there are no documents or web results to cite. Answer from the project instructions and general knowledge only. Never fabricate source citations: if you would otherwise reference a source, say so plainly instead of inventing a bracket number.',
+      };
+    }
+
+    this.setState({ thinkingPhase: null, thinkingMeta: null });
+    const grounding = {
+      empty: !groundData.grounded, warming: !!groundData.warming,
+      citations: groundData.citations || [], gaps: groundData.gaps || [],
+      sourceCount: groundData.total, foldedCount: useWeb ? groundData.total : groundData.folded,
+      tokens: groundData.tokens || 0, budget: groundData.budget || 0, dropped: groundData.dropped || 0,
+      web: useWeb,
+    };
+    patchTurn({ grounding });
+
     const messages = [
       { role: 'system', content: groundData.systemPrompt },
     ];
@@ -4197,15 +4358,17 @@ class Component extends DCLogic {
     messages.push({ role: 'user', content: question });
 
     let answer = '';
+    const engineName = anthropic ? 'Anthropic API' : 'Local model';
     try {
-      for await (const delta of window.EOWebLLM.stream(messages)) {
+      const stream = anthropic ? this._streamAnthropic(messages) : window.EOWebLLM.stream(messages);
+      for await (const delta of stream) {
         answer += delta;
         patchTurn({ a: answer });
       }
     } catch (err) {
       this.setState({ streamingLoading: false, streamingTurnId: null });
-      patchTurn({ a: answer || ('(Local model failed — ' + err.message + ')'), streaming: false });
-      this.logAdd('⊘', `Local generation failed — ${err.message}`, 'chat');
+      patchTurn({ a: answer || (`(${engineName} failed — ` + err.message + ')'), streaming: false });
+      this.logAdd('⊘', `${engineName} generation failed — ${err.message}`, 'chat');
       return;
     }
 
@@ -4229,22 +4392,30 @@ class Component extends DCLogic {
 
     patchTurn({
       a: answer, citations: citations.length ? citations : null, streaming: false,
-      model: `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
+      model: anthropic
+        ? `anthropic: ${this.state.model || 'claude'} (API, browser-direct)`
+        : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
       trace: [
-        { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: grounding.empty
-          ? (grounding.warming ? 'Corpus still warming — no evidence yet.' : (useWeb ? 'No web search results matched this question.' : 'No matching passage found.'))
-          : useWeb
+        { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: groundFailed
+          ? `Unavailable — ${groundFailed.message}. Answered offline from the project's own rules and general knowledge, without retrieval.`
+          : grounding.empty
+            ? (grounding.warming ? 'Corpus still warming — no evidence yet.' : (useWeb ? 'No web search results matched this question.' : 'No matching passage found.'))
+            : useWeb
             ? `${grounding.sourceCount} web source(s) found.`
             : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}` },
-        { kind: 'model', name: 'Model', detail: `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
+        { kind: 'model', name: 'Model', detail: anthropic
+          ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
+          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
         { kind: 'gap', name: 'Citation check', detail: useWeb
           ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
           : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
-        { kind: 'gap', name: 'Persistence', detail: 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
+        { kind: 'gap', name: 'Persistence', detail: anthropic
+          ? 'This reply lives only in this tab — it was never sent to the proxy and will not survive a reload.'
+          : 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
       ],
     });
     this.setState({ streamingLoading: false, streamingTurnId: null });
-    this.logAdd('◱', 'Local reply done', 'chat');
+    this.logAdd('◱', `${engineName} reply done`, 'chat');
   }
 
   addSource() {
@@ -5682,11 +5853,13 @@ class Component extends DCLogic {
     const live = this.proxyLive();
     // The proxy being unreachable only means "no engine" if the in-browser
     // WebLLM fallback isn't covering for it either (see
-    // _defaultToLocalModelIfNoEngine). Once it's loading or ready, the reader
-    // has a working answer path — the alarming "no engine" banner and its
+    // _defaultToLocalModelIfNoEngine). Once it's loading or ready — or, on the
+    // static build, the reader has Anthropic selected with a key — there is a
+    // working answer path, and the alarming "no engine" banner and its
     // Retry/Set engine URL controls would be actively misleading there.
     const usingLocalModel = S.localModel && (S.localModelStatus === 'ready' || S.localModelStatus === 'loading');
-    const engineUnavailable = !live && !usingLocalModel;
+    const usingAnthropic = ON_GH_PAGES && S.provider === 'anthropic' && !!this._anthropicApiKey();
+    const engineUnavailable = !live && !usingLocalModel && !usingAnthropic;
     // Selection is by referent id — the identity the engine assigned — so two
     // surfaces of the same referent select the same thing.
     const selectEntity = (id) => this.focusEntity(id);
@@ -6407,6 +6580,9 @@ class Component extends DCLogic {
         { id: 'anthropic', label: 'Anthropic', placeholder: 'sk-ant-…', keyValue: S.settingsDraftKeys.anthropic || '', hasKey: !!S._settingsApiKeys.anthropic, onChange: (e) => this.setDraftKey('anthropic', e.target.value) },
         { id: 'openai', label: 'OpenAI', placeholder: 'sk-…', keyValue: S.settingsDraftKeys.openai || '', hasKey: !!S._settingsApiKeys.openai, onChange: (e) => this.setDraftKey('openai', e.target.value) },
       ],
+      settingsKeysHint: ON_GH_PAGES
+        ? 'On this static build keys stay in this browser only. The Anthropic key is sent straight to the Anthropic API from this tab (with Anthropic\u2019s browser-access header) — use a key you can rotate, since anyone with it can spend on it.'
+        : 'Keys are stored in this browser and sent to the proxy at runtime. They do not persist across a proxy restart.',
       settingsProvider: S.provider,
       onSettingsProviderChange: (e) => {
         const p = S._availableModels.find(m => m.id === e.target.value);
@@ -6428,12 +6604,21 @@ class Component extends DCLogic {
         : 'local model · ready',
       retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
       proxyUrlLabel: this.proxyUrl(),
+      // Static (GitHub Pages) builds have no engine to reach at all — the
+      // in-browser WebLLM model is the whole answer path, so the banner says
+      // why it isn't answering yet, and the engine controls (Retry / Set
+      // engine URL) are withheld: retrying a URL the visitor does not own is
+      // the exact dead-end this banner exists to avoid.
+      engineRetryControls: !ON_GH_PAGES,
       // Three different reasons the engine is unreachable, and they need three
       // different answers. A browser will not let an HTTPS page call
       // http://localhost at all — it blocks the request before it leaves, so
       // "start the server" is useless advice there and the reader would follow
       // it, watch nothing change, and conclude the app is broken.
       proxyHelpText: (() => {
+        if (ON_GH_PAGES) {
+          return 'This is the static WebLLM-only build — there is no engine to reach and answers come from the in-browser model, which is not ready yet: ' + (S.localModelError || (S.localModelStatus === 'loading' ? 'still downloading — wait a moment, then ask again.' : 'turn on Local in Settings and wait for the download to finish, or add an Anthropic API key in Settings and pick the Anthropic provider instead.'));
+        }
         const url = this.proxyUrl();
         const pageIsHttps = typeof location !== 'undefined' && location.protocol === 'https:';
         if (pageIsHttps && url.startsWith('http://')) {
