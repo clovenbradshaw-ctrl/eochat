@@ -52,43 +52,61 @@ export async function webSearch(query, { numResults = 5, maxChars = 8000 } = {})
     } catch { /* fall through */ }
   }
 
-  // Backend 3: DuckDuckGo
+  // Backend 3: DuckDuckGo Instant Answer API — a typed JSON response, same
+  // as Brave and Serper above, not a scraped results page matched against a
+  // markup pattern that breaks the moment DuckDuckGo changes its HTML. The
+  // trade is real: this is an abstract-and-related-topics API, not a ranked
+  // general search index, so it returns fewer, thinner results than a page
+  // scrape would for a broad query — but every field it returns is a typed
+  // JSON value, never a regex guess at where a title starts and ends.
   try {
-    const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml",
-      },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (resp.ok) {
-      const html = await resp.text();
-      const results = [];
-      const resultBlocks = html.split(/<div[^>]*\bclass="[^"]*\bresult__body\b[^"]*"[^>]*>/);
-      for (let i = 1; i < resultBlocks.length && results.length < numResults; i++) {
-        const block = resultBlocks[i];
-        try {
-          const titleMatch = block.match(/<a[^>]*\bclass="[^"]*\bresult__a\b[^"]*"[^>]*>(.*?)<\/a>/s);
-          const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-          const urlMatch = block.match(/<a[^>]*\bclass="[^"]*\bresult__a\b[^"]*"[^>]*href="(.*?)"/) || block.match(/<a[^>]*href="(.*?)"[^>]*\bclass="[^"]*\bresult__a\b/);
-          let url = urlMatch ? decodeDdgHref(urlMatch[1]) : "";
-          if (url.startsWith("//")) url = "https:" + url;
-          const snippetMatch = block.match(/<a[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)<\/a>/s);
-          let snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-          if (!snippet) {
-            const altMatch = block.match(/\bclass="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)<\/(?:span|div|td)>/s);
-            snippet = altMatch ? altMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-          }
-          if (title && url) {
-            results.push({ rank: results.length + 1, title, url, snippet: snippet.slice(0, maxChars / numResults), source: "duckduckgo" });
-          }
-        } catch { /* skip malformed result */ }
-      }
-      if (results.length > 0) return results;
-    }
+    const ddgResults = await fetchDuckDuckGoInstantAnswer(query, numResults, maxChars);
+    if (ddgResults.length > 0) return ddgResults;
   } catch { /* fall through */ }
 
   return [];
+}
+
+async function fetchDuckDuckGoInstantAnswer(query, numResults, maxChars) {
+  const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
+  const resp = await fetch(url, {
+    headers: { "Accept": "application/json" },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!resp.ok) return [];
+  const data = await resp.json();
+
+  const entries = [];
+  if (data.AbstractText) {
+    entries.push({ title: data.Heading || query, url: data.AbstractURL || "", text: data.AbstractText });
+  }
+  for (const t of flattenDdgTopics(data.RelatedTopics)) {
+    if (entries.length >= numResults) break;
+    // DDG's Text field reads "Name - description"; split on the leading
+    // " - " it always inserts so the title pill shows a name, not the
+    // whole sentence. If a future response omits the separator, the
+    // truncated fallback below is still a reasonable title.
+    const dash = t.Text.indexOf(" - ");
+    entries.push({ title: dash > -1 ? t.Text.slice(0, dash) : t.Text.slice(0, 80), url: t.FirstURL, text: t.Text });
+  }
+
+  return entries.slice(0, numResults).map((e, i) => ({
+    rank: i + 1, title: e.title, url: e.url,
+    snippet: e.text.slice(0, maxChars / numResults),
+    source: "duckduckgo",
+  }));
+}
+
+// RelatedTopics mixes flat {Text, FirstURL} entries with grouped
+// {Name, Topics: [...]} categories at the top level — flatten both into the
+// same shape rather than assuming every entry has the fields the flat case does.
+export function flattenDdgTopics(topics) {
+  const out = [];
+  for (const t of topics || []) {
+    if (Array.isArray(t?.Topics)) out.push(...flattenDdgTopics(t.Topics));
+    else if (t?.Text && t?.FirstURL) out.push(t);
+  }
+  return out;
 }
 
 export async function webFetch(url, { maxChars = 10000 } = {}) {
@@ -128,15 +146,4 @@ export async function webSearchAndFetch(query, { numResults = 3, maxFetchChars =
     r.text = await webFetch(r.url, { maxChars: maxFetchChars });
   }
   return results;
-}
-
-function decodeDdgHref(href) {
-  if (!href) return "";
-  let h = href.replace(/&amp;/g, "&");
-  const m = h.match(/[?&]uddg=([^&]+)/);
-  if (m) {
-    try { h = decodeURIComponent(m[1]); } catch { return ""; }
-  }
-  if (/\/y\.js\?|[?&]ad_provider=|[?&]ad_domain=/.test(h)) return "";
-  return h;
 }
