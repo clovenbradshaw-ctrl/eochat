@@ -162,9 +162,12 @@ export function createTurnController(deps) {
   // travel as data rather than as branches in the pipeline.
 
   /** The local Ollama path — unchanged, except that it now keeps the counts. */
-  async function callOllamaStreaming(messages, { signal, onDelta, onUsage }) {
+  async function callOllamaStreaming(messages, { signal, onDelta, onUsage, forceModel = null }) {
     let model, routerCtx;
-    if (modelRouter) {
+    if (forceModel) {
+      model = forceModel;
+      routerCtx = null;
+    } else if (modelRouter) {
       ({ model, ctx: routerCtx } = modelRouter.pick(messages));
     } else {
       model = heuristicModel(messages);
@@ -226,13 +229,13 @@ export function createTurnController(deps) {
    * with the other model — but answering with the other model SILENTLY would
    * be worse than both.
    */
-  async function callModelStreaming(messages, { signal, onDelta, onThinking, onUsage }) {
+  async function callModelStreaming(messages, { signal, onDelta, onThinking, onUsage, forceModel = null }) {
     const { provider, fallbackReason } = settings
       ? settings.effectiveProvider()
       : { provider: "local", fallbackReason: null };
 
     if (provider !== "anthropic") {
-      const result = await callOllamaStreaming(messages, { signal, onDelta, onUsage });
+      const result = await callOllamaStreaming(messages, { signal, onDelta, onUsage, forceModel });
       return { ...result, fallbackReason };
     }
 
@@ -287,7 +290,7 @@ export function createTurnController(deps) {
 
   // The core pipeline shared by a fresh turn and a regenerate — both already
   // have a turnId/answerId and a question by the time this runs.
-  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool }, sendEvent) {
+  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, forceModel = null }, sendEvent) {
     const key = newAnswerEventKey(conv.id, turn.id);
     const controller = new AbortController();
     activeControllers.set(key, controller);
@@ -335,6 +338,9 @@ export function createTurnController(deps) {
           priorWidening: groundResult.priorWidening || null,
         },
       });
+
+      // Build history from conversation turns
+      const history = buildHistoryMessages(conv, turn.id);
 
       // The one citation table this whole answer is checked against — index,
       // byte range, and verbatim text together, so bracket resolution and
@@ -387,6 +393,7 @@ export function createTurnController(deps) {
 
       const { text: rawText, model, stopReason, stopDetails, provider, fallbackReason } = await callModelStreaming(messages, {
         signal: controller.signal,
+        forceModel,
         onUsage: (usage, usageModel) => {
           controller._usage = usage;
           controller._usageModel = usageModel || controller._usageModel;
@@ -613,7 +620,7 @@ export function createTurnController(deps) {
     }
   }
 
-  async function startTurn({ conversationId, question, sourceScope, pool, attachments }, sendEvent) {
+  async function startTurn({ conversationId, question, sourceScope, pool, attachments, forceModel = null }, sendEvent) {
     const conv = await conversationStore.require(conversationId);
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
     const { turn } = await conversationStore.appendTurn(conversationId, {
@@ -637,6 +644,7 @@ export function createTurnController(deps) {
       run = runAnswer({
         conv, turn, answerId: answer.id,
         question, sourceScope: effectiveScope, pool: pool || conv.pool,
+        forceModel,
       }, sendEvent);
     }
 

@@ -76,7 +76,8 @@ export class ProjectStore {
         description: project.description,
         pool: project.pool,
         conversationCount: (project.conversationIds || []).length,
-        sourceCount: (project.sourceIds || []).length,
+        sourceCount: (project.documents || project.sourceIds || []).length,
+        documents: project.documents || [],
         createdAt: project.createdAt,
         updatedAt: project.updatedAt,
       });
@@ -94,7 +95,7 @@ export class ProjectStore {
       description,
       pool: id,
       conversationIds: [],
-      sourceIds: [],
+      documents: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -149,6 +150,7 @@ export class ProjectStore {
     return this.#withLock(projectId, async () => {
       const project = await this.get(projectId);
       if (!project) throw new Error(`project not found: ${projectId}`);
+      if (!project.sourceIds) project.sourceIds = [];
       if (!project.sourceIds.includes(sourceId)) {
         project.sourceIds.push(sourceId);
       }
@@ -163,6 +165,41 @@ export class ProjectStore {
       project.sourceIds = (project.sourceIds || []).filter(id => id !== sourceId);
       return this.#save(project);
     });
+  }
+
+  async addDocument(projectId, doc) {
+    return this.#withLock(projectId, async () => {
+      const project = await this.get(projectId);
+      if (!project) throw new Error(`project not found: ${projectId}`);
+      if (!project.documents) project.documents = [];
+      const existing = project.documents.find(d => d.sourceKey === doc.sourceKey);
+      if (!existing) {
+        project.documents.push({
+          sourceKey: doc.sourceKey,
+          name: doc.name,
+          chunks: doc.chunks || 0,
+          kind: doc.kind || "corpus",
+          ingestedAt: doc.ingestedAt || new Date().toISOString(),
+        });
+      }
+      return this.#save(project);
+    });
+  }
+
+  async removeDocument(projectId, sourceKey) {
+    return this.#withLock(projectId, async () => {
+      const project = await this.get(projectId);
+      if (!project) throw new Error(`project not found: ${projectId}`);
+      project.documents = (project.documents || []).filter(d => d.sourceKey !== sourceKey);
+      project.sourceIds = (project.sourceIds || []).filter(id => id !== sourceKey);
+      return this.#save(project);
+    });
+  }
+
+  async listDocuments(projectId) {
+    const project = await this.get(projectId);
+    if (!project) return [];
+    return project.documents || [];
   }
 }
 

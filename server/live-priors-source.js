@@ -59,6 +59,14 @@ function buildTree(dir, relBase = "") {
   const files = [];
 
   for (const e of entries) {
+    // At the root, this is the corpus's OWN repo — its package.json, README,
+    // SOURCES.md, scripts/, src/, manifests/ manage the corpus, they are not
+    // source-text content. Only the numbered taxonomy folders (01-literature-
+    // books, 02-encyclopedic, ...) are the living corpus the Priors tab is
+    // for. One level down, no such rule applies — a category's own internal
+    // structure is real content.
+    if (relBase === "" && !(e.isDirectory() && /^\d+-/.test(e.name))) continue;
+
     const abs = path.join(dir, e.name);
     const rel = relBase ? `${relBase}/${e.name}` : e.name;
 
@@ -111,25 +119,31 @@ export function livePriorsTree({ refresh = false } = {}) {
   return result;
 }
 
-// Read a file's contents by relative path. The path is resolved against
-// LIVE_PRIORS_ROOT and checked to ensure it doesn't escape the root.
-export function readLivePrior(relPath, { byteStart = 0, maxBytes = 80000 } = {}) {
+// Resolve a relative path against LIVE_PRIORS_ROOT, checked to ensure it
+// doesn't escape the root. Shared by readLivePrior (text) and the raw byte
+// server (audio/video/image) so both enforce the same containment rule.
+export function resolveLivePriorPath(relPath) {
   const normalized = path.normalize(relPath).replace(/^(\.\.[/\\])+/, "");
   const abs = path.join(LIVE_PRIORS_ROOT, normalized);
-
-  // Ensure the resolved path is still inside LIVE_PRIORS_ROOT.
   if (!abs.startsWith(LIVE_PRIORS_ROOT)) {
     return { error: "path escapes live_priors root" };
   }
-
   if (!fs.existsSync(abs)) {
     return { error: `file not found: ${normalized}` };
   }
-
   const stat = fs.statSync(abs);
   if (!stat.isFile()) {
     return { error: `not a file: ${normalized}` };
   }
+  return { normalized, abs, stat };
+}
+
+// Read a file's contents by relative path. The path is resolved against
+// LIVE_PRIORS_ROOT and checked to ensure it doesn't escape the root.
+export function readLivePrior(relPath, { byteStart = 0, maxBytes = 80000 } = {}) {
+  const resolved = resolveLivePriorPath(relPath);
+  if (resolved.error) return resolved;
+  const { normalized, abs, stat } = resolved;
 
   const start = Math.max(0, Math.min(byteStart, stat.size));
   const length = Math.min(maxBytes, stat.size - start);

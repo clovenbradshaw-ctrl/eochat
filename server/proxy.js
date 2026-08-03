@@ -19,7 +19,7 @@
  *   node proxy.js [options]
  *
  * Options:
- *   --port=<n>        Proxy port (default: 11435)
+  *   --port=<n>        Proxy port (default: 8899)
  *   --target=<url>    Ollama endpoint (default: http://localhost:11434)
  *   --limit=<n>       Token limit for context assembly (default: 3000)
  *   --max-body=<n>    Max request body in bytes (default: 5242880)
@@ -76,7 +76,7 @@ function parseArg(name, def, parse = (v) => v) {
 }
 
 const REPO_PATH = parseArg("repo", REPO_ROOT);
-const PORT = parseArg("port", 11435, Number);
+const PORT = parseArg("port", 8899, Number);
 const TARGET = parseArg("target", "http://localhost:11434");
 const TOKEN_LIMIT = parseArg("limit", 3000, Number);
 const MAX_BODY = parseArg("max-body", 5_242_880, Number);
@@ -2671,7 +2671,9 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
 // admission itself runs off the main thread (engineIngestTextAsync/
 // engineIngestFileAsync — see ingest-worker.js for why), so this only
 // decides which of url/content/path was sent and shapes the result.
-async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }) {
+async function performIngest({ ingestPath, ingestUrl, content, name, sessionId, projectId }) {
+  const poolName = projectId || "corpus";
+
   // URL ingestion — fetch, strip markup, then fall through the same
   // content path so a page becomes a first-class citable source, not a
   // one-turn context injection.
@@ -2692,7 +2694,7 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
     } catch { label = ingestUrl.replace(/\//g, "_"); }
     const srcName = name || label || ingestUrl;
     const sourceId = `source:${srcName}`;
-    const result = await engineIngestTextAsync(fetched.text.slice(0, 500000), sourceId, srcName);
+    const result = await engineIngestTextAsync(fetched.text.slice(0, 500000), sourceId, srcName, { pool: poolName });
     const att = await discourse.addAttachment(sessionId, {
       name: srcName,
       content: fetched.text,
@@ -2700,6 +2702,14 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
       size: fetched.text.length,
       ingestedAt: new Date().toISOString(),
     });
+    if (projectId) {
+      await projectStore.addDocument(projectId, {
+        sourceKey: sourceId,
+        name: srcName,
+        chunks: result.chunks || 0,
+        kind: "corpus",
+      });
+    }
     return {
       ...result, name: srcName, url: ingestUrl,
       attachment: { name: att.name, type: att.type, size: att.size },
@@ -2709,7 +2719,7 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
   // Content-based ingestion (from browser file picker)
   if (content) {
     const sourceId = `source:${name || "upload"}:${Date.now()}`;
-    const result = await engineIngestTextAsync(content.slice(0, 500000), sourceId, name || "upload");
+    const result = await engineIngestTextAsync(content.slice(0, 500000), sourceId, name || "upload", { pool: poolName });
 
     // Register as attachment in discourse
     const att = await discourse.addAttachment(sessionId, {
@@ -2719,6 +2729,15 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
       size: content.length,
       ingestedAt: new Date().toISOString(),
     });
+
+    if (projectId) {
+      await projectStore.addDocument(projectId, {
+        sourceKey: sourceId,
+        name: name || "upload",
+        chunks: result.chunks || 0,
+        kind: "corpus",
+      });
+    }
 
     return { ...result, name: name || "upload", attachment: { name: att.name, type: att.type, size: att.size } };
   }
@@ -2730,16 +2749,26 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
     throw err;
   }
   try {
-    return await engineIngestFileAsync(ingestPath);
+    const result = await engineIngestFileAsync(ingestPath, { pool: poolName });
+    if (projectId) {
+      const sourceKey = ingestPath;
+      await projectStore.addDocument(projectId, {
+        sourceKey,
+        name: result.name || ingestPath.replace(/^.*[/\\]/, ""),
+        chunks: result.chunks || 0,
+        kind: "corpus",
+      });
+    }
+    return result;
   } catch (err) {
     // Idempotent: if already ingested, return success with existing source info
     if (err.message?.includes("duplicate")) {
-      const existing = engineListSources().find(s => s.path === ingestPath);
+      const existing = engineListSources({ pool: poolName }).find(s => s.path === ingestPath);
       return {
         path: ingestPath,
         alreadyIngested: true,
         chunks: existing?.chunks || 0,
-        pool: existing?.pool || "corpus",
+        pool: existing?.pool || poolName,
         note: "Source already ingested",
       };
     }
@@ -3044,13 +3073,13 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      const { path: ingestPath, url: ingestUrl, content, name, session } = data;
+      const { path: ingestPath, url: ingestUrl, content, name, session, projectId } = data;
       const sessionId = session || "default";
       const wantsStream = data.stream === true || (req.headers.accept || "").includes("text/event-stream");
 
       if (!wantsStream) {
         try {
-          const result = await performIngest({ ingestPath, ingestUrl, content, name, sessionId });
+          const result = await performIngest({ ingestPath, ingestUrl, content, name, sessionId, projectId });
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(result));
         } catch (err) {
@@ -3095,7 +3124,7 @@ const server = http.createServer((req, res) => {
       }, 300);
 
       try {
-        const result = await performIngest({ ingestPath, ingestUrl, content, name, sessionId });
+        const result = await performIngest({ ingestPath, ingestUrl, content, name, sessionId, projectId });
         clearInterval(heartbeat);
         sendSSE("done", result);
       } catch (err) {
@@ -3382,6 +3411,62 @@ const server = http.createServer((req, res) => {
         const categories = livePriorsSource.livePriorsCategories();
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ categories }));
+        return;
+      }
+
+      // Raw bytes for anything the JSON /read endpoint can't represent as
+      // text — audio/video so the reader can actually play them ("bytes are
+      // stored and playable" was a claim the UI made with no player behind
+      // it). Range support is not optional here: without it, seeking in an
+      // <audio>/<video> element either fails outright or forces a full
+      // re-download from byte 0 on every scrub.
+      if (url.pathname === "/api/live-priors/raw") {
+        const filePath = url.searchParams.get("path");
+        if (!filePath) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing 'path' parameter" }));
+          return;
+        }
+        const resolved = livePriorsSource.resolveLivePriorPath(filePath);
+        if (resolved.error) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(resolved));
+          return;
+        }
+        const { abs, stat } = resolved;
+        const ext = (abs.match(/\.([a-z0-9]+)$/i) || [, ""])[1].toLowerCase();
+        const contentType = {
+          mp3: "audio/mpeg", wav: "audio/wav", m4a: "audio/mp4", ogg: "audio/ogg",
+          mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm",
+          png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+        }[ext] || "application/octet-stream";
+
+        const range = req.headers.range;
+        if (range) {
+          const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+          const start = m && m[1] ? parseInt(m[1], 10) : 0;
+          const end = m && m[2] ? parseInt(m[2], 10) : stat.size - 1;
+          if (!m || start > end || end >= stat.size) {
+            res.writeHead(416, { "Content-Range": `bytes */${stat.size}` });
+            res.end();
+            return;
+          }
+          res.writeHead(206, {
+            "Content-Type": contentType,
+            "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+            "Accept-Ranges": "bytes",
+            "Content-Length": end - start + 1,
+          });
+          fs.createReadStream(abs, { start, end }).pipe(res);
+          return;
+        }
+
+        res.writeHead(200, {
+          "Content-Type": contentType,
+          "Accept-Ranges": "bytes",
+          "Content-Length": stat.size,
+        });
+        fs.createReadStream(abs).pipe(res);
         return;
       }
 
@@ -3673,6 +3758,7 @@ const server = http.createServer((req, res) => {
             const { done } = await turnController.startTurn({
               conversationId, question: data.question,
               sourceScope: data.sourceScope, pool: data.pool, attachments: data.attachments || [],
+              forceModel: data.model || null,
             }, sendEvent);
             await done;
           } catch (err) {
@@ -3754,6 +3840,61 @@ const server = http.createServer((req, res) => {
     }
 
     sendJson(405, { error: "Method not allowed" });
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Projects — get, rename, delete a single project by id. Kept separate
+  // from the block above (which only matches the bare /api/projects
+  // collection route) and excludes the /instructions, /memory, /documents
+  // sub-resources, which have their own more specific handlers below.
+  // ══════════════════════════════════════════════════════════════
+  if (
+    req.url.startsWith("/api/projects/") &&
+    !req.url.includes("/instructions") &&
+    !req.url.includes("/memory") &&
+    !req.url.includes("/documents")
+  ) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const segments = url.pathname.split("/").filter(Boolean); // ["api", "projects", id]
+    const projectId = segments[2];
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+    const readJsonBody = () => new Promise((resolve, reject) => {
+      let body = "", size = 0;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > MAX_BODY) { req.destroy(new Error("Request body too large")); reject(new Error("body too large")); return; }
+        body += c.toString("utf8");
+      });
+      req.on("end", () => {
+        if (!body.trim()) return resolve({});
+        try { resolve(JSON.parse(body)); } catch (err) { reject(err); }
+      });
+      req.on("error", reject);
+    });
+
+    (async () => {
+      try {
+        if (req.method === "GET") {
+          const project = await projectStore.get(projectId);
+          if (!project) return sendJson(404, { error: `project not found: ${projectId}` });
+          return sendJson(200, project);
+        }
+        if (req.method === "PATCH") {
+          const patch = await readJsonBody();
+          const project = await projectStore.update(projectId, patch);
+          return sendJson(200, project);
+        }
+        if (req.method === "DELETE") {
+          const result = await projectStore.remove(projectId);
+          return sendJson(200, result);
+        }
+        sendJson(405, { error: "Method not allowed" });
+      } catch (err) {
+        sendJson(400, { error: err.message });
+      }
+    })();
     return;
   }
 
@@ -3893,6 +4034,61 @@ const server = http.createServer((req, res) => {
           return sendJson(200, result);
         }
         sendJson(404, { error: "no such memory route" });
+      } catch (err) {
+        sendJson(400, { error: err.message });
+      }
+    })();
+    return;
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // Documents — sub-objects of projects.
+  // Documents are scoped to a project and ingested into the project's pool.
+  // ══════════════════════════════════════════════════════════════
+  if (req.url.startsWith("/api/projects/") && req.url.includes("/documents")) {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const segments = url.pathname.split("/").filter(Boolean);
+    // ["api", "projects", projectId, "documents", sourceKey?]
+
+    const readJsonBody = () => new Promise((resolve, reject) => {
+      let body = "", size = 0;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > MAX_BODY) { req.destroy(new Error("Request body too large")); reject(new Error("body too large")); return; }
+        body += c.toString("utf8");
+      });
+      req.on("end", () => {
+        if (!body.trim()) return resolve({});
+        try { resolve(JSON.parse(body)); } catch (err) { reject(err); }
+      });
+      req.on("error", reject);
+    });
+    const sendJson = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(obj)); };
+
+    (async () => {
+      try {
+        const projectId = segments[2];
+        const sourceKey = segments[4] ? decodeURIComponent(segments[4]) : null;
+
+        const project = await projectStore.get(projectId);
+        if (!project) return sendJson(404, { error: `project not found: ${projectId}` });
+
+        if (req.method === "GET" && !sourceKey) {
+          const documents = await projectStore.listDocuments(projectId);
+          return sendJson(200, { documents });
+        }
+
+        if (req.method === "DELETE" && sourceKey) {
+          const poolName = project.pool || projectId;
+          const result = engineDeleteSource(sourceKey, { pool: poolName });
+          if (!result.error) {
+            await projectStore.removeDocument(projectId, sourceKey);
+          }
+          const status = result.error ? 404 : 200;
+          return sendJson(status, result);
+        }
+
+        sendJson(404, { error: "no such documents route" });
       } catch (err) {
         sendJson(400, { error: err.message });
       }
