@@ -542,7 +542,9 @@
                             <div style="display:flex; align-items:center; flex-wrap:wrap; gap:7px;">
                               <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ snip.num }}</span>
                               <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:#A39D91;">verbatim · {{ snip.source }}</span>
-                              <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">bytes {{ snip.byteStart }}–{{ snip.byteEnd }}</span>
+                              <sc-if value="{{ snip.hasBytes }}">
+                                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">bytes {{ snip.byteStart }}–{{ snip.byteEnd }}</span>
+                              </sc-if>
                             </div>
                           </div>
                         </div>
@@ -3441,11 +3443,17 @@ class Component extends DCLogic {
   }
 
   _clientCitation(c, grounding) {
-    const groundCit = (grounding && grounding.citations || []).find(gc => String(gc.index) === String(c.num));
+    const gcList = (grounding && grounding.citations) || [];
+    const groundCit = gcList.find(gc => String(gc.index) === String(c.num));
+    const isWeb = gcList.some(gc => gc.url);
+    const url = groundCit && groundCit.url;
     return {
       num: c.num, resolved: c.resolved,
-      source: c.resolved ? this._shortSource(c.sourceId) : '⊘ unresolved — no engine passage for [' + c.num + ']',
+      source: !c.resolved
+        ? ('⊘ unresolved — no ' + (isWeb ? 'web result' : 'engine passage') + ' for [' + c.num + ']')
+        : (url ? (groundCit.title || url) : this._shortSource(c.sourceId)),
       sourceId: c.sourceId, spanId: c.spanId, byteStart: c.byteStart, byteEnd: c.byteEnd, score: c.score,
+      url,
       quote: groundCit ? (groundCit.text || '').slice(0, 300) : '',
     };
   }
@@ -3454,14 +3462,16 @@ class Component extends DCLogic {
   // truncated server-side) — the client caps display length here, but marks
   // the cut with an explicit "truncated" flag rather than silently dropping
   // the rest (LAWS.md L3). The full passage is always one click away via
-  // openCitation -> the reader panel.
+  // openCitation -> the reader panel (or, for a web source, the page itself).
   _clientSnippet(s) {
     const full = s.text || '';
     const cap = 480;
     return {
       num: s.num, sourceId: s.sourceId, spanId: s.spanId,
       byteStart: s.byteStart, byteEnd: s.byteEnd,
-      source: this._shortSource(s.sourceId),
+      hasBytes: s.byteStart !== undefined && s.byteStart !== null,
+      source: s.url ? (s.title || s.url) : this._shortSource(s.sourceId),
+      url: s.url,
       quote: full.length > cap ? full.slice(0, cap) : full,
       truncated: full.length > cap,
     };
@@ -3958,19 +3968,22 @@ class Component extends DCLogic {
     };
   }
 
-  // Local mode: retrieval only through the proxy (POST /api/ground —
-  // engineGroundQuery with no generation step, see server/proxy.js), then
-  // generation entirely in this tab via window.EOWebLLM. Reuses the exact
+  // Local mode: retrieval only through the proxy — either POST /api/ground
+  // (engineGroundQuery against the local corpus) or, when the reader's "Web"
+  // toggle is on, POST /api/web-ground (a live web search + fetch, see
+  // server/web-search.js) — with no generation step either way. Generation
+  // itself happens entirely in this tab via window.EOWebLLM. Reuses the exact
   // same turn shape and the exact same citation-instruction wording
-  // (buildGroundedSystemPrompt) as the server-driven path, so the turn
-  // renders through the SAME template code as any other — but it is NOT
-  // sent to /api/conversations, so it does not persist across a reload, and
-  // its citation numbers are only checked against retrieved passages, never
-  // against the source text: the mechanical fidelity check in
-  // server/citation-check.js only runs inside the server's own tool loop.
-  // Both gaps are disclosed in the turn's own trace, not just here.
+  // (buildGroundedSystemPrompt / buildWebSystemMessage) as the server-driven
+  // path, so the turn renders through the SAME template code as any other —
+  // but it is NOT sent to /api/conversations, so it does not persist across
+  // a reload, and its citation numbers are only checked against retrieved
+  // passages/results, never against the source text: the mechanical fidelity
+  // check in server/citation-check.js only runs inside the server's own tool
+  // loop. Both gaps are disclosed in the turn's own trace, not just here.
   async localAskConversation(question) {
     const localId = 'local-' + Date.now();
+    const useWeb = !!this.state.webSearch;
     this.updateActiveSpace(sp => ({
       ...sp,
       turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
@@ -3979,22 +3992,22 @@ class Component extends DCLogic {
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
     }));
 
-    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: 'surfing...', thinkingMeta: 'local model' });
-    this.logAdd('◱', `Asked (local model): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
+    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: useWeb ? 'searching the web...' : 'surfing...', thinkingMeta: 'local model' });
+    this.logAdd('◱', `Asked (local model${useWeb ? ', web search' : ''}): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
 
     let groundData;
     try {
-      const gres = await fetch(this.proxyUrl() + '/api/ground', {
+      const gres = await fetch(this.proxyUrl() + (useWeb ? '/api/web-ground' : '/api/ground'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: question, groundSource: this.groundSourceFilter() }),
+        body: JSON.stringify(useWeb ? { query: question } : { query: question, groundSource: this.groundSourceFilter() }),
       });
       if (!gres.ok) throw new Error('proxy returned ' + gres.status);
       groundData = await gres.json();
       if (groundData.error) throw new Error(groundData.error);
     } catch (err) {
       this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
-      patchTurn({ a: '(Could not reach your sources — ' + err.message + ')', streaming: false });
-      this.logAdd('⊘', `Local ground failed — ${err.message}`, 'chat');
+      patchTurn({ a: '(Could not reach ' + (useWeb ? 'the web' : 'your sources') + ' — ' + err.message + ')', streaming: false });
+      this.logAdd('⊘', `Local ${useWeb ? 'web search' : 'ground'} failed — ${err.message}`, 'chat');
       return;
     }
 
@@ -4002,8 +4015,9 @@ class Component extends DCLogic {
     const grounding = {
       empty: !groundData.grounded, warming: !!groundData.warming,
       citations: groundData.citations || [], gaps: groundData.gaps || [],
-      sourceCount: groundData.total, foldedCount: groundData.folded,
-      tokens: groundData.tokens, budget: groundData.budget, dropped: groundData.dropped,
+      sourceCount: groundData.total, foldedCount: useWeb ? groundData.total : groundData.folded,
+      tokens: groundData.tokens || 0, budget: groundData.budget || 0, dropped: groundData.dropped || 0,
+      web: useWeb,
     };
     patchTurn({ grounding });
 
@@ -4025,18 +4039,19 @@ class Component extends DCLogic {
       return;
     }
 
-    // "resolved" here means only "this bracket number matches a passage the
-    // engine retrieved" — the same check server turns run before the
-    // mechanical fidelity pass, never the fidelity pass itself. That gap is
-    // named explicitly in the trace row below, not left for the reader to
-    // notice on their own.
+    // "resolved" here means only "this bracket number matches a passage/result
+    // the engine or web search retrieved" — the same check server turns run
+    // before the mechanical fidelity pass, never the fidelity pass itself.
+    // That gap is named explicitly in the trace row below, not left for the
+    // reader to notice on their own.
     const citedNums = [...new Set((answer.match(/\[(\d+)\]/g) || []).map(m => Number(m.slice(1, -1))))];
     const citations = citedNums.map(num => {
       const gc = (groundData.citations || []).find(c => c.index === num);
       return {
         num: String(num), resolved: !!gc,
-        source: gc ? this._shortSource(gc.source_id) : ('⊘ unresolved — no engine passage for [' + num + ']'),
+        source: gc ? (useWeb ? gc.title : this._shortSource(gc.source_id)) : ('⊘ unresolved — no ' + (useWeb ? 'web result' : 'engine passage') + ' for [' + num + ']'),
         sourceId: gc ? gc.source_id : null,
+        url: gc && useWeb ? gc.url : undefined,
         byteStart: gc ? gc.byte_start : undefined, byteEnd: gc ? gc.byte_end : undefined, score: gc ? gc.score : undefined,
         quote: gc ? String(gc.text || '').slice(0, 300) : '',
       };
@@ -4046,11 +4061,15 @@ class Component extends DCLogic {
       a: answer, citations: citations.length ? citations : null, streaming: false,
       model: `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
       trace: [
-        { kind: 'ground', name: 'Retrieval', detail: grounding.empty
-          ? (grounding.warming ? 'Corpus still warming — no evidence yet.' : 'No matching passage found.')
-          : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}` },
+        { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: grounding.empty
+          ? (grounding.warming ? 'Corpus still warming — no evidence yet.' : (useWeb ? 'No web search results matched this question.' : 'No matching passage found.'))
+          : useWeb
+            ? `${grounding.sourceCount} web source(s) found.`
+            : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}` },
         { kind: 'model', name: 'Model', detail: `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
-        { kind: 'gap', name: 'Citation check', detail: 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
+        { kind: 'gap', name: 'Citation check', detail: useWeb
+          ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
+          : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
         { kind: 'gap', name: 'Persistence', detail: 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
       ],
     });
@@ -5008,8 +5027,13 @@ class Component extends DCLogic {
   }
 
   // The primary affordance in the app: a bracket in the answer is a door into
-  // the bytes that justify it.
+  // the bytes that justify it. A web citation has no engine passage to open
+  // in the reader — its "door" is the page itself.
   openCitation(cit) {
+    if (cit.url) {
+      window.open(cit.url, '_blank', 'noopener');
+      return;
+    }
     if (cit.resolved === false || !cit.sourceId) {
       this.logAdd('⊘', `[${cit.num}] has no engine passage — nothing to open`, 'reader');
       return;
@@ -5356,9 +5380,10 @@ class Component extends DCLogic {
 
       // A bracket is a door. Openable only when the cited source is actually
       // bonded to this room — an unopenable citation looks different rather
-      // than looking identical and doing nothing when clicked.
+      // than looking identical and doing nothing when clicked. A web citation
+      // is always openable: its door is the page itself, not this room.
       citations: cits.map(c => {
-        const openable = c.resolved && !!this._sourceForCitation(c.sourceId);
+        const openable = c.url ? true : (c.resolved && !!this._sourceForCitation(c.sourceId));
         return {
           ...c, openable,
           open: () => this.openCitation(c),
@@ -5367,7 +5392,7 @@ class Component extends DCLogic {
           color: openable ? '#4A463E' : '#8C877C',
           border: openable ? '#E4DFD5' : '#EDE9E1',
           bg: openable ? '#FAF8F4' : 'transparent',
-          title: openable ? `Open ${c.source} at this passage` : `${c.source} is not open in this room`,
+          title: c.url ? `Open ${c.source} (${c.url})` : (openable ? `Open ${c.source} at this passage` : `${c.source} is not open in this room`),
         };
       }),
 
@@ -5377,10 +5402,10 @@ class Component extends DCLogic {
       // reader has to go looking for.
       hasSnippets: (turn.snippets || []).length > 0,
       snippets: (turn.snippets || []).map(s => {
-        const openable = !!this._sourceForCitation(s.sourceId);
+        const openable = s.url ? true : !!this._sourceForCitation(s.sourceId);
         return {
           ...s, openable,
-          open: () => this.openCitation({ num: s.num, resolved: true, sourceId: s.sourceId, source: s.source, byteStart: s.byteStart, byteEnd: s.byteEnd, quote: s.quote }),
+          open: () => this.openCitation({ num: s.num, resolved: true, sourceId: s.sourceId, source: s.source, url: s.url, byteStart: s.byteStart, byteEnd: s.byteEnd, quote: s.quote }),
           cursor: openable ? 'pointer' : 'default',
           ellipsis: s.truncated ? '…' : '',
         };

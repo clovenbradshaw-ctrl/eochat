@@ -34,6 +34,8 @@ export function buildVerbatimSnippets(brackets, citations) {
       byteStart: c.byte_start,
       byteEnd: c.byte_end,
       text: c.text,
+      title: c.title,
+      url: c.url,
     });
   }
   return out;

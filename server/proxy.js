@@ -59,8 +59,8 @@ import { sensesCatalog, SENSE_CATEGORIES } from "./senses-catalog.js";
 import * as sensesState from "./senses-state.js";
 import { refreshHfCatalog, discoverCacheStatus } from "./senses-hf.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
-import { createTurnController } from "./turn-controller.js";
-import { webSearchAndFetch } from "./web-search.js";
+import { createTurnController, buildWebSystemMessage } from "./turn-controller.js";
+import { webSearchAndFetch, flattenDdgTopics } from "./web-search.js";
 import { runSessionMessage } from "./code-longform-session.js";
 
 // ── CLI args with validation ──
@@ -752,22 +752,6 @@ function recordWebHistory(record) {
   } catch (err) {
     console.error(`[proxy] web-history append failed: ${err.message}`);
   }
-}
-
-// DuckDuckGo wraps every result href in a redirect
-// (//duckduckgo.com/l/?uddg=<encoded real url>&rut=…). Unwrap it so what we
-// hand back — and later ingest and cite — is the actual page, not a tracker.
-// Sponsored rows go through the same wrapper but resolve to y.js ad links;
-// they return "" so an ad never becomes a cited source.
-function decodeDdgHref(href) {
-  if (!href) return "";
-  let h = href.replace(/&amp;/g, "&");
-  const m = h.match(/[?&]uddg=([^&]+)/);
-  if (m) {
-    try { h = decodeURIComponent(m[1]); } catch { return ""; }
-  }
-  if (/\/y\.js\?|[?&]ad_provider=|[?&]ad_domain=/.test(h)) return "";
-  return h;
 }
 
 async function fetchAndSaveUrl(url) {
@@ -1495,7 +1479,7 @@ const toolHandlers = {
     // Backends tried in order (configurable via env):
     //   1. Brave Search API (BRAVE_API_KEY) — best quality, free tier: 2000/mo
     //   2. Serper.dev (SERPER_API_KEY) — Google results via API, free tier: 2500/mo
-    //   3. DuckDuckGo (no key needed) — fallback HTML scraper
+    //   3. DuckDuckGo Instant Answer API (no key needed) — fallback JSON
     //
     // Returns structured results optimized for LLM consumption.
     const numResults = Math.min(args.numResults || 8, 20);
@@ -1598,51 +1582,31 @@ const toolHandlers = {
       }
     }
 
-    // ── Backend 3: DuckDuckGo (no key needed, HTML scraper) ──
+    // ── Backend 3: DuckDuckGo Instant Answer API (no key needed) ──
+    // A typed JSON response, same as Brave and Serper above — not a scraped
+    // results page matched against markup that breaks the moment DuckDuckGo
+    // changes its HTML. It answers with a topic abstract plus related
+    // topics rather than a ranked general search index, so it is thinner
+    // than a page scrape for a broad query — but every field is read off a
+    // real JSON value, never guessed from a regex against raw markup.
     try {
-      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      const resp = await safeFetch(ddgUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml",
-        },
-      }, 15000);
+      const ddgUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_redirect=1&no_html=1&skip_disambig=1`;
+      const resp = await safeFetch(ddgUrl, { headers: { "Accept": "application/json" } }, 10000);
 
       if (resp.ok) {
-        const html = await resp.text();
+        const data = await resp.json();
         const results = [];
 
-        // Parse DuckDuckGo HTML results — extract result blocks.
-        // Split on the class TOKEN, not a literal attribute: DDG emits
-        // class="links_main links_deep result__body", so matching the exact
-        // string '<div class="result__body">' silently found zero results.
-        const resultBlocks = html.split(/<div[^>]*\bclass="[^"]*\bresult__body\b[^"]*"[^>]*>/);
-        // Skip first split (content before any result)
-        for (let i = 1; i < resultBlocks.length && results.length < numResults; i++) {
-          const block = resultBlocks[i];
-          try {
-            // Extract title
-            const titleMatch = block.match(/<a[^>]*\bclass="[^"]*\bresult__a\b[^"]*"[^>]*>(.*?)<\/a>/s);
-            const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-
-            // Extract URL
-            const urlMatch = block.match(/<a[^>]*\bclass="[^"]*\bresult__a\b[^"]*"[^>]*href="(.*?)"/)
-              || block.match(/<a[^>]*href="(.*?)"[^>]*\bclass="[^"]*\bresult__a\b/);
-            let url = urlMatch ? decodeDdgHref(urlMatch[1]) : "";
-            if (url.startsWith("//")) url = "https:" + url;
-            
-            // Extract snippet
-            const snippetMatch = block.match(/<a[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)<\/a>/s);
-            let snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-            if (!snippet) {
-              const altMatch = block.match(/\bclass="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)<\/(?:span|div|td)>/s);
-              snippet = altMatch ? altMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-            }
-
-            if (title && url) {
-              results.push({ title, url, snippet });
-            }
-          } catch {}
+        if (data.AbstractText) {
+          results.push({ title: data.Heading || args.query, url: data.AbstractURL || "", snippet: data.AbstractText });
+        }
+        for (const t of flattenDdgTopics(data.RelatedTopics)) {
+          if (results.length >= numResults) break;
+          // DDG's Text field reads "Name - description"; split on the
+          // leading " - " it always inserts so the title is a name, not
+          // the whole sentence.
+          const dash = t.Text.indexOf(" - ");
+          results.push({ title: dash > -1 ? t.Text.slice(0, dash) : t.Text.slice(0, 80), url: t.FirstURL, snippet: t.Text });
         }
 
         if (results.length > 0) {
@@ -3412,6 +3376,61 @@ const server = http.createServer((req, res) => {
             text: c.text,
           })),
           gaps: groundResult.gaps || [],
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Web-search counterpart of /api/ground — same purpose (retrieval + the
+  // matching citation-instruction prompt, no generation step) but sourced
+  // from a live web search instead of the local corpus. Exists for the same
+  // caller /api/ground exists for: a client running its own model with no
+  // tool loop of its own (the eochat UI's browser-local WebLLM path) still
+  // needs the reader's "Web" toggle to actually reach the web, not just the
+  // engine's own index — this is what makes that true.
+  if (req.method === "POST" && req.url === "/api/web-ground") {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", async () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+      const query = String(data.query || "").trim();
+      if (!query) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "query is required" }));
+        return;
+      }
+      try {
+        const webResults = await webSearchAndFetch(query, {
+          numResults: data.numResults ?? 5,
+          maxFetchChars: data.maxFetchChars ?? 5000,
+        });
+        const { message } = buildWebSystemMessage(webResults);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          grounded: webResults.length > 0,
+          systemPrompt: message.content,
+          total: webResults.length,
+          citations: webResults.map((r, i) => ({
+            index: i + 1,
+            source_id: r.url,
+            title: r.title,
+            url: r.url,
+            text: r.text || r.snippet || "",
+          })),
+          gaps: webResults.length === 0
+            ? [{ type: "no_web_results", reason: "No web search results matched this question." }]
+            : [],
         }));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });

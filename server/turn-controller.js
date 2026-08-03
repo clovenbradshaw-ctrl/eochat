@@ -143,6 +143,33 @@ export function buildGroundedSystemMessage(groundResult, warming = false) {
   return { message: { role: "system", content }, maxCitation: groundResult.citations.length, warming: false };
 }
 
+// The web-search counterpart of buildGroundedSystemMessage — same shape
+// (a system message plus the highest citation number in force), but built
+// from live web results instead of engine passages. Module-level for the
+// same reason: a caller with no tool loop of its own (the browser-local
+// WebLLM path, via /api/web-ground) needs the exact same instruction
+// wording the server's own tool-calling talker gets, not a reimplementation
+// that can drift from it.
+export function buildWebSystemMessage(webResults) {
+  if (!webResults || webResults.length === 0) {
+    return {
+      message: { role: "system", content: "Answer the reader's question from your own knowledge. Do NOT use bracketed citations like [1] — there are no sources to cite." },
+      maxCitation: 0, warming: false,
+    };
+  }
+  const parts = webResults.map((r, i) => {
+    const body = (r.text || r.snippet || "").trim();
+    return `[${i + 1}] ${r.title}\n    URL: ${r.url}\n${body ? `\n${body}` : ""}`;
+  });
+  const content =
+    `Answer the reader's question using the web search results below. When you draw on specific information, ` +
+    `cite the source number like [1], [2], etc. Do NOT invent facts beyond what the material contains. ` +
+    `If it does not contain the answer, say so plainly.\n\n` +
+    `--- Web Search Results (${webResults.length} sources) ---\n\n` +
+    parts.join("\n\n");
+  return { message: { role: "system", content }, maxCitation: webResults.length, warming: false };
+}
+
 export function createTurnController(deps) {
   const {
     conversationStore, groundQuery, target, anthropicKey, anthropicModel,
@@ -161,26 +188,6 @@ export function createTurnController(deps) {
   // One in-flight generation per (conversation, turn) at a time — stop/regenerate
   // both need to find it by that key alone, before they know an answerId.
   const activeControllers = new Map();
-
-  function buildWebSystemMessage(webResults) {
-    if (!webResults || webResults.length === 0) {
-      return {
-        message: { role: "system", content: "Answer the reader's question from your own knowledge. Do NOT use bracketed citations like [1] — there are no sources to cite." },
-        maxCitation: 0, warming: false,
-      };
-    }
-    const parts = webResults.map((r, i) => {
-      const body = (r.text || r.snippet || "").trim();
-      return `[${i + 1}] ${r.title}\n    URL: ${r.url}\n${body ? `\n${body}` : ""}`;
-    });
-    const content =
-      `Answer the reader's question using the web search results below. When you draw on specific information, ` +
-      `cite the source number like [1], [2], etc. Do NOT invent facts beyond what the material contains. ` +
-      `If it does not contain the answer, say so plainly.\n\n` +
-      `--- Web Search Results (${webResults.length} sources) ---\n\n` +
-      parts.join("\n\n");
-    return { message: { role: "system", content }, maxCitation: webResults.length, warming: false };
-  }
 
   // Recent completed turns from THIS conversation, as real message history —
   // not reconstructed from a keyword memory search. Bounded so a long-running
@@ -747,6 +754,16 @@ export function createTurnController(deps) {
           source: "web",
         }));
 
+        // Same citation table shape the engine-grounding branch builds below
+        // (index/source_id/text), just sourced from a live page instead of an
+        // ingested one — a bracket the model writes against a web result has
+        // to resolve against SOMETHING, or every web citation reports as
+        // fabricated regardless of whether the page actually backs it.
+        const lastCitations = webResults.map((r, i) => ({
+          index: i + 1, source_id: r.url, title: r.title, url: r.url,
+          text: r.text || r.snippet || "",
+        }));
+
         sendEvent("witnesses_selected", {
           turnId: turn.id, answerId,
           empty: webResults.length === 0,
@@ -754,7 +771,7 @@ export function createTurnController(deps) {
           sourceCount: webResults.length,
           foldedCount: webResults.length,
           retrieved,
-          citations: [],
+          citations: lastCitations,
           gaps: [],
           priorWidening: null,
         });
@@ -766,10 +783,10 @@ export function createTurnController(deps) {
             tokens: 0, budget: 0, dropped: 0,
             empty: webResults.length === 0,
             warming: false,
+            citations: lastCitations,
           },
         });
 
-        const lastCitations = [];
         const history = buildHistoryMessages(conv, turn.id);
         const messages = [systemMsg, ...history, { role: "user", content: question }];
 
