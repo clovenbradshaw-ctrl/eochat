@@ -56,7 +56,7 @@ import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 import * as priorsSource from "./priors-source.js";
 import { HolonicTask } from "./holonic-task.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
-import { createTurnController } from "./turn-controller.js";
+import { createTurnController, buildWebSystemMessage } from "./turn-controller.js";
 import { webSearchAndFetch } from "./web-search.js";
 import { runSessionMessage } from "./code-longform-session.js";
 
@@ -3409,6 +3409,61 @@ const server = http.createServer((req, res) => {
             text: c.text,
           })),
           gaps: groundResult.gaps || [],
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Web-search counterpart of /api/ground — same purpose (retrieval + the
+  // matching citation-instruction prompt, no generation step) but sourced
+  // from a live web search instead of the local corpus. Exists for the same
+  // caller /api/ground exists for: a client running its own model with no
+  // tool loop of its own (the eochat UI's browser-local WebLLM path) still
+  // needs the reader's "Web" toggle to actually reach the web, not just the
+  // engine's own index — this is what makes that true.
+  if (req.method === "POST" && req.url === "/api/web-ground") {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", async () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+      const query = String(data.query || "").trim();
+      if (!query) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "query is required" }));
+        return;
+      }
+      try {
+        const webResults = await webSearchAndFetch(query, {
+          numResults: data.numResults ?? 5,
+          maxFetchChars: data.maxFetchChars ?? 5000,
+        });
+        const { message } = buildWebSystemMessage(webResults);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          grounded: webResults.length > 0,
+          systemPrompt: message.content,
+          total: webResults.length,
+          citations: webResults.map((r, i) => ({
+            index: i + 1,
+            source_id: r.url,
+            title: r.title,
+            url: r.url,
+            text: r.text || r.snippet || "",
+          })),
+          gaps: webResults.length === 0
+            ? [{ type: "no_web_results", reason: "No web search results matched this question." }]
+            : [],
         }));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
