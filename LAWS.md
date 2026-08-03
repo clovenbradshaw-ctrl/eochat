@@ -264,26 +264,47 @@ genuinely does not contain. The two failures compounded: the reader was told
 the whole book was loaded, and then told, in the corpus's own voice, that the
 book does not mention what was cut out of it.
 
-The cap now lives in one named constant (`INGEST_CHAR_CAP`) with one function
-allowed to apply it (`capForIngest`), and crossing it is a reported fact:
-`truncated`, `cap`, `originalChars`, `ingestedChars`, `droppedChars` and a
-sentence naming the percentage lost ride on every ingest response — plain JSON,
-SSE `done`, and the project-scoped route alike. A document under the cap
-reports `truncated: false`, so the flag means something.
+**The cap is gone. Documents are admitted whole.**
+
+Reporting the cut was the first fix and it was the wrong ceiling to settle on.
+An announced truncation is still a truncation: the dropped six sevenths of the
+book are still unsearchable and still uncitable, and a reader told so is still
+without the thing they asked for. Honesty about a loss is not a substitute for
+not losing it. Every ingest surface now admits the full text — plain JSON, SSE,
+the project-scoped route, and the web-search ingest alike.
+
+`truncated: false` is still on every ingest response, as a positive assertion
+of completeness rather than a field that appears only when something went
+wrong. `admitWhole()` is the one place that assertion is made, so a
+reintroduced cap has to come back through it, and the UI that would display it
+is already wired.
 
 Two related silent cuts went with it:
 
 - **The client cut first.** `ui/index.html` sliced to 500 000 characters
   *before* sending, which put the truncation on the one side of the wire that
   could never report it — the server received a 500 000-character document,
-  saw nothing unusual, and answered honestly. The whole text is sent now; the
-  server decides and reports, and the UI marks a truncated source `◐` in
-  amber and states the loss in the sources log.
-- **Drill-down returned a fragment as a document.** `fetch_attachment` — the
-  tool the model calls precisely when the first answer was not enough —
-  returned `content.slice(0, 15000)` unannounced, inviting exactly one
-  conclusion about everything after character 15 000. The cut is now stated in
-  the tool's own return value, where the model reading it will see it.
+  saw nothing unusual, and answered honestly. The whole text is sent now.
+- **The attachment sidecar was shorter than the corpus.** `fetch_attachment`
+  reads a sidecar file that was itself capped, which would have made the
+  drill-down path quietly blinder than the search path over the very same
+  source. It is stored whole, matching admission.
+
+What remains bounded, deliberately, is the **transport ceiling**
+(`INGEST_MAX_BODY`) — and it is a refusal, not a truncation. Nothing is cut and
+nothing is admitted: a body too large to hold in memory is answered with a 413
+naming the limit, because the alternative is a heap failure that takes the
+process down and loses the document anyway. An oversized upload used to be
+answered by destroying the socket, which is L1d's "dies quietly" in its purest
+form.
+
+One announced cut is left, and it is not the corpus: `fetch_attachment` returns
+at most 15 000 characters of a document into a single tool result, because that
+result has to fit the model's context window alongside everything else — an
+unbounded one would overflow `NUM_CTX` and produce an answer that reads like a
+retrieval failure when retrieval was fine. It says so in its own return value
+and points at `verbatim_search` for the rest. That is a bound on one model
+call, not on what the corpus holds.
 
 ### Measurement
 
@@ -291,12 +312,20 @@ Two related silent cuts went with it:
 cap and SKIP when it found none, which is what happened on every machine
 without War and Peace in `~/Downloads` — the violation above was real the whole
 time and went unmeasured, because the check could not reach the only condition
-that triggers it. **A law whose check silently skips is not enforced.** The
-oversized document is synthesized now rather than hoped for, and the check
-asserts three things: that the cut is declared (L3a), that the figures are
-present *and reconcile against what was sent* (L3b), and that a document under
-the cap does **not** claim truncation — without which "always report
-truncated" would pass.
+that triggers it. **A law whose check silently skips is not enforced.**
+
+The document is synthesized now rather than hoped for, and because the cap is
+gone the assertion is stronger than it was. The check no longer asks whether a
+cut was *declared*; it asks whether anything was cut at all, and it does not
+take the response's word for it. A sentinel is placed in the **last line** of a
+700 KB document — the position that sat in the discarded remainder under the
+old cap — and the check requires that sentinel to come back out of
+`/api/verbatim`. A flag can lie; a retrieved passage cannot.
+
+It also holds three edges: a document that fits must not claim it was cut
+(otherwise "always report truncated" would pass), and a body past the transport
+ceiling must be refused with a 413 that names the limit rather than dropped on
+the floor.
 
 ---
 

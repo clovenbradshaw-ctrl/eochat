@@ -3581,9 +3581,10 @@ class Component extends DCLogic {
   // sending, which put the truncation on the one side of the wire that can
   // never report it: the server received a 500,000-character document, saw
   // nothing unusual about it, and answered "ingested, 250 chunks" perfectly
-  // honestly. The whole text is sent now, and the server's cap — the only
-  // place that knows the ceiling — decides and reports. The caller surfaces
-  // whatever it reports.
+  // honestly. The whole text is sent now and admitted whole. `_truncationNote`
+  // stays wired because `truncated` is still part of the ingest contract — if a
+  // cap is ever reintroduced server-side, this surface reports it rather than
+  // going silent again, which is the failure that motivated all of this.
   async _ingestTextContent(name, text, projectId) {
     const endpoint = projectId ? '/api/projects/' + encodeURIComponent(projectId) + '/ingest' : '/api/ingest';
     const res = await fetch(this.proxyUrl() + endpoint, {

@@ -89,30 +89,30 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 - `POST /api/chat/tools` with `ingest` tool — LLM can ingest on request
 - `GET /extract?url=` (memory-server) — fetch URL content
 
-- Admission is capped at `INGEST_CHAR_CAP` (500 000 characters). The cap is
-  not hidden: an ingest that crosses it returns `truncated: true` with `cap`,
-  `originalChars`, `ingestedChars`, `droppedChars` and a sentence naming the
-  percentage lost, and the UI marks that source `◐` in amber rather than `●`.
-  A document under the cap returns `truncated: false`.
+- **Documents are admitted whole.** There is no admission cap: every ingest
+  response carries `truncated: false` as a positive assertion of completeness.
+  The only bound is a transport ceiling (`INGEST_MAX_BODY`), and crossing it is
+  a *refusal* — HTTP 413 naming the limit, nothing cut and nothing admitted —
+  not a silent shortening.
 
 **Success criteria:**
 - User can drop a 1000-page book and search it in < 10s
 - Duplicate files are detected (SHA hash) and rejected
 - Multiple file formats supported
-- A document too large to admit whole is never reported as if it were. What
-  was dropped is stated in the response and shown in the UI, because a
-  silently shortened source makes every later "the text does not mention X"
-  about the discarded remainder confidently and invisibly wrong (LAWS.md L3)
+- The last page of an ingested book is as searchable as the first. Nothing is
+  dropped on admission, because a shortened source makes every later "the text
+  does not mention X" about the missing remainder confidently and invisibly
+  wrong (LAWS.md L3)
 
 **How to test:**
 1. Ingest `pg84.txt` (Frankenstein, 438KB)
 2. Check `/api/sources` → file appears with chunk count
 3. Ingest same file again → should return "duplicate" error
 4. Ingest a URL → content extracted and stored
-5. Ingest a document larger than 500 000 characters → the response must carry
-   `truncated: true` and the dropped-character count, and the sources rail must
-   show the amber `◐` marker. `node scripts/check-laws.mjs` measures this
-   (L3a/L3b) against a synthesized oversized document.
+5. Ingest a document well over 500 000 characters, with a distinctive sentinel
+   in its **final line** → searching for that sentinel must return it.
+   `node scripts/check-laws.mjs` measures exactly this (L3a): it does not trust
+   the response's `truncated` flag, it retrieves the tail.
 
 ---
 
@@ -513,10 +513,10 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 - `GET /api/discourse/stats` — discourse statistics
 
 ### Document Management
-- `POST /api/ingest` — ingest a file. Returns the id as **both** `sourceId` and
-  `path` (the same value; `/api/sources` publishes it under the latter name),
-  plus `truncated` and, when the cap bit, `cap`/`originalChars`/
-  `ingestedChars`/`droppedChars`
+- `POST /api/ingest` — ingest a file, admitted whole. Returns the id as **both**
+  `sourceId` and `path` (the same value; `/api/sources` publishes it under the
+  latter name), plus `truncated: false`. A body past `INGEST_MAX_BODY` is
+  refused with 413 and `ingested: false`
 - `GET /api/sources` — list ingested sources (each entry carries `path` and the
   identical `sourceId`)
 - `DELETE /api/sources/<key>` — delete source (recycle bin)

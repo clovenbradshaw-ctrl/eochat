@@ -252,23 +252,30 @@ async function checkIngestLatency() {
 
 async function checkSilentTruncation() {
   section("L3 — no silent truncation");
-  const CAP = 500000; // proxy.js: INGEST_CHAR_CAP
 
-  // This used to look for a checkout-local file bigger than the cap and SKIP
-  // when it found none — which is what happened on every machine without War
-  // and Peace in ~/Downloads. The violation was real the whole time and went
-  // unmeasured, because the check could not reach the only condition that
-  // triggers it. A law whose check silently skips is not enforced, so the
-  // oversized document is synthesized here rather than hoped for: the cap is a
-  // character count, and characters are free to make.
-  const marker = "ZANZIBAR_TAIL_SENTINEL";
+  // This check used to look for a checkout-local file bigger than the old
+  // 500,000-character admission cap and SKIP when it found none — which is
+  // every machine without War and Peace in ~/Downloads. The violation it
+  // existed to catch was real the whole time and went unmeasured, because the
+  // check could not reach the only condition that triggers it. A law whose
+  // check silently skips is not enforced.
+  //
+  // The cap is gone now: documents are admitted whole rather than cut and
+  // reported. So the assertion changes with it, and gets stronger. Reporting a
+  // cut was always the consolation prize — the dropped remainder was still
+  // unsearchable, and the reader was still without the thing they asked for.
+  // What is measured now is that nothing was dropped at all, and the proof is
+  // not a flag in the response (a flag can lie) but the tail of the document
+  // coming back out of the corpus by search.
+  const OLD_CAP = 500000;
+  const marker = "ZANZIBARQUIXOTROPIC";
   const filler = "Paragraph filler: the quick brown fox jumps over the lazy dog near the river bank at dawn.\n";
-  let content = filler.repeat(Math.ceil((CAP * 1.4) / filler.length));
-  // The sentinel sits past the cap on purpose: it is the thing the reader will
-  // later be told the document "does not mention".
-  content += `\n${marker} appears only after the cap.\n`;
+  // Comfortably past the old cap, so a reintroduced 500k cut cannot pass.
+  let content = filler.repeat(Math.ceil((OLD_CAP * 1.4) / filler.length));
+  const submittedChars = content.length + marker.length + 40;
+  content += `\nThe sentinel ${marker} appears only in the last line of this document.\n`;
 
-  const name = `lawcheck-truncation-${process.pid}.txt`;
+  const name = `lawcheck-wholeness-${process.pid}.txt`;
   const { res, body } = await timedFetch(`${PROXY}/api/ingest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -277,60 +284,69 @@ async function checkSilentTruncation() {
   let parsed = {};
   try { parsed = JSON.parse(body); } catch {}
   if (!res.ok) {
-    record("L3", "L3a", "VIOLATION", `oversized ingest failed HTTP ${res.status}`);
+    record("L3", "L3a", "VIOLATION",
+      `a ${(content.length / 1024).toFixed(0)}KB ingest was refused outright (HTTP ${res.status}) — the document is neither cut nor admitted`);
     return;
   }
 
-  // The reader handed over a whole book and got back part of one. Whether the
-  // cap is right is a separate question — the law is only that the response
-  // must say it happened, because a silently shortened source produces
-  // confidently wrong "the text does not mention X" answers about the part
-  // that was dropped.
-  const said = parsed.truncated === true || parsed.capped === true ||
-    parsed.dropped_bytes != null || parsed.droppedChars != null || parsed.original_length != null;
-  record("L3", "L3a", said ? "PASS" : "VIOLATION",
-    said
-      ? `oversized ingest declares the cut: truncated=${JSON.stringify(parsed.truncated)}`
-      : `${(content.length / 1024).toFixed(0)}KB ingested, silently cut to ${(CAP / 1024).toFixed(0)}KB — response has no truncation field, so the reader believes the whole text is loaded`,
-    { submitted_chars: content.length, cap: CAP, dropped_chars: content.length - CAP,
-      response_keys: Object.keys(parsed) });
+  // The response must not claim a cut, because there is not supposed to be one.
+  const claimsCut = parsed.truncated === true || parsed.capped === true ||
+    parsed.droppedChars > 0 || parsed.dropped_bytes > 0;
+  record("L3", "L3a", claimsCut ? "VIOLATION" : "PASS",
+    claimsCut
+      ? `a ${(content.length / 1024).toFixed(0)}KB document came back marked truncated=${JSON.stringify(parsed.truncated)} — admission is capping again`
+      : `a ${(content.length / 1024).toFixed(0)}KB document (past the retired ${OLD_CAP}-char cap) is admitted whole: truncated=${JSON.stringify(parsed.truncated)}, ${parsed.chunks} chunks`,
+    { submitted_chars: content.length, chunks: parsed.chunks ?? null,
+      reported_truncated: parsed.truncated ?? null });
 
-  // L3b — "some was dropped" does not tell the reader whether to re-ask. The
-  // numbers must be there and must add up; a truncation notice that misstates
-  // the loss is worse than none, because it is trusted.
-  const dropped = parsed.droppedChars ?? parsed.dropped_bytes;
-  const original = parsed.originalChars ?? parsed.original_length;
-  const ingested = parsed.ingestedChars;
-  const quantified = dropped != null && original != null;
-  const consistent = quantified && original === content.length &&
-    (ingested == null || original - ingested === dropped);
-  record("L3", "L3b", quantified ? (consistent ? "PASS" : "VIOLATION") : "VIOLATION",
-    !quantified
-      ? `the cut is announced but not measured — no droppedChars/originalChars, so the reader cannot tell whether to re-ask`
-      : consistent
-        ? `reports ${ingested ?? CAP} of ${original} characters ingested, ${dropped} dropped — and the figures reconcile against what was sent`
-        : `reported figures do not reconcile: sent ${content.length}, response claims original=${original} ingested=${ingested} dropped=${dropped}`,
-    { submitted_chars: content.length, reported_original: original ?? null,
-      reported_ingested: ingested ?? null, reported_dropped: dropped ?? null });
+  // The real test, and the one a response flag cannot fake: the LAST line of
+  // the document has to be findable. Under the old cap this sentinel sat in
+  // the discarded remainder, so searching for it returned "no passage" — the
+  // corpus asserting, in its own voice, that the book does not contain what
+  // was cut out of it.
+  const hit = await fetch(`${PROXY}/api/verbatim?q=${encodeURIComponent(marker)}&limit=3`)
+    .then((r) => r.json()).catch(() => null);
+  const passages = hit?.passages || [];
+  const found = passages.some((p) => String(p.text || "").includes(marker));
+  record("L3", "L3a", found ? "PASS" : "VIOLATION",
+    found
+      ? `the document's final line is retrievable by search — the tail past the retired cap really is in the corpus, not merely reported as admitted`
+      : `the document's final line is NOT retrievable (${passages.length} passage(s) returned) — the tail was dropped, and the corpus now answers "no passage" for text the reader supplied`,
+    { sentinel: marker, passages_returned: passages.length, submitted_chars: submittedChars });
 
-  // The other half of the law, and the one a lazy fix breaks: a document that
-  // fits must NOT claim it was cut. "Always say truncated" would pass L3a
-  // while making the flag meaningless.
-  const smallName = `lawcheck-untruncated-${process.pid}.txt`;
+  // A document that fits must not claim it was cut either. "Always say
+  // truncated" would be as useless as never saying it.
   const small = filler.repeat(20);
   const { body: smallBody } = await timedFetch(`${PROXY}/api/ingest`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content: small, name: smallName, session: `lawcheck-${process.pid}` }),
+    body: JSON.stringify({ content: small, name: `lawcheck-small-${process.pid}.txt`, session: `lawcheck-${process.pid}` }),
   });
   let smallParsed = {};
   try { smallParsed = JSON.parse(smallBody); } catch {}
   const clean = smallParsed.truncated === false || smallParsed.truncated == null;
   record("L3", "L3a", clean ? "PASS" : "VIOLATION",
     clean
-      ? `a ${small.length}-character document under the cap reports no truncation`
-      : `a ${small.length}-character document under the cap claims truncated=${JSON.stringify(smallParsed.truncated)} — the flag cannot be trusted if it is always set`,
+      ? `a ${small.length}-character document reports no truncation`
+      : `a ${small.length}-character document claims truncated=${JSON.stringify(smallParsed.truncated)} — the flag cannot be trusted if it is always set`,
     { submitted_chars: small.length, reported_truncated: smallParsed.truncated ?? null });
+
+  // Refusal is not truncation, but it must still be loud. Nothing may be
+  // dropped on the floor: a body too large to hold is answered, not destroyed.
+  const ceiling = await fetch(`${PROXY}/api/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content: "x".repeat(300 * 1024 * 1024), name: "lawcheck-overceiling.txt" }),
+  }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => null) }))
+    .catch((e) => ({ status: 0, err: e.message }));
+  const loud = ceiling.status === 413 && ceiling.json?.ingested === false;
+  record("L3", "L3a", loud ? "PASS" : ceiling.status === 0 ? "SKIP" : "VIOLATION",
+    loud
+      ? `a body past the transport ceiling is refused with HTTP 413 naming the limit — a refusal that says so, not a silent drop`
+      : ceiling.status === 0
+        ? `could not probe the transport ceiling (${ceiling.err})`
+        : `a body past the transport ceiling answered HTTP ${ceiling.status} — an oversized upload must be refused out loud, never dropped`,
+    { status: ceiling.status });
 }
 
 // Shared by the idle baseline (checkChatLatency) and the under-load run

@@ -530,16 +530,15 @@ class DiscourseStore {
     const entry = { type: "attachment", name, content: content?.slice(0, 100000), type, size, text: content?.slice(0, ATTACHMENT_SNAPSHOT_CHARS), ingestedAt: ingestedAt || new Date().toISOString(), contentHash: this.#hash(content?.slice(0, 1000) || "") };
     session.attachments.set(name, entry);
 
-    // Also save content to a sidecar file so FETCH can retrieve it. This is
-    // capped at the same ceiling as admission (INGEST_CHAR_CAP) so the two
-    // cannot disagree about what the system holds, and the entry records
-    // whether the cap bit — L3a: a stored fragment must not be indistinguish-
-    // able from a stored document.
+    // Also save the content to a sidecar file so FETCH can retrieve it. Stored
+    // whole, matching admission: the sidecar is what `fetch_attachment` reads
+    // when the model goes back for more, and a sidecar shorter than the
+    // ingested document would make the drill-down path quietly blinder than
+    // the search path over the very same source.
     const sidecar = path.join(DISCOURSE_DIR, `${sessionId}_attach_${name.replace(/[^a-zA-Z0-9._-]/g, "_")}`);
-    const stored = content?.slice(0, INGEST_CHAR_CAP) || "";
+    const stored = content || "";
     entry.storedChars = stored.length;
-    entry.truncated = (content?.length || 0) > stored.length;
-    if (entry.truncated) entry.droppedChars = content.length - stored.length;
+    entry.truncated = false;
     await fsp.writeFile(sidecar, stored, "utf8").catch(() => {});
 
     await this.#append(sessionId, entry);
@@ -2623,20 +2622,15 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
         // to 500,000 chars, and admitting that synchronously is exactly the
         // L1d failure mode LAWS.md documents — one chat turn's web ingest
         // could block every other concurrent request's SSE handshake.
-        const { text: capped, truncation } = capForIngest(fetched.text);
-        await engineIngestTextAsync(capped, `source:${label}`, label);
+        await engineIngestTextAsync(fetched.text, `source:${label}`, label);
         admitted.push({ url, label });
-        // L3a — a page cut at the cap is announced on the same surface that
-        // announces the page, so "added this source" and "added five sevenths
-        // of this source" cannot read alike.
-        if (truncation) sendSSE("gap", { type: "source_truncated", url, name: label, ...truncation });
         const record = {
           name: label, url, size: fetched.text.length,
           session: opts.session || "default",
           query: query || "",
           ingestedAt: new Date().toISOString(),
           savedPath: fetched.path || null,
-          ...(truncation || { truncated: false }),
+          truncated: false,
         };
         recordWebHistory(record);
         sendSSE("source_added", record);
@@ -2689,53 +2683,33 @@ async function handleToolStream(res, messages, tools, forceModel = null, opts = 
 
 // ── Ingest ──
 
-// LAWS.md L3 — no silent truncation.
+// LAWS.md L3 — no silent truncation, satisfied by not truncating.
 //
-// Admission is capped, and the cap is not the problem: an unannounced cap is.
-// A 3216KB book accepted, cut to 488KB, and reported back as a successful
-// ingest of 250 chunks leaves the reader believing the whole book is loaded,
-// and every later "the text does not mention X" about the discarded remainder
-// is confidently, invisibly wrong — the exact failure this application exists
-// to prevent, arriving through the front door.
+// Admission used to stop at 500,000 characters. Reporting the cut was a real
+// improvement over hiding it, but reporting is a consolation prize: the
+// dropped six sevenths of a book are still not searchable and still not
+// citable, and the reader who is told so is still left without the thing they
+// asked for. A document handed to this application is now admitted whole.
 //
-// The cap therefore lives in one named constant, and crossing it is a
-// reported fact rather than an implementation detail. `capForIngest` is the
-// only place text is shortened for admission; every call site attaches what it
-// returns to its own result via `withTruncation`, so no ingest surface can cut
-// a document without the response saying so (L3a) and by how much (L3b).
-const INGEST_CHAR_CAP = parseArg("ingest-char-cap", 500_000, Number);
-
-// Transport ceiling for a single ingest request body, deliberately far above
-// INGEST_CHAR_CAP: everything between the two is admitted-and-reported rather
-// than refused, so the cap stays the normal path and this stays the safety
-// rail. Crossing it is answered, not silently dropped.
-const INGEST_MAX_BODY = parseArg("ingest-max-body", 33_554_432, Number);
-
-function capForIngest(text) {
-  const full = String(text ?? "");
-  if (full.length <= INGEST_CHAR_CAP) return { text: full, truncation: null };
-  const kept = full.slice(0, INGEST_CHAR_CAP);
-  return {
-    text: kept,
-    truncation: {
-      truncated: true,
-      cap: INGEST_CHAR_CAP,
-      originalChars: full.length,
-      ingestedChars: kept.length,
-      droppedChars: full.length - kept.length,
-      // L3b — "some was dropped" does not tell the reader whether to re-ask.
-      // Naming the fraction lost is what makes the number actionable.
-      note: `Only the first ${INGEST_CHAR_CAP} of ${full.length} characters were admitted — ${full.length - kept.length} characters (${Math.round(((full.length - kept.length) / full.length) * 100)}%) were not ingested and cannot be searched or cited.`,
-    },
-  };
+// `admitWhole` exists so the shape of an ingest result does not depend on how
+// big the document was: `truncated: false` is a positive assertion of
+// completeness that every ingest surface makes, not a field that only appears
+// when something went wrong. If a cap is ever reintroduced, it has to come
+// back through here, and the field is already wired to the UI that would
+// show it.
+function admitWhole(result) {
+  return { ...result, truncated: false };
 }
 
-// Merge a truncation record into an ingest result. Kept separate from
-// `capForIngest` because the cut happens before admission and the result only
-// exists after it.
-function withTruncation(result, truncation) {
-  return truncation ? { ...result, ...truncation } : { ...result, truncated: false };
-}
+// Transport ceiling for a single ingest request body. This is NOT a
+// truncation: nothing is cut, and nothing is admitted. A body past this size
+// is refused outright, with the limit named, because the alternative is not
+// "ingest more" — it is a heap allocation failure that takes the process down
+// and loses the document anyway. The ceiling is far above any realistic text
+// (War and Peace is ~3MB), and V8's own maximum string length sits not far
+// above it, so this is the honest edge of what a single request can carry
+// rather than a policy choice about how much of a book is worth reading.
+const INGEST_MAX_BODY = parseArg("ingest-max-body", 268_435_456, Number);
 
 // Shared by both /api/ingest response modes (plain JSON and SSE, below):
 // admission itself runs off the main thread (engineIngestTextAsync/
@@ -2762,8 +2736,7 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
     } catch { label = ingestUrl.replace(/\//g, "_"); }
     const srcName = name || label || ingestUrl;
     const sourceId = `source:${srcName}`;
-    const { text: admitted, truncation } = capForIngest(fetched.text);
-    const result = await engineIngestTextAsync(admitted, sourceId, srcName);
+    const result = await engineIngestTextAsync(fetched.text, sourceId, srcName);
     const att = await discourse.addAttachment(sessionId, {
       name: srcName,
       content: fetched.text,
@@ -2771,17 +2744,16 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
       size: fetched.text.length,
       ingestedAt: new Date().toISOString(),
     });
-    return withTruncation({
+    return admitWhole({
       ...result, sourceId, name: srcName, url: ingestUrl,
       attachment: { name: att.name, type: att.type, size: att.size },
-    }, truncation);
+    });
   }
 
   // Content-based ingestion (from browser file picker)
   if (content) {
     const sourceId = `source:${name || "upload"}:${Date.now()}`;
-    const { text: admitted, truncation } = capForIngest(content);
-    const result = await engineIngestTextAsync(admitted, sourceId, name || "upload");
+    const result = await engineIngestTextAsync(content, sourceId, name || "upload");
 
     // Register as attachment in discourse
     const att = await discourse.addAttachment(sessionId, {
@@ -2792,9 +2764,8 @@ async function performIngest({ ingestPath, ingestUrl, content, name, sessionId }
       ingestedAt: new Date().toISOString(),
     });
 
-    return withTruncation(
+    return admitWhole(
       { ...result, sourceId, name: name || "upload", attachment: { name: att.name, type: att.type, size: att.size } },
-      truncation,
     );
   }
 
@@ -3152,14 +3123,13 @@ const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/api/ingest") {
     let body = "";
     let overBody = false;
-    // The UI no longer pre-cuts uploads (that cut was unreportable — see
-    // INGEST_CHAR_CAP), so this route is now the first thing to see a whole
-    // document and must bound what it buffers. The transport ceiling sits well
-    // above the admission cap on purpose: a document between the two is
-    // accepted and reported as truncated, which is the informative outcome.
-    // Refusing is reserved for what would threaten the process itself, and it
-    // refuses out loud — an oversized body used to be answered by destroying
-    // the socket, which is L1d's "dies quietly" in its purest form.
+    // The UI no longer pre-cuts uploads, and admission no longer caps, so this
+    // route is the first and only thing to see a whole document — it must
+    // bound what it buffers or a large enough upload takes the process down
+    // and loses the document anyway. Refusing is reserved for exactly that,
+    // and it refuses out loud: an oversized body used to be answered by
+    // destroying the socket, which is L1d's "dies quietly" in its purest form.
+    // Nothing between "fits in memory" and this ceiling is ever cut.
     req.on("data", (c) => {
       if (overBody) return;
       body += c;
@@ -3896,10 +3866,9 @@ const server = http.createServer((req, res) => {
 
           if (content) {
             const sourceId = `source:${name || "upload"}:${Date.now()}`;
-            const { text: admitted, truncation } = capForIngest(content);
-            const result = await engineIngestText(admitted, sourceId, name || "upload", { pool: project.pool });
+            const result = await engineIngestText(content, sourceId, name || "upload", { pool: project.pool });
             await projectStore.addSource(segments[2], sourceId);
-            return sendJson(200, withTruncation({ ...result, sourceId, pool: project.pool }, truncation));
+            return sendJson(200, admitWhole({ ...result, sourceId, pool: project.pool }));
           }
 
           if (ingestUrl) {
@@ -3914,10 +3883,9 @@ const server = http.createServer((req, res) => {
             } catch { label = ingestUrl.replace(/\//g, "_"); }
             const srcName = name || label || ingestUrl;
             const sourceId = `source:${srcName}`;
-            const { text: admitted, truncation } = capForIngest(fetched.text);
-            const result = await engineIngestText(admitted, sourceId, srcName, { pool: project.pool });
+            const result = await engineIngestText(fetched.text, sourceId, srcName, { pool: project.pool });
             await projectStore.addSource(segments[2], sourceId);
-            return sendJson(200, withTruncation({ ...result, sourceId, name: srcName, url: ingestUrl, pool: project.pool }, truncation));
+            return sendJson(200, admitWhole({ ...result, sourceId, name: srcName, url: ingestUrl, pool: project.pool }));
           }
 
           if (ingestPath) {
