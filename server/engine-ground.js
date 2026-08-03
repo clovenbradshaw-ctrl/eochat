@@ -272,6 +272,45 @@ export function engineSearch(query, limit = 10, { maxChars = 800, source: source
 
 // ── Fold & ground ──
 
+// Per-source structural outline, cached by (pool, docId). sessionOutline runs
+// a novelty-curve pass over the WHOLE document (segments.js: headingScore),
+// so paying that cost per citation — several a turn, every turn — would make
+// grounding scale with conversation length instead of corpus size. A source
+// is re-ingested under a fresh id (see engineIngestText*), never mutated in
+// place, so nothing here needs an invalidation path beyond source deletion.
+const outlineCache = new Map(); // `${pool}::${docId}` -> sessionOutline() result
+
+function outlineFor(poolName, docId) {
+  const key = `${poolName}::${docId}`;
+  const hit = outlineCache.get(key);
+  if (hit) return hit;
+  const outline = corpusFacade.sessionOutline(ensureSession(poolName), { sourceId: docId });
+  outlineCache.set(key, outline);
+  return outline;
+}
+
+function invalidateOutline(poolName, docId) {
+  outlineCache.delete(`${poolName}::${docId}`);
+}
+
+// Where a citation falls in the document's own discovered structure —
+// "Chapter 8", "Letter 4", a Wikipedia section — instead of a byte offset,
+// which is a coordinate the model has no use for and nowhere to point it
+// (LAWS.md's citation surface is for humans following a quote to its source;
+// the model just needs to know what it's reading). Sourced from the same
+// novelty-curve outline engineFoldSource's divisions use, not re-derived
+// here. No section found — a short document, prose with no detected
+// boundaries, an outline the engine gave up on — is a real gap and comes
+// back unlabeled rather than inventing a location.
+function structuralLocation(poolName, sourceId, byteStart) {
+  const docId = sourceId?.replace(/:chunk-\d+$/, "");
+  if (!docId || !Number.isFinite(byteStart)) return null;
+  const outline = outlineFor(poolName, docId);
+  if (outline.error || !outline.sections?.length) return null;
+  const hit = outline.sections.find((s) => byteStart >= s.byteStart && byteStart < s.byteEnd);
+  return hit?.label || null;
+}
+
 // Build a context string that includes numbered verbatim citations the LLM
 // can actually cite from.  The fold summary (if any) follows below.
 // Hard ceiling on how much of one passage reaches the model.
@@ -287,7 +326,7 @@ export function engineSearch(query, limit = 10, { maxChars = 800, source: source
 // shortened rather than silently ending mid-sentence.
 const MAX_CITATION_CHARS = 1200;
 
-function buildCitedContext(kept, foldResult, gaps) {
+function buildCitedContext(kept, foldResult, gaps, poolName) {
   const parts = [];
 
   // Numbered verbatim citations — these are what the LLM cites with [1], [2]
@@ -299,7 +338,9 @@ function buildCitedContext(kept, foldResult, gaps) {
         const text = full.length > MAX_CITATION_CHARS
           ? full.slice(0, MAX_CITATION_CHARS) + " […truncated]"
           : full;
-        return `[${i + 1}] (${src} @ byte ${c.byte_start}-${c.byte_end})\n${text}`;
+        const where = structuralLocation(poolName, c.source_id, c.byte_start);
+        const location = where ? `${src} — ${where}` : src;
+        return `[${i + 1}] (${location})\n${text}`;
       })
       .join("\n\n");
     parts.push(`=== CITED PASSAGES ===\n${citationBlock}`);
@@ -416,7 +457,7 @@ export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit =
   }
 
   // Build a context that includes verbatim citation text the LLM can cite
-  const context = buildCitedContext(kept, foldResult, gaps);
+  const context = buildCitedContext(kept, foldResult, gaps, poolName);
 
   // The FULL ranked list, not just the survivors. `total: 12, folded: 2` tells
   // a reader that ten passages vanished but not which, nor why — so the fold
@@ -1182,6 +1223,7 @@ export function engineDeleteSource(sourceRef, { pool: poolName = DEFAULT_POOL } 
   }
   p.chunkCount -= info.chunks;
   p.sources.delete(sourceKey);
+  invalidateOutline(poolName, sourceKey);
 
   const deletedEntry = {
     sourceKey,

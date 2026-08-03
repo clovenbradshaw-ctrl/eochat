@@ -777,18 +777,53 @@ async function fetchAndSaveUrl(url) {
     let text = await resp.text();
 
     if (contentType.includes("text/html") || contentType.includes("application/xhtml") || text.trim().startsWith("<")) {
+      // Block-level boundaries become blank lines BEFORE tags are stripped —
+      // the engine's heading detector (segments.js: headingScore) only
+      // recognizes a heading by its FORM, a short line followed by a blank
+      // line, so a heading tag stripped straight to " " like everything else
+      // collapses "Chapter 1" into the same run-on paragraph as its body and
+      // the whole document comes back structureless (sessionOutline finds
+      // zero headings, not a wrong one). This is the one place that
+      // distinction has to survive the HTML.
       text = text
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
         .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "")
         .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, "")
         .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "")
-        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, "")
+        .replace(/<figcaption[^>]*>[\s\S]*?<\/figcaption>/gi, "")
+        .replace(/<!--[\s\S]*?-->/g, "");
+      // Tables (infoboxes, cast/credit grids) are near-never prose — each row
+      // is short and isolated exactly like a real heading, so left in they
+      // outnumber the article's actual sections in the outline. Stripped
+      // innermost-first since infoboxes commonly nest one table inside
+      // another and a single non-greedy pass only clears the inner one.
+      let prevText;
+      do { prevText = text; text = text.replace(/<table(?:(?!<table)[\s\S])*?<\/table>/gi, ""); } while (text !== prevText);
+      text = text
+        // A list's ITEMS get one plain newline between them, not a blank-line
+        // paragraph break — only the list as a whole is set off from
+        // surrounding prose. Each <li> blank-line-separated from its
+        // neighbors is indistinguishable from a heading by form (short,
+        // isolated) to a detector that never sees the <ul> around them, so a
+        // five-item cast list was reading as five headings.
+        .replace(/<\/(ul|ol)>/gi, "\n\n")
+        .replace(/<(ul|ol)[^>]*>/gi, "\n\n")
+        .replace(/<\/li>/gi, " ")
+        .replace(/<li[^>]*>/gi, " ")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/(p|div|tr|h[1-6]|blockquote)>/gi, "\n\n")
+        .replace(/<(p|div|h[1-6])[^>]*>/gi, "\n\n")
         .replace(/<[^>]+>/g, " ")
         .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
         .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
         .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-        .replace(/\s+/g, " ").trim();
+        .split("\n")
+        .map((line) => line.replace(/[ \t]+/g, " ").trim())
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
     }
 
     const hostname = new URL(url).hostname.replace(/^www\./, '');
