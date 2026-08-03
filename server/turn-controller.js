@@ -15,7 +15,8 @@
 //
 // Depends on nothing in proxy.js, so proxy.js can import this without a cycle.
 
-import { validateCitations, verifyQuotedFidelity } from "./citation-check.js";
+import { verifyQuotedFidelity, mechanicalCite } from "./citation-check.js";
+import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { describeStopReason, streamAnthropicChat, describeApiError } from "./anthropic-provider.js";
 import { normalizeOllamaUsage, summarizeUsage } from "./token-tally.js";
 import { createInstructionGate } from "./instruction-gate.js";
@@ -24,57 +25,10 @@ import { workspaceMemory } from "./workspace-memory.js";
 import { checkCompliance } from "./instruction-compliance.js";
 import { HolonicTask } from "./holonic-task.js";
 
-const HISTORY_TURNS = 6;
-
-function detectMultiSectionNeed(question) {
-  const q = question.toLowerCase();
-  const multiKeywords = [
-    'write', 'essay', 'report', 'analysis', 'explain', 'describe',
-    'compare', 'contrast', 'discuss', 'outline', 'summarize',
-    'what are the', 'list the', 'steps to', 'how to',
-  ];
-  const multiIndicators = [
-    'multiple', 'several', 'various', 'different',
-    'first', 'second', 'third',
-    'and', 'or', 'as well as',
-  ];
-  const hasMultiKeyword = multiKeywords.some(kw => q.includes(kw));
-  const hasMultiIndicator = multiIndicators.some(ind => q.includes(ind));
-  const isLongQuestion = question.length > 100;
-  const asksForStructure = /(\d+\.|\bbullet|\bstep|\bpart|\bsection|\bchapter)/i.test(q);
-  return (hasMultiKeyword && hasMultiIndicator) || isLongQuestion || asksForStructure;
-}
+export const HISTORY_TURNS = 6;
 
 function newAnswerEventKey(conversationId, turnId) {
   return `${conversationId}:${turnId}`;
-}
-
-// Every [n] the answer actually cites, matched against the engine's real
-// citation table. A bracket with no matching entry is a gap, never a guess.
-function resolveCitationBrackets(text, citations) {
-  const table = new Map((citations || []).map((c) => [String(c.index), c]));
-  const seen = new Set();
-  const resolved = [];
-  const unresolvedNums = [];
-  const re = /\[(\d+)\]/g;
-  let m;
-  while ((m = re.exec(text || "")) !== null) {
-    const num = m[1];
-    if (seen.has(num)) continue;
-    seen.add(num);
-    const c = table.get(num);
-    if (c) {
-      resolved.push({
-        num, resolved: true,
-        sourceId: c.source_id, spanId: c.span_id,
-        byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
-      });
-    } else {
-      unresolvedNums.push(num);
-      resolved.push({ num, resolved: false });
-    }
-  }
-  return { citations: resolved, unresolvedNums };
 }
 
 /**
@@ -117,22 +71,24 @@ export function createTurnController(deps) {
           `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
           `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
           `there are no source passages, and a bracket would look like a citation that does not exist.`;
-      return { message: { role: "system", content }, maxCitation: 0, warming };
+      return { message: { role: "system", content }, warming };
     }
 
-    const citationRange = groundResult.citations.length > 0
-      ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
-        `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
-      : "";
+    // No bracket/numbering instruction here, deliberately: citation is a
+    // mechanical measurement made AFTER generation (mechanicalCite, below),
+    // by literal overlap against this same material — never something the
+    // model is asked to remember or perform. A model too weak to reliably
+    // emit [N] syntax was never a citation failure; asking it to was the
+    // defect (specs/mechanical-citation-surface.md).
     const content =
-      `Answer the reader's question using the material below, citing the passages you draw on ` +
-      `with bracketed numbers like [1], [2], etc. ` + citationRange +
-      `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
-      `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
-      `"the provided text", "your sources", or similar; just answer directly.\n\n` +
+      `Answer the reader's question using the material below, naturally, the way you would in ` +
+      `ordinary conversation. Do NOT invent facts beyond what the material contains. If it does not ` +
+      `contain the answer, say so plainly — but do not describe your process, and do not refer to ` +
+      `"the source material", "the provided text", "your sources", citation numbers, or similar; ` +
+      `just answer directly.\n\n` +
       `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
       `${groundResult.context}`;
-    return { message: { role: "system", content }, maxCitation: groundResult.citations.length, warming: false };
+    return { message: { role: "system", content }, warming: false };
   }
 
   // Recent completed turns from THIS conversation, as real message history —
@@ -302,7 +258,7 @@ export function createTurnController(deps) {
         budget: 3000, maxUnits: 5, limit: 16,
         source: sourceScope, pool: pool || "corpus",
       });
-      const { message: systemMsg, maxCitation, warming } = buildGroundedSystemMessage(groundResult);
+      const { message: systemMsg, warming } = buildGroundedSystemMessage(groundResult);
 
       sendEvent("witnesses_selected", {
         turnId: turn.id, answerId,
@@ -415,21 +371,18 @@ export function createTurnController(deps) {
         },
       });
 
-      // Resolve brackets against the RAW text first — validateCitations below
-      // rewrites an unresolved [9] into "[⊘ no source 9]", which no longer
-      // looks like a citation at all and would make the very gap it exists to
-      // report invisible to bracket resolution.
-      const { citations: brackets, unresolvedNums } = resolveCitationBrackets(rawText, lastCitations);
-      const finalText = maxCitation > 0 ? validateCitations(rawText, maxCitation) : rawText;
+      // The model was never told a bracket or a number — citation is a
+      // measurement of the finished text, not a parse of what it claims.
+      // finalText is the model's own words, unmodified: there is no bracket
+      // syntax left for validateCitations to police.
+      const finalText = rawText;
+      const { citations: brackets } = mechanicalCite(finalText, lastCitations);
       const fidelity = verifyQuotedFidelity(finalText, lastCitations);
 
       for (const c of brackets) {
         sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
       }
       const gaps = [];
-      if (unresolvedNums.length) {
-        gaps.push({ type: "unresolved_citation", nums: unresolvedNums, reason: `[${unresolvedNums.join("], [")}] — no engine passage matches this bracket.` });
-      }
       for (const u of fidelity.unverified) {
         gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited passage." });
       }
@@ -450,8 +403,23 @@ export function createTurnController(deps) {
             ? "The document index was still loading when this was asked."
             : "No passage in your sources matches this question — answered from general knowledge, uncited.",
         });
+      } else if (brackets.length === 0) {
+        // Passages WERE retrieved and offered, but the finished answer has no
+        // measurable overlap with any of them — a mechanical fact (trigram
+        // Jaccard against every offered passage came back zero everywhere),
+        // not a guess about the model's intent.
+        gaps.push({
+          type: "grounded_but_uncited",
+          reason: `The engine retrieved ${groundResult.total} passage(s) and offered the model ${groundResult.citations.length}, but the answer has no measurable overlap with any of them — nothing here is traceable to a source.`,
+        });
       }
       for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
+
+      // The book's own words for every citation the answer actually landed —
+      // reuses the same table mechanicalCite was just checked against, so
+      // this can never show text that diverges from what was verified.
+      const snippets = buildVerbatimSnippets(brackets, lastCitations);
+      for (const s of snippets) sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
 
       // DEF·EVA·REC compliance check: did the response follow the surfaced instructions?
       let complianceResult = null;
@@ -486,13 +454,13 @@ export function createTurnController(deps) {
       });
 
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-        text: finalText, model, provider, citations: brackets, gaps,
+        text: finalText, model, provider, citations: brackets, gaps, snippets,
         fidelity, status: "completed", completedAt: new Date().toISOString(),
       });
       await persistUsage({ conv, turn, answerId, controller, model, sendEvent });
       sendEvent("completed", {
         turnId: turn.id, answerId, status: "completed", text: finalText,
-        citations: brackets, gaps, model, provider,
+        citations: brackets, gaps, snippets, model, provider,
         summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
       });
     } catch (err) {
@@ -620,7 +588,7 @@ export function createTurnController(deps) {
     }
   }
 
-  async function startTurn({ conversationId, question, sourceScope, pool, attachments, forceModel = null }, sendEvent) {
+  async function startTurn({ conversationId, question, sourceScope, pool, attachments, forceModel = null, mode = null }, sendEvent) {
     const conv = await conversationStore.require(conversationId);
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
     const { turn } = await conversationStore.appendTurn(conversationId, {
@@ -632,8 +600,17 @@ export function createTurnController(deps) {
       sourceScope: effectiveScope, pool: pool || conv.pool || "corpus",
     });
 
-    const useMultiSection = detectMultiSectionNeed(question);
-    
+    // Multi-section (holonic) generation is received, never derived — the
+    // reader chooses it explicitly (the composer's long-form toggle), the
+    // same "derive vs receive" seam eo-constitution draws everywhere else.
+    // A keyword/regex guess at intent from the question's wording used to
+    // stand in here and misfired on ordinary questions — "Analyze the
+    // creature's narrative section" routed into a 5-10 minute decomposition
+    // because it contains the word "section"; "item 0." routed into one
+    // because a bare digit-dot matched a "numbered list" pattern. Both are
+    // real, ordinary sentences, not requests for a generated document.
+    const useMultiSection = mode === "compose";
+
     let run;
     if (useMultiSection) {
       run = runMultiSectionAnswer({

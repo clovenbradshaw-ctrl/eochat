@@ -3758,7 +3758,7 @@ const server = http.createServer((req, res) => {
             const { done } = await turnController.startTurn({
               conversationId, question: data.question,
               sourceScope: data.sourceScope, pool: data.pool, attachments: data.attachments || [],
-              forceModel: data.model || null,
+              forceModel: data.model || null, mode: data.mode || null,
             }, sendEvent);
             await done;
           } catch (err) {

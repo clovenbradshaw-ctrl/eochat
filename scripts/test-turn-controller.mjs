@@ -129,21 +129,28 @@ async function testAllSourcesDisabled(dir) {
   console.log("  ok: all-sources-disabled scope reaches engine as [], never widens to everything");
 }
 
-async function testUnresolvedCitationGap(dir) {
+// Citation is now a measurement (mechanicalCite: trigram overlap against the
+// real citation table), never a parse of a bracket the model wrote — so a
+// model can no longer "fabricate" a citation number, because it is never
+// given numbers to fabricate. The equivalent failure mode is an answer with
+// no measurable overlap with any offered passage: that must be a visible
+// gap, not a confident-looking answer with silently zero grounding.
+async function testGroundedButUncitedGap(dir) {
   const { controller, conversationStore } = await withController(
     dir,
-    makeFetchMock([{ message: { content: "This cites [1] and a fake [9]." } }, { done: true }]),
+    makeFetchMock([{ message: { content: "Completely unrelated prose about something else entirely." } }, { done: true }]),
     GROUNDED_RESULT,
   );
-  const conv = await conversationStore.create({ title: "Bad citation" });
+  const conv = await conversationStore.create({ title: "Ungrounded answer" });
   const { events, sendEvent } = collectEvents();
   await (await controller.startTurn({ conversationId: conv.id, question: "Q" }, sendEvent)).done;
 
   const completed = events.find(e => e.type === "completed");
-  assert.match(completed.data.text, /no source 9/, "a bracket beyond the real citation table must be visibly marked, not left looking real");
-  const gap = events.find(e => e.type === "gap" && e.data.type === "unresolved_citation");
-  assert.ok(gap);
-  console.log("  ok: fabricated citation number produces a visible gap, not a fake-looking [9]");
+  assert.equal(completed.data.text, "Completely unrelated prose about something else entirely.", "the model's own words are never rewritten — there is no bracket syntax to police");
+  assert.equal(events.filter(e => e.type === "citation_verified").length, 0, "no measurable overlap means no citation, mechanically");
+  const gap = events.find(e => e.type === "gap" && e.data.type === "grounded_but_uncited");
+  assert.ok(gap, "material was offered but the answer never drew from it — that must be a visible gap");
+  console.log("  ok: an answer with no measurable overlap with offered material produces a visible gap, not a silent one");
 }
 
 async function testStopInterrupts(dir) {
@@ -312,14 +319,13 @@ async function testLongThreadFoldsAndBoundsContext(dir) {
 
   console.log(`  ok: ${TURN_COUNT}-turn thread stays bounded (${justPastFold} msgs once folding starts, still ${wayPastFold} at turn ${TURN_COUNT}), older turns folded not dropped, persona present throughout`);
 }
-}
 
 async function main() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "eochat-turn-test-"));
   try {
     await testNormalTurn(dir);
     await testAllSourcesDisabled(dir);
-    await testUnresolvedCitationGap(dir);
+    await testGroundedButUncitedGap(dir);
     await testStopInterrupts(dir);
     await testRegenerateCreatesVariant(dir);
     await testVerbatimSnippets(dir);

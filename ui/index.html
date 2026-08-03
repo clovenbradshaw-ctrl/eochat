@@ -312,25 +312,6 @@
             <span style="font-size:13px; color:#A39D91;">No messages yet — attach sources and ask a question.</span>
           </sc-if>
 
-          <sc-if value="{{ showThinkingIndicator }}">
-            <button type="button" onClick="{{ openThinkingModal }}" style="display:flex; flex-direction:column; gap:6px; border:0; background:none; cursor:pointer; text-align:left; padding:0; font-family:inherit; width:100%;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">⊨</span>
-                <span style="font-size:13px; color:#8C877C;">{{ thinkingPhase }}</span>
-              </div>
-              <sc-if value="{{ thinkingMeta }}">
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; padding-left:20px;">{{ thinkingMeta }}</span>
-              </sc-if>
-              <sc-if value="{{ thinkingLogPreview }}">
-                <div style="display:flex; flex-direction:column; gap:3px; padding-left:20px;">
-                  <sc-for list="{{ thinkingLogPreviewRows }}" as="entry">
-                    <span class="eo-fade-in" style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ entry.color }}; line-height:1.5; white-space:pre-wrap; word-break:break-word;">{{ entry.glyph }} {{ entry.text }}</span>
-                  </sc-for>
-                </div>
-              </sc-if>
-            </button>
-          </sc-if>
-
           <sc-for list="{{ turns }}" as="turn">
             <div style="display:flex; flex-direction:column; gap:8px;">
               <div style="align-self:flex-end; max-width:74%; display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
@@ -345,6 +326,24 @@
                   <span style="font-size:13.5px; line-height:1.5; color:#26241F;">{{ turn.q }}</span>
                 </div>
               </div>
+              <sc-if value="{{ turn.showThinking }}">
+                <button type="button" onClick="{{ turn.openThinkingModal }}" style="display:flex; flex-direction:column; gap:6px; border:0; background:none; cursor:pointer; text-align:left; padding:0; font-family:inherit; width:100%;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">⊨</span>
+                    <span style="font-size:13px; color:#8C877C;">{{ turn.thinkingPhase }}</span>
+                  </div>
+                  <sc-if value="{{ turn.thinkingMeta }}">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; padding-left:20px;">{{ turn.thinkingMeta }}</span>
+                  </sc-if>
+                  <sc-if value="{{ turn.thinkingLogPreview }}">
+                    <div style="display:flex; flex-direction:column; gap:3px; padding-left:20px;">
+                      <sc-for list="{{ turn.thinkingLogPreviewRows }}" as="entry">
+                        <span class="eo-fade-in" style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ entry.color }}; line-height:1.5; white-space:pre-wrap; word-break:break-word;">{{ entry.glyph }} {{ entry.text }}</span>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </button>
+              </sc-if>
               <sc-if value="{{ turn.retrieval }}">
                 <div style="display:flex; align-items:center; gap:8px;">
                   <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#1F5A4C;">↦</span>
@@ -1570,10 +1569,6 @@ class Component extends DCLogic {
 
   inferType(name) {
     const n = name.toLowerCase();
-    // Priors are addressed by id, not filename — `prior:coref/pg84-frankenstein`
-    // has no extension and would fall through to 'binary', which renders a
-    // placeholder instead of the content. Both prior layers are text.
-    if (n.startsWith('prior:')) return 'pdf';
     if (n.match(/\.(mp4|mov|webm)$/)) return 'video';
     if (n.match(/\.(wav|mp3|m4a|ogg)$/)) return 'audio';
     if (n.match(/\.(csv|tsv|xlsx|xls)$/)) return 'spreadsheet';
@@ -2014,17 +2009,28 @@ class Component extends DCLogic {
       ...sp, turns: sp.turns.map(t => (t.id === liveId ? { ...t, id: newId } : t)),
     }));
 
-    this.setState({ streamingLoading: true, thinkingPhase: 'Reading your sources…', thinkingMeta: null, thinkingLog: [] });
+    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: 'Reading your sources…', thinkingMeta: null, thinkingLog: [] });
     this.logAdd('⊨', `Asked: "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}"`, 'chat');
 
     let grounding = null;
     let citations = [];
     let currentTurnId = null;
+    // Mirrors the citations/grounding pattern above: React state is only
+    // reachable through updateActiveSpace's own callback, so a multi-section
+    // turn's running sections/progress need a local tracker too — a bare
+    // `turn` reference here threw ReferenceError on every single completed
+    // turn (multi-section or not, since the 'completed' handler always read
+    // turn.sections/turn.multiSection), and the catch block below silently
+    // replaced the real, already-streamed answer with a fake "Proxy
+    // unavailable" message.
+    let sections = [];
+    let multiSectionProgress = [];
+    let multiSection = false;
 
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, sourceScope: this.groundSourceFilter(), webSearch: this.state.webSearch }),
+        body: JSON.stringify({ question, sourceScope: this.groundSourceFilter(), webSearch: this.state.webSearch, mode: this.state.composeMode ? 'compose' : undefined }),
       });
       if (!res.ok) throw new Error('Proxy returned ' + res.status);
 
@@ -2064,17 +2070,19 @@ class Component extends DCLogic {
             patchTurn({ a: data.text });
           }
           if (type === 'multi_section_started') {
+            multiSection = true; sections = []; multiSectionProgress = [];
             this.setState({ thinkingPhase: 'Planning multi-section response…', thinkingMeta: null });
-            patchTurn({ multiSection: true, sections: [], multiSectionProgress: [] });
+            patchTurn({ multiSection, sections: sections.slice(), multiSectionProgress: multiSectionProgress.slice() });
           }
           if (type === 'multi_section_progress') {
             const progress = data.msg || data.phase;
+            multiSectionProgress = [...multiSectionProgress, progress];
             this.setState({ thinkingPhase: progress, thinkingMeta: null });
-            patchTurn({ multiSectionProgress: [...(turn.multiSectionProgress || []), progress] });
+            patchTurn({ multiSectionProgress: multiSectionProgress.slice() });
           }
           if (type === 'multi_section_completed') {
-            const sections = [...(turn.sections || []), data.section];
-            patchTurn({ sections });
+            sections = [...sections, data.section];
+            patchTurn({ sections: sections.slice() });
           }
           if (type === 'citation_verified') {
             citations = citations.filter(c => c.num !== data.num).concat([this._clientCitation(data, grounding)]);
@@ -2099,8 +2107,8 @@ class Component extends DCLogic {
             patchTurn({
               a: data.text, citations: citations.length ? citations.slice() : null,
               model: data.model, provider: data.provider, retrieval, answerStatus: data.status,
-              sections: data.sections || turn.sections,
-              multiSection: data.multiSection || turn.multiSection,
+              sections: data.sections || sections,
+              multiSection: data.multiSection || multiSection,
               trace: this._answerTrace({ grounding, gaps: data.gaps, model: data.model }),
             });
             if (retrieval) {
@@ -3145,8 +3153,24 @@ class Component extends DCLogic {
         ].filter(Boolean).join(' · ')
       : '';
 
+    // Anchored to this turn, not pinned above the whole scrollback — the chat
+    // pane auto-scrolls to bottom, so a global indicator sat above the fold
+    // the moment there was any prior history. Same id check as canRegenerate.
+    const showThinking = this.state.streamingLoading && !!this.state.thinkingPhase && this.state.streamingTurnId === turn.id;
+    const thinkingLog = this.state.thinkingLog || [];
+
     return {
       ...turn,
+      showThinking,
+      thinkingPhase: this.state.thinkingPhase,
+      thinkingMeta: this.state.thinkingMeta,
+      thinkingLogPreview: showThinking && thinkingLog.length > 0,
+      thinkingLogPreviewRows: thinkingLog.slice(-4).map(e => ({
+        glyph: e.glyph,
+        text: e.text,
+        color: e.glyph === '⊘' ? '#A3592B' : (e.glyph === '→' ? '#1F5A4C' : (e.glyph === '←' ? '#8C877C' : '#6E6A60'))
+      })),
+      openThinkingModal: () => this.openThinkingModal(),
       aHtml: turn.a ? (typeof marked !== 'undefined' ? marked.parse(turn.a) : turn.a) : '',
       attachments: (turn.attachments || []).map(a => ({ ...a, displayName: a.title || a.name })),
       copy: () => navigator.clipboard.writeText(`Q: ${turn.q}${turn.a ? `\n\nA: ${turn.a}` : ''}${resolved.length ? '\n\n' + resolved.map(c => `[${c.num}] ${c.source}${c.byteStart !== undefined ? ` bytes ${c.byteStart}–${c.byteEnd}` : ''}\n"${c.quote}"`).join('\n\n') : ''}`),
@@ -3631,11 +3655,10 @@ class Component extends DCLogic {
       composerHintColor: enabledSourceCount === 0 && roomSources.length ? '#A3592B' : '#A39D91',
       turns: active.turns.map((turn, i) => this.turnVals(turn, i)),
       streamingAnswer: S.streamingAnswer, streamingAnswerHtml: S.streamingAnswer ? (typeof marked !== 'undefined' ? marked.parse(S.streamingAnswer) : S.streamingAnswer) : '', streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
+      // Used by the "Engine activity" modal only — the inline indicator lives
+      // on the turn itself now (see turnVals: showThinking/thinkingPhase/etc.),
+      // anchored to whichever turn is actually streaming.
       thinkingPhase: S.thinkingPhase,
-      // Once the answer's own prose starts arriving, thinkingPhase is cleared —
-      // the top-of-chat indicator has nothing left to say, so it disappears
-      // rather than falling back to stale placeholder text.
-      showThinkingIndicator: S.streamingLoading && !!S.thinkingPhase,
       stopGeneration: () => this.stopGeneration(),
       thinkingMeta: S.thinkingMeta,
       thinkingModalOpen: S.thinkingModalOpen,
@@ -3647,16 +3670,6 @@ class Component extends DCLogic {
         color: e.glyph === '⊘' ? '#E06B4A' : (e.glyph === '→' ? '#8FE3C0' : (e.glyph === '←' ? '#A39D91' : '#D3E0DA'))
       })),
       thinkingLogCount: S.thinkingLog ? `${S.thinkingLog.length} step(s)` : '',
-      // Live preview inlined in the chat flow itself — the modal (above) holds
-      // the full history, but a reader watching a turn stream shouldn't have to
-      // click anything to see that a web_search for "X" just went out. Last 4
-      // keeps it from growing unbounded during a long tool loop.
-      thinkingLogPreview: !!(S.thinkingLog && S.thinkingLog.length),
-      thinkingLogPreviewRows: (S.thinkingLog || []).slice(-4).map(e => ({
-        glyph: e.glyph,
-        text: e.text,
-        color: e.glyph === '⊘' ? '#A3592B' : (e.glyph === '→' ? '#1F5A4C' : (e.glyph === '←' ? '#8C877C' : '#6E6A60'))
-      })),
       showEmptyChat: active.turns.length === 0 && !S.streamingLoading && !S.streamingAnswer,
       onDraft: (e) => this.setState({ draft: e.target.value }),
       onKey: (e) => { if (e.key === 'Enter') this.send(); }, send: () => this.send(),
