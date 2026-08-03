@@ -29,9 +29,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { engineIngestFile, engineSearch, DEFAULT_POOL } from "./engine-ground.js";
+import { engineIngestFile, engineDeleteSource, engineSearch, DEFAULT_POOL } from "./engine-ground.js";
 // Resolved centrally in paths.js rather than by walking out of this directory.
 import { PRIORS_ROOT } from "./paths.js";
+import { isPriorDisabled, setPriorDisabled } from "./priors-state.js";
 
 export const PRIORS_POOL = "priors";
 const PRIORS_DIR = path.join(PRIORS_ROOT, "priors");
@@ -174,6 +175,10 @@ export function priorsCatalog({ refresh = false } = {}) {
       scope: parseGap ? { kind: "none", label: "scope not declared" } : scopeOf(json),
       keys: json && typeof json === "object" ? Object.keys(json) : [],
       cardPath: path.join(CARDS_DIR, `${id}.md`),
+      // User-facing on/off, independent of `gap` — a prior can be perfectly
+      // readable and still switched off, and switching it off is never itself
+      // a gap (it's a choice, not a failure to ingest).
+      disabled: isPriorDisabled(id),
       rawIngestable: stat.size <= RAW_INGEST_MAX_BYTES,
       gap: parseGap
         || (stat.size > RAW_INGEST_MAX_BYTES
@@ -423,6 +428,13 @@ export function ensurePriorsIngested({ force = false } = {}) {
   const sources = [];
   const gaps = [];
   for (const item of priorsCatalog()) {
+    // A prior the user switched off stays cataloged (still browsable, still
+    // readable by id) but never enters the priors pool — it must neither
+    // steer retrieval nor turn up in /api/priors/search while off.
+    if (item.disabled) {
+      gaps.push(`${item.id}: disabled by user — not ingested (toggle it on in the Priors tab)`);
+      continue;
+    }
     try {
       const card = engineIngestFile(item.cardPath, {
         pool: PRIORS_POOL,
@@ -452,6 +464,58 @@ export function ensurePriorsIngested({ force = false } = {}) {
 
   ingested = { pool: PRIORS_POOL, priors: priorsCatalog().length, sources, gaps };
   return ingested;
+}
+
+// Toggle one prior's on/off state — the mechanism behind the Priors tab's
+// per-item and per-bucket switches. `enabled: false` pulls its card+raw spans
+// out of the priors pool (engineDeleteSource) so it stops being searchable
+// and stops widening any per-text coref query (priors-bridge.js checks the
+// same flag independently); `enabled: true` re-ingests it. Both directions
+// are no-ops if the state didn't actually change, so flipping a whole bucket
+// that already has mixed on/off items never double-ingests the ones already
+// in the requested state.
+//
+// This never touches the shared corpus recycle bin's UI surface even though
+// it reuses engineDeleteSource under the hood — that function's recycle bin
+// is a plain Map keyed by source path and tagged with `pool`, so a prior's
+// entry sits there tagged `pool: "priors"` and the corpus Sources rail
+// filters recycle-bin rows to its own pool.
+export function setPriorEnabled(id, enabled) {
+  const item = findPrior(id);
+  if (!item) return { error: `unknown prior "${id}"` };
+
+  const changed = setPriorDisabled(item.id, !enabled);
+  if (!changed) return { id: item.id, disabled: !enabled, changed: false };
+  // The catalog cache carries `disabled` per item (read off priors-state.js
+  // at catalog-build time); force a rebuild so the next /api/priors response
+  // reflects this toggle instead of the state from whenever the cache warmed.
+  catalogCache = null;
+
+  const gaps = [];
+  if (enabled) {
+    try {
+      engineIngestFile(item.cardPath, { pool: PRIORS_POOL, kind: "prior-card", displayName: `${item.id} (card)` });
+    } catch (err) {
+      gaps.push(`card ingest failed for ${item.id}: ${err.message}`);
+    }
+    if (item.rawIngestable) {
+      try {
+        engineIngestFile(item.path, { pool: PRIORS_POOL, kind: "prior-raw", displayName: `${item.id}.json` });
+      } catch (err) {
+        gaps.push(`raw ingest failed for ${item.id}: ${err.message}`);
+      }
+    } else if (item.gap) {
+      gaps.push(item.gap);
+    }
+  } else {
+    const cardRes = engineDeleteSource(item.cardPath, { pool: PRIORS_POOL });
+    if (cardRes.error) gaps.push(`card: ${cardRes.error}`);
+    if (item.rawIngestable) {
+      const rawRes = engineDeleteSource(item.path, { pool: PRIORS_POOL });
+      if (rawRes.error) gaps.push(`raw: ${rawRes.error}`);
+    }
+  }
+  return { id: item.id, disabled: !enabled, changed: true, gaps };
 }
 
 // ── Read & search ──

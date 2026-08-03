@@ -21,6 +21,12 @@ import { admitReferent } from "@eoreader/engine/perceiver/text/presence";
 // own directory, which assumed one particular checkout layout and broke the
 // moment the file moved.
 import { COREF_DIR } from "./paths.js";
+// A user-switched-off prior must stop steering retrieval here too, not just
+// stop showing up in the priors pool — this is the OTHER place a coref prior
+// acts (widenQueryWithPriors in engine-ground.js runs every corpus search
+// through this module). See priors-state.js for why this isn't imported from
+// priors-source.js instead.
+import { isPriorDisabled } from "./priors-state.js";
 
 const priorCache = new Map(); // sourceId -> { referents, fullText, gap }
 const fullTextCache = new Map(); // absolute file path -> normalized text
@@ -75,10 +81,16 @@ function loadFullText(sourceId) {
 // so the UI can link an activation straight to the readable card.
 export function loadCorefPrior(sourceId) {
   const cached = priorCache.get(sourceId);
-  if (cached && !cached.gap) return cached;
-  if (cached && cached.gap) {
-    // Negative result (gap) is never cached permanently — a prior file might be
-    // added while the proxy is running. Re-check the filesystem.
+  // A cache hit is only trustworthy if the prior isn't ALSO disabled since it
+  // was cached — the user can flip that switch at any time, and a stale
+  // "still active" result would keep steering a query the Priors tab claims
+  // stopped steering anything. So the disabled check runs before the cache
+  // short-circuit, not after.
+  if (cached && !cached.gap && !isPriorDisabled(cached.priorId)) return cached;
+  if (cached && (cached.gap || isPriorDisabled(cached.priorId))) {
+    // Negative result (gap), or now-disabled, is never cached permanently — a
+    // prior file might be added, or re-enabled, while the proxy is running.
+    // Re-check the filesystem / toggle state.
     priorCache.delete(sourceId);
   }
 
@@ -89,6 +101,10 @@ export function loadCorefPrior(sourceId) {
 
   const priorPath = path.join(COREF_DIR, filename);
   const priorId = `coref/${filename.replace(/\.json$/, "")}`;
+
+  if (isPriorDisabled(priorId)) {
+    return { referents: [], fullText: "", priorId, priorPath, gap: `prior "${priorId}" disabled by user` };
+  }
 
   let data;
   try {

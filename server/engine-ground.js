@@ -454,6 +454,51 @@ export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit =
   };
 }
 
+// The instruction text wrapping a groundResult into a talker-ready system
+// message — pulled out of proxy.js's turn handler so a second caller (the
+// no-generation /api/ground route, used by any client that runs its own
+// model — e.g. a browser-local WebLLM engine — over the same evidence) gets
+// the identical wording instead of a hand-copied drift of it. Pure: no I/O,
+// no ambient time: everything it needs is already in groundResult/warming.
+export function buildUngroundedSystemPrompt({ warming } = {}) {
+  return warming
+    ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+      `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
+      `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
+    : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
+      `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
+      `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
+      `there are no source passages, and a bracket would look like a citation that does not exist.`;
+}
+
+// `toolsAvailable` defaults to true (the server's own tool-calling talker
+// loop). A caller with no tool loop of its own — e.g. a browser-local model
+// that only ever sees this one turn of context — passes it false so the
+// prompt does not tell the model to reach for tools it will never receive.
+export function buildGroundedSystemPrompt(groundResult, { toolsAvailable = true } = {}) {
+  const citationRange = groundResult.citations.length > 0
+    ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
+      `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
+    : "";
+
+  const toolsParagraph = toolsAvailable
+    ? `IMPORTANT: You have access to tools. If the material above is ` +
+      `insufficient, use verbatim_search to find more exact passages from ` +
+      `ingested documents, or search_memory for relevant context. Do NOT say ` +
+      `"no information" without first trying these tools.\n\n`
+    : "";
+
+  return `Answer the reader's question using the material below, citing the passages you draw on ` +
+    `with bracketed numbers like [1], [2], etc. ` +
+    citationRange +
+    `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
+    `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
+    `"the provided text", "your sources", or similar; just answer directly.\n\n` +
+    toolsParagraph +
+    `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
+    `${groundResult.context}`;
+}
+
 // Read a specific span's verbatim text by span_id.
 // Returns { text, source_id, byte_start, byte_end, truncated } or an error.
 // The engine's readSpan guarantees the text matches the source file at the
@@ -1291,9 +1336,54 @@ export function engineRecycleBinStats() {
 // Everything the projection cannot fill is a typed gap in `gaps`, never a
 // plausible default. That is the whole difference between this and the regex.
 
-export const FOLD_PROJECTION_VERSION = "fold-projection@1";
+export const FOLD_PROJECTION_VERSION = "fold-projection@2";
 
 const GATED_TYPES = new Set(INDIVIDUATION_TYPES);
+
+// A display name that is layout, not a being. Section numbers ("II", "III"),
+// page figures ("1987"), and standalone structural headings ("Section",
+// "Appendix") recur in running headers and tables of contents, and the
+// perceiver's capitalisation detector dutifully casts them as referents.
+// They are not entities in any sense a reader can act on, so the fold never
+// surfaces them — not in the cast, not in the withheld audit, not as
+// highlightable surfaces. Roman numerals are validated (not a character-set
+// test) so real words spelled only from Roman letters — "Civil", "Mild",
+// "Vivid" — survive.
+const STRUCTURAL_HEADINGS = new Set([
+  "section", "sections", "chapter", "chapters", "part", "parts", "act", "acts",
+  "scene", "scenes", "stave", "movement", "movements", "canto", "cantos",
+  "book", "books", "volume", "volumes", "preface", "introduction",
+  "prologue", "epilogue", "epigraph", "contents", "appendix", "appendices",
+  "bibliography", "index", "glossary", "notes", "footnotes", "endnotes",
+  "references", "acknowledgements", "acknowledgments", "dedication", "cover",
+  "abstract", "summary", "conclusion", "afterword", "foreword", "title",
+]);
+
+const ROMAN_NUMERAL = /^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/i;
+const BARE_NUMBER = /^\d[\d.,]*$/;
+const WORD_NUMBER = /^(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)$/i;
+
+// "SECTION II", "Chapter 3", "Part One" — a structural heading carrying a
+// position marker is one token, not a name. The marker must be a numeral or
+// spelled-out number, never an arbitrary word ("Section Chief" is a title).
+const isHeadingPosition = (s) => {
+  const at = s.indexOf(" ");
+  if (at <= 0) return false;
+  const heading = s.slice(0, at).toLowerCase();
+  const rest = s.slice(at + 1);
+  if (!STRUCTURAL_HEADINGS.has(heading)) return false;
+  return ROMAN_NUMERAL.test(rest) || BARE_NUMBER.test(rest) || WORD_NUMBER.test(rest);
+};
+
+export function isStructuralName(name) {
+  if (!name || typeof name !== "string") return false;
+  // Trailing punctuation ("II.") is the surface's, not the name's.
+  const s = name.trim().replace(/[.,;:]\s*$/, "");
+  if (!s) return false;
+  if (ROMAN_NUMERAL.test(s) || BARE_NUMBER.test(s) || isHeadingPosition(s) || WORD_NUMBER.test(s)) return true;
+  // A bare structural heading is layout; a heading inside a title is not.
+  return STRUCTURAL_HEADINGS.has(s.toLowerCase());
+}
 
 // `tier` says who would have to supply the missing thing: "engine" — an organ
 // exists but is unwired; "model" — witness knowledge, only a prior can supply
@@ -1436,6 +1526,109 @@ function anchorsFor(pieces, docId, surfaces, want) {
   return anchors;
 }
 
+// WHERE a referent occurs, not just how often.
+//
+// `countAcrossChunks` in @eoreader/host already walks every piece per referent
+// and returns mentions/frames/firstFrame/lastFrame — the counts — then discards
+// WHICH pieces carried a hit. That set is the only observable in this fold from
+// which two beings can be said to be structurally tied at all: co-presence in
+// the same frame is measured, whereas "Victor is linked to Elizabeth" from
+// mentions alone would be a fabrication. The Explorer's Link and Network
+// terrains stand on this and nothing else, so it is computed here rather than
+// inferred downstream.
+//
+// It is recomputed rather than read back from the host because the host's
+// return shape is fixed by @eoreader/host's API version and this is the app's
+// projection, not the engine's reading.
+//
+// It deliberately does NOT use `surfaceMatcher` (priors-bridge), which anchorsFor
+// uses. That one is `\b`-bounded, and JS `\b` counts `_` as a word character, so
+// it misses every occurrence inside Project Gutenberg's italics markup —
+// `_Sorrows of Werter_`, `_Plutarch's Lives_`. The frame counts the panel already
+// shows come from the host's `occurrenceMatcher` (host/corpus.js), which uses
+// Unicode letter/number lookaround and admits a trailing possessive. Presence
+// must be counted by the same authority as the count it sits beside, or the
+// panel shows "39 frames" next to a presence list of 38 and neither number can
+// be trusted. `presenceMatcher` mirrors that matcher exactly.
+//
+// The consequence is stated rather than hidden: a frame can be present with no
+// anchor in it, because anchors are located by the narrower matcher. That is a
+// gap in the anchor list, not in the presence set.
+//
+// NO CROSS-REFERENT ARBITRATION HAPPENS HERE. Each referent is scanned against
+// its own unscoped surfaces independently. If two referents share a surface,
+// both are recorded present — deciding which one a shared surface "really"
+// means is coreference, the engine explicitly refuses to do it without a prior
+// (host/corpus.js sessionReferents), and doing it here under a different name
+// would be exactly the fabrication the fold projection exists to prevent.
+const FRAME_SCAN_BUDGET = 4_000_000; // referent × piece regex tests
+
+// Mirror of @eoreader/host corpus.js `occurrenceMatcher`. Kept byte-identical in
+// behaviour on purpose: if it drifts, `frames_present.length` stops agreeing with
+// the `frames` the host counted and the divergence check below starts firing on
+// every referent instead of on a real disagreement.
+const presenceMatcher = (surfaces) => {
+  const alts = [...new Set(surfaces.filter(Boolean).map(String))]
+    .sort((a, b) => b.length - a.length)
+    .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!alts.length) return null;
+  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${alts.join("|")})(?:['’]s?)?(?![\\p{L}\\p{N}])`, "giu");
+};
+
+function framePresenceFor(pieces, referentSurfaces) {
+  // referentSurfaces: [{ id, surfaces }] — returns Map(id → number[] frames)
+  const ops = referentSurfaces.length * pieces.length;
+  if (!pieces.length || !referentSurfaces.length) return { presence: new Map(), skipped: null };
+  if (ops > FRAME_SCAN_BUDGET) {
+    return {
+      presence: new Map(),
+      skipped: `frame presence not computed: ${referentSurfaces.length} referent(s) × ${pieces.length} frame(s) = ${ops} scans exceeds the ${FRAME_SCAN_BUDGET} budget`,
+    };
+  }
+  const presence = new Map();
+  for (const { id, surfaces } of referentSurfaces) {
+    const re = presenceMatcher(surfaces);
+    if (!re) { presence.set(id, []); continue; }
+    const frames = [];
+    for (let i = 0; i < pieces.length; i++) {
+      const text = pieces[i].text;
+      if (!text) continue;
+      re.lastIndex = 0;
+      if (re.test(text)) frames.push(i);
+    }
+    presence.set(id, frames);
+  }
+  return { presence, skipped: null };
+}
+
+// Which of the document's divisions a referent actually occurs in.
+//
+// The anchors list is capped (3 per referent by default), so placing a being in
+// the text by its anchors would be a three-sample estimate presented as a
+// location. Frame presence is exhaustive, so section membership derived from it
+// is the whole truth about where a name occurs — at frame resolution, which is
+// the resolution the fold has.
+//
+// A frame is assigned to every section its byte range overlaps, not to one:
+// frames are a fixed-size chunking and sections are a novelty-curve reading of
+// the same bytes, so a frame straddling a section boundary genuinely lies in
+// both and picking one would silently drop the other.
+function sectionsPresentFor(frames, pieces, sections) {
+  if (!sections.length || !frames.length) return [];
+  const hit = new Set();
+  for (const f of frames) {
+    const piece = pieces[f];
+    if (!piece) continue;
+    const start = piece.byteStart;
+    const end = piece.byteStart + (piece.length ?? Buffer.byteLength(piece.text || "", "utf8"));
+    for (const sec of sections) {
+      const secEnd = sec.byte_start + sec.length;
+      if (start < secEnd && end > sec.byte_start) hit.add(sec.index);
+    }
+  }
+  return [...hit].sort((a, b) => a - b);
+}
+
 // The document's divisions, as derivations the app's reconcileDivisions can
 // vote over. Only ONE derivation exists here, and that is reported honestly:
 // sessionOutline's novelty curve (KL against a sliding prior — where the word
@@ -1568,6 +1761,9 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
   let sightings = 0;
 
   for (const r of read.referents || []) {
+    // Section numbers and structural headings are not entities; the cast
+    // (and the withheld audit, below) drop them before anything reads the fold.
+    if (isStructuralName(r.display ?? r.name ?? r.id)) continue;
     sightings += r.mentions || 0;
     const entry = ambiguousDisplay.has(r.display) ? null : priorByDisplay.get(r.display);
     const asserted = entry && typeof entry.individuation === "string" ? entry.individuation : null;
@@ -1576,7 +1772,15 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
     const surfaces = globalSurfacesFor(r, entry);
     // Anchors are gathered for all referents with evidence, not just prior-typed ones.
     // Universal coref: discovered candidates are valid referents.
-    const evidence = type ? anchorsFor(pieces, doc.id, surfaces, anchorsPerReferent) : [];
+    //
+    // This used to read `type ? anchorsFor(...) : []`, which contradicted the
+    // two lines above it: an untyped referent got no anchors, fell into the
+    // universal-coref branch below, and reached the app with an empty
+    // `provenance.anchors` — so the entity profile's Anchors list was empty
+    // for every discovered referent and there was nothing to click through to
+    // in the reader. Locating a known surface is not typing it; the gate was
+    // in the wrong place.
+    const evidence = anchorsFor(pieces, doc.id, surfaces, anchorsPerReferent);
 
     const base = {
       id: r.id,
@@ -1611,15 +1815,22 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
     // Universal coref: discovered candidates are valid referents.
     // Only withhold if there's genuinely no evidence (no surfaces, no mentions).
     if (!type && !r.fromPrior && r.mentions > 0) {
-      // Auto-classify discovered referents
+      // `emanon` — a being the text names and shows but does not individuate
+      // into a kind. It is the honest floor for engine-tier discovery, not a
+      // classification: name-variant coreference establishes THAT something
+      // recurs under a name, never WHICH kind of being it is. Typing it
+      // holon/protogon/apparatus would be a fabrication with a nice label.
       const autoType = r.individuation || 'emanon';
       referents.push({
         ...base,
         individuation_type: autoType,
-        aliasesResolved: true,
-        evidence: [],
+        // Name variants are merged; pronouns and definite descriptions are
+        // not, and cannot be without a prior. Saying `true` here claimed a
+        // resolution the engine explicitly refuses to make.
+        aliasesResolved: false,
+        evidence,
         provenance: {
-          anchors: [],
+          anchors: evidence,
           tier: "engine",
           prior_snapshot: null,
           surfaces_scanned: surfaces,
@@ -1629,6 +1840,7 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
       continue;
     }
     // Withheld: prior asserted a type but no evidence found, or truly empty.
+    if (isStructuralName(r.display ?? r.name ?? r.id)) continue;
     withheld.push({
       ...base,
       individuation_type: null,
@@ -1674,6 +1886,50 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
   const text = corpusFacade.documentText(session, doc.id);
   const divisions = divisionsFor(session, doc.id, gaps, zThreshold);
 
+  // Structural placement, attached after the cast is settled because it is a
+  // projection OF the cast, not part of deciding who is in it. `surfaces_scanned`
+  // is the same unscoped surface set anchorsFor located, so presence and anchors
+  // are two readings of one scan rather than two opinions.
+  const sections = divisions.derivations?.[0]?.sections || [];
+  const { presence, skipped: presenceSkipped } = framePresenceFor(
+    pieces,
+    referents.map((r) => ({ id: r.id, surfaces: r.provenance.surfaces_scanned || [] })),
+  );
+  if (presenceSkipped) {
+    gaps.push(typedGap("referents[].frames_present", presenceSkipped, "host"));
+  } else {
+    const unexplained = [];
+    for (const r of referents) {
+      const frames = presence.get(r.id) || [];
+      r.frames_present = frames;
+      r.sections_present = sectionsPresentFor(frames, pieces, sections);
+      // The host counted `frames` over ALL of a prior's surfaces, including the
+      // scope-restricted ones; presence is scanned over unscoped surfaces only,
+      // because an unscoped scan is the only one whose hits are trustworthy
+      // outside the scope (the Creature's narrator "I" is the standing example).
+      // So a prior-typed referent with scoped surfaces is EXPECTED to show fewer
+      // present frames than counted frames, and the shortfall is named on the
+      // referent rather than presented as an error.
+      const shortfall = r.frames != null ? r.frames - frames.length : 0;
+      r.frames_present_shortfall = shortfall;
+      if (shortfall !== 0 && !r.provenance.scoped_surfaces_excluded) {
+        unexplained.push(`"${r.name}" (${r.frames} counted, ${frames.length} present)`);
+      }
+    }
+    // Aggregated, not one gap per referent: a gap the reader has to scroll past
+    // sixty times is noise, and noise is how a real disagreement gets missed.
+    if (unexplained.length) {
+      gaps.push(typedGap(
+        "referents[].frames_present",
+        `${unexplained.length} referent(s) whose presence scan disagrees with the host's frame count for no reason scope can explain — ${unexplained.slice(0, 5).join(", ")}${unexplained.length > 5 ? `, +${unexplained.length - 5} more` : ""}. The two matchers have drifted; Link and Network read the scan.`,
+        "host",
+      ));
+    }
+    if (!sections.length) {
+      gaps.push(typedGap("referents[].sections_present", "the document has no divisions, so no being can be placed in one — Field has nothing to group by", "engine"));
+    }
+  }
+
   return {
     fold_version: FOLD_PROJECTION_VERSION,
     sourceId: doc.id,
@@ -1684,6 +1940,10 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
       medium: "Text",
       words: text ? (text.text.match(/\S+/g) || []).length : null,
       chunks: text ? text.chunks : null,
+      // The denominator for `referents[].frames_present`. Without it a presence
+      // list is a count with no scale — "in 39 frames" says nothing until you
+      // know whether the document has 40 or 4000.
+      frames_total: pieces.length,
       publisher: null,
     },
     prior: {
@@ -1709,6 +1969,16 @@ export function engineFoldSource(sourceRef, { pool: poolName = DEFAULT_POOL, lim
       scanned: "this document's admitted pieces only — never pool-wide retrieval",
       searched: "referents a prior typed; withheld candidates are not scanned",
       note: "anchor lists are capped; an empty list means no unscoped surface occurs in this document, not that the referent is absent",
+    },
+    // What `referents[].frames_present` / `sections_present` are and are not, so
+    // a client cannot read a structural claim into them that was never made.
+    presence_policy: {
+      unit: "frame index into this document's admitted pieces",
+      matcher: "word-bounded, case-insensitive, over each referent's unscoped surfaces — the same matcher anchorsFor uses",
+      exhaustive: true,
+      coreference: "none — referents sharing a surface are each recorded present; which one a shared surface means is not decided here",
+      sections: "a frame is assigned to every division its byte range overlaps, because frames are fixed-size and divisions are not",
+      derivable: "co-presence in a frame is the only tie between two referents this fold supports; anything stronger is not measured",
     },
     gaps,
   };

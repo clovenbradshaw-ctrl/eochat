@@ -150,6 +150,10 @@ export class ConversationStore {
       spaceId: conv.spaceId ?? null,
       pool: conv.pool || "corpus",
       sourceScope: conv.sourceScope ?? null,
+      parentId: conv.parentId || null,
+      path: conv.path || null,
+      mode: conv.mode || "chat",
+      childIds: conv.childIds || [],
       turnCount: (conv.turns || []).length,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
@@ -169,7 +173,7 @@ export class ConversationStore {
     return conv;
   }
 
-  async create({ title, spaceId = null, pool = "corpus", sourceScope = null } = {}) {
+  async create({ title, spaceId = null, pool = "corpus", sourceScope = null, parentId = null, path = null, mode = "chat" } = {}) {
     const now = new Date().toISOString();
     const conv = {
       id: newId(),
@@ -179,11 +183,25 @@ export class ConversationStore {
       // null = no filter (every enabled source). [] = every source switched off,
       // which must retrieve nothing — see server/engine-ground.js sourceMatcher.
       sourceScope,
+      parentId: parentId || null,
+      path: path || null,
+      mode: mode || "chat",
       turns: [],
       createdAt: now,
       updatedAt: now,
     };
     await writeAtomic(this.#file(conv.id), JSON.stringify(conv, null, 2));
+    // If this is a child conversation, register it in the parent's childIds
+    if (parentId) {
+      await this.#withLock(parentId, async () => {
+        const parent = await this.require(parentId);
+        if (!parent.childIds) parent.childIds = [];
+        if (!parent.childIds.includes(conv.id)) {
+          parent.childIds.push(conv.id);
+        }
+        return this.#save(parent);
+      });
+    }
     return conv;
   }
 
@@ -194,6 +212,8 @@ export class ConversationStore {
       if (patch.sourceScope !== undefined) conv.sourceScope = patch.sourceScope;
       if (patch.pool !== undefined) conv.pool = patch.pool;
       if (patch.spaceId !== undefined) conv.spaceId = patch.spaceId;
+      if (patch.mode !== undefined) conv.mode = patch.mode;
+      if (patch.path !== undefined) conv.path = patch.path;
       return this.#save(conv);
     });
   }
@@ -259,6 +279,7 @@ export class ConversationStore {
         text: "",
         citations: [],
         gaps: [],
+        snippets: [],
         grounding: null,
         trace: [],
         model: null,
@@ -294,6 +315,76 @@ export class ConversationStore {
       await this.#save(conv);
       return turn;
     });
+  }
+
+  // ── Hierarchical conversation navigation ──
+  //
+  // Conversations can have parent/child relationships forming a tree. A child
+  // conversation inherits its parent's pool and sourceScope by default, and
+  // carries a `mode` flag: "chat" (default), "surf" (evidence retrieval only),
+  // or "think" (holonic task decomposition).
+  //
+  // The `path` field follows the folder notation `parent_title/child_title`,
+  // e.g. "frankenstein_discussion/surf:creature_motivation" or
+  // "frankenstein_discussion/think:write_analysis".
+
+  /** Create a child conversation under a parent. */
+  async createChild(parentId, { path, mode = "surf", title = null, pool = null, sourceScope = null } = {}) {
+    const parent = await this.require(parentId);
+    return this.create({
+      title: title || `${parent.title || "conv"}/${path}`,
+      parentId,
+      path,
+      mode,
+      pool: pool || parent.pool,
+      sourceScope: sourceScope !== undefined ? sourceScope : parent.sourceScope,
+    });
+  }
+
+  /** List direct children of a conversation. */
+  async findChildren(parentId) {
+    const all = await this.list();
+    return all.filter((c) => c.parentId === parentId);
+  }
+
+  /** Find a child conversation by its path segment within a parent. */
+  async findChildByPath(parentId, pathSegment) {
+    const children = await this.findChildren(parentId);
+    return children.find((c) => c.path === pathSegment) || null;
+  }
+
+  /** Resolve a path string like "parent_id/path_segment" to a conversation summary, or null.
+   *  The path can be a conversation id directly, or a parentId/path format. */
+  async resolvePath(pathStr) {
+    if (!pathStr || typeof pathStr !== "string") return null;
+    // Try as a direct conversation ID first
+    const direct = await this.get(pathStr);
+    if (direct) return this.#summarize(direct);
+    // Try parentId/path format
+    const slashIdx = pathStr.indexOf("/");
+    if (slashIdx > 0) {
+      const parentId = pathStr.slice(0, slashIdx);
+      const pathSegment = pathStr.slice(slashIdx + 1);
+      const parent = await this.require(parentId).catch(() => null);
+      if (parent) {
+        const child = await this.findChildByPath(parentId, pathSegment);
+        if (child) return child;
+        // Child doesn't exist yet — return parent info so the caller can create it
+        return { ...this.#summarize(parent), _wouldCreate: { parentId, path: pathSegment } };
+      }
+    }
+    return null;
+  }
+
+  /** Build the full breadcrumb path from a conversation to the root. */
+  async breadcrumbs(id) {
+    const crumbs = [];
+    let current = await this.get(id);
+    while (current) {
+      crumbs.unshift(this.#summarize(current));
+      current = current.parentId ? await this.get(current.parentId) : null;
+    }
+    return crumbs;
   }
 }
 

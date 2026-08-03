@@ -112,17 +112,35 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 - LLM response includes `[1]`, `[2]` markers
 - Citations link to `/api/verbatim/read?span_id=...`
 - Citation audit in `/api/chat/tools` response shows which citations were used
+- **Verbatim snipping (the new conversational surface):** for every `[n]` the
+  answer's summary actually cites, `turn-controller.js` mechanically slices
+  the identical text from the engine's own citation record — never text the
+  model wrote — and shows it as its own card right under the prose, no click
+  required. This is the "summarize on top, exact source underneath" pairing:
+  the model paraphrases in its own words; the reader gets the book's own
+  words immediately alongside it, byte-anchored and one click from the
+  Reader panel via the same citation-open flow. Streamed as a
+  `verbatim_snippet` SSE event (`server/verbatim-snippets.js`,
+  `buildVerbatimSnippets()`), persisted on the answer as `snippets`, rendered
+  in `ui/index.html` as a set of always-visible quote cards distinct from the
+  `passages` diagnostic panel (which shows every retrieved span, cited or
+  not — snippets show only what the answer actually used).
 
 **Success criteria:**
 - Every factual claim has a citation
 - Clicking `[1]` shows the exact passage
 - Citations are mechanically verified (not model-generated)
+- A cited passage's exact text is visible in the chat itself, without opening
+  the passages panel or the Reader
 
 **How to test:**
 1. Ask "What does Gregor Samsa turn into?"
 2. Response should include `[1]`
 3. Click `[1]` → should show Kafka's text about the insect
 4. Check citation audit → `used: [1]`, `allGrounded: true`
+5. Ingest War and Peace, ask "What happens at Natasha's first ball?" — the
+   summary should cite `[1]`/`[2]`, and a quote card with the exact ball-scene
+   text should appear directly beneath the prose without any extra click
 
 ---
 
@@ -256,21 +274,36 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 **Why users need it:** The system should already understand the field, not start from zero. Priors are witness-tier knowledge about the corpus, not evidence from it.
 
 **How it manifests:**
-- `GET /api/priors` — list available priors
-- `GET /api/priors/read?id=<id>` — read a specific prior
+- `GET /api/priors` — list available priors, grouped in the UI by declared
+  scope (per-text / corpus-wide / derived-from-another-prior / undeclared),
+  not by filename or schema
+- `GET /api/priors/read?id=<id>` — read a specific prior; the Priors tab
+  reads this inline (click a prior to expand its card right there) rather
+  than requiring the full reader
 - `GET /api/priors/search?q=<query>` — search priors
+- `POST /api/priors/toggle` — switch one prior or an entire bucket off/on
 - Priors activate automatically on surf (not exposed to LLM as context)
+- A disabled prior stays cataloged and readable, but is pulled out of the
+  priors pool entirely: it stops widening any per-text coref query
+  (priors-bridge.js) and stops turning up in `/api/priors/search`
 
 **Success criteria:**
 - Priors improve retrieval quality without being cited
-- User can browse what priors are loaded
+- User can browse what priors are loaded, and read one without leaving the tab
+- User can switch a whole bucket or a single prior off, and back on
+- An off prior has zero effect on retrieval; the file on disk is untouched
+- The on/off state persists across restarts
 - Priors don't leak into corpus grounding
 
 **How to test:**
-1. Check `/api/priors` → should list coref priors
+1. Check `/api/priors` → should list coref priors, each with `disabled: false`
 2. Read a prior → should show domain knowledge (e.g., entity mappings)
 3. Ask a question → priors should steer retrieval but not appear as citations
 4. Verify priors pool is separate from corpus pool
+5. Toggle a per-text prior off (`POST /api/priors/toggle`) → `/api/priors/search`
+   for a term it used to widen should no longer surface it
+6. Restart the proxy → the same prior should still show `disabled: true`
+7. Toggle it back on → search results return
 
 ---
 
@@ -482,9 +515,10 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 - `GET /api/source/text?source=<ref>` — read source text by byte range
 
 ### Priors
-- `GET /api/priors` — list priors
-- `GET /api/priors/read?id=<id>` — read a prior
-- `GET /api/priors/search?q=<query>` — search priors
+- `GET /api/priors` — list priors (each entry carries `disabled: boolean`)
+- `GET /api/priors/read?id=<id>` — read a prior (works regardless of on/off state)
+- `GET /api/priors/search?q=<query>` — search priors (only searches enabled ones)
+- `POST /api/priors/toggle` — `{ id | ids: [...], enabled }`, switch one or a bucket off/on
 
 ### System
 - `GET /health` — health check
