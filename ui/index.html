@@ -186,6 +186,13 @@
         <sc-if value="{{ insideProject }}">
         <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
           <div style="display:flex; align-items:center; gap:4px;">
+            <button type="button" onClick="{{ editProjectInstructions }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:12px; flex:none;">§</span>
+              <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">Instructions</span>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ instructionsLabel }}</span>
+            </button>
+          </div>
+          <div style="display:flex; align-items:center; gap:4px;">
             <button type="button" onClick="{{ toggleSourcesOpen }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
               <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:12px; flex:none;">◱</span>
               <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12.5px; color:#26241F;">Documents</span>
@@ -1366,14 +1373,20 @@
 
   <sc-if value="{{ modalOpen }}">
   <div onClick="{{ closeModal }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:14vh 24px 24px; z-index:60;">
-    <div onClick="{{ stopModalClick }}" class="eo-fade-in" style="width:100%; max-width:404px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:17px 18px 15px; display:flex; flex-direction:column; gap:13px;">
+    <div onClick="{{ stopModalClick }}" class="eo-fade-in" style="width:100%; max-width:{{ modalMaxWidth }}; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:17px 18px 15px; display:flex; flex-direction:column; gap:13px;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#8C877C;">{{ modalTitle }}</span>
         <button type="button" aria-label="Cancel" onClick="{{ closeModal }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
       </div>
       <div style="display:flex; flex-direction:column; gap:6px;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ modalLabel }}</span>
-        <input type="text" ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" onKeyDown="{{ onModalKey }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:inherit; font-size:13.5px; color:#1B1A17; outline:none;" />
+        <sc-if value="{{ modalSingleLine }}">
+          <input type="text" ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" onKeyDown="{{ onModalKey }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:inherit; font-size:13.5px; color:#1B1A17; outline:none;" />
+        </sc-if>
+        <sc-if value="{{ modalMultiline }}">
+          <textarea ref="{{ setModalInput }}" placeholder="{{ modalPlaceholder }}" value="{{ modalValue }}" onChange="{{ onModalInput }}" rows="{{ 16 }}" style="border:1px solid #E0DACE; border-radius:9px; background:#FFFDFA; padding:9px 11px; font-family:'IBM Plex Mono', monospace; font-size:12.5px; line-height:1.6; color:#1B1A17; outline:none; resize:vertical; min-height:220px;"></textarea>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ modalValueStats }}</span>
+        </sc-if>
       </div>
       <sc-if value="{{ modalUpload }}">
         <div style="display:flex; align-items:center; gap:9px;">
@@ -1702,12 +1715,16 @@ class Component extends DCLogic {
   openThinkingModal() { this.setState({ thinkingModalOpen: true }); }
 
   // Whitespace-only input is not a name — reject it rather than creating a
-  // blank-titled space or POSTing an empty path to the proxy.
+  // blank-titled space or POSTing an empty path to the proxy. `allowEmpty`
+  // exists for editors where clearing IS the operation: emptying a project's
+  // instructions means "this project has no rules", which is a real state and
+  // must be reachable, not something you can only get into by never typing.
   submitModal() {
     const modal = this.state.modal;
     if (!modal) return;
-    const value = (this.state.modalValue || '').trim();
-    if (!value) return;
+    const raw = this.state.modalValue || '';
+    const value = modal.allowEmpty ? raw : raw.trim();
+    if (!value && !modal.allowEmpty) return;
     this.closeModal();
     modal.onSubmit(value);
   }
@@ -3444,6 +3461,69 @@ class Component extends DCLogic {
     }
   }
 
+  // The project's own instructions — the rules the model obeys inside it.
+  //
+  // Any length. They are stored verbatim and compiled into folds the
+  // instruction gate surfs and folds per turn, so a long manual costs a
+  // bounded block rather than the whole context window. What comes back from
+  // the save is the compile report, and it is shown rather than swallowed: a
+  // reader whose 40-section manual was folded, or one of whose sections can
+  // never surface, cannot act on what they are not told.
+  async editProjectInstructions() {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) return;
+    const project = this.state.projects.find(p => p.id === projectId);
+    let current = { text: '', report: null };
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/instructions', { signal: AbortSignal.timeout(10000) });
+      if (res.ok) current = await res.json();
+    } catch (err) {
+      this.logAdd('⊘', `Could not read instructions for this project — ${err.message}`, 'sources');
+    }
+    this.openModal({
+      title: `Instructions for ${project ? project.name : 'project'}`,
+      label: 'Rules the model follows in this project',
+      placeholder: 'e.g.\n\nAlways cite the statute, never paraphrase it.\n\n## Refund policy\nState the refund window as fourteen days from dispatch.',
+      hint: 'Any length. Use ## headings to name each rule area — a heading is what makes that rule findable, so it can be surfaced verbatim on the turns it applies to and folded away on the turns it does not. Short instruction sets are handed to the model whole on every turn.',
+      submitLabel: 'Save instructions',
+      multiline: true,
+      allowEmpty: true,
+      initialValue: current.text || '',
+      projectId,
+      onSubmit: (text) => this.saveProjectInstructions(projectId, text),
+    });
+  }
+
+  async saveProjectInstructions(projectId, text) {
+    this.logAdd('○', 'Saving project instructions…', 'sources');
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/instructions', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const result = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(result.error || ('proxy returned ' + res.status));
+      const r = result.report || {};
+      if (!result.chars) {
+        this.logAdd('⊘', 'Project instructions cleared — no rules are in force in this project', 'sources');
+      } else if (r.mode === 'whole') {
+        this.logAdd('§', `Saved ${result.chars.toLocaleString()} characters — under the per-turn budget, so all of it is in force on every turn`, 'sources');
+      } else {
+        this.logAdd('§', `Saved ${result.chars.toLocaleString()} characters (~${r.totalTokens?.toLocaleString()} tokens) — folded into ${r.folds} rule(s), ${r.alwaysOn} always in force, the rest surfaced when relevant`, 'sources');
+      }
+      // A section that can never surface is a rule the reader believes they
+      // wrote and the model will never see. Say so.
+      if (r.warning) this.logAdd('⊘', r.warning, 'sources');
+      if (r.unroutable?.length) {
+        this.logAdd('◐', `${r.unroutable.length} section(s) had no distinctive words to match on, so they are kept always in force rather than being unreachable`, 'sources');
+      }
+      this.fetchProjects();
+    } catch (err) {
+      this.logAdd('⊘', `Could not save instructions — ${err.message}`, 'sources');
+    }
+  }
+
   // Project-scoped add: same URL / path / upload surface as addSource, but the
   // bytes land in the active project's own pool via /api/projects/:id/ingest,
   // so retrieval stays scoped to that project's knowledge base. The projectId
@@ -4499,7 +4579,7 @@ class Component extends DCLogic {
     // surfaces of the same referent select the same thing.
     const selectEntity = (id) => this.setState({ selectedEntity: id });
     const modal = S.modal;
-    const modalValid = (S.modalValue || '').trim().length > 0;
+    const modalValid = !!modal?.allowEmpty || (S.modalValue || '').trim().length > 0;
 
     const _commitEdit = (attId) => {
       const v = S.editTitleValue.trim();
@@ -5357,12 +5437,35 @@ class Component extends DCLogic {
       toggleChatsOpen: () => this.setState(s => ({ chatsOpen: !s.chatsOpen })),
       spacesCount: S.spaces.length,
       addSource: () => this.addSource(), addProjectDocument: () => this.addProjectDocument(), searchWeb: () => this.searchWeb(),
+      editProjectInstructions: () => this.editProjectInstructions(),
+      // "none" is a real state and reads differently from a character count,
+      // so a project with no rules says so rather than showing a bare 0.
+      instructionsLabel: (() => {
+        const p = S.projects.find(x => x.id === S.activeProjectId);
+        const n = p?.instructionsChars || 0;
+        return n ? (n > 999 ? `${Math.round(n / 1000)}k chars` : `${n} chars`) : 'none';
+      })(),
       modalOpen: !!modal,
       modalTitle: modal ? modal.title : '',
       modalLabel: modal ? modal.label : '',
       modalPlaceholder: modal ? (modal.placeholder || '') : '',
       modalHint: modal ? (modal.hint || '') : '',
       modalUpload: !!(modal && modal.upload),
+      modalMultiline: !!(modal && modal.multiline),
+      modalSingleLine: !!modal && !modal.multiline,
+      modalMaxWidth: modal && modal.multiline ? '720px' : '404px',
+      modalValueStats: (() => {
+        const v = S.modalValue || '';
+        if (!v.trim()) return 'empty — this project would have no instructions';
+        // The reader is entitled to know whether what they typed will be
+        // handed over whole or folded, since that is the difference between
+        // "always in force" and "in force when relevant".
+        const tokens = Math.ceil(v.length / 3.5);
+        return `${v.length.toLocaleString()} characters · ~${tokens.toLocaleString()} tokens · ` +
+          (tokens <= 2800
+            ? 'fits the per-turn budget, so all of it is always in force'
+            : 'over the per-turn budget, so it will be folded and surfaced by relevance');
+      })(),
       setSourceFileInput: (el) => { this.sourceFileInputEl = el; },
       modalPickFile: () => this.sourceFileInputEl && this.sourceFileInputEl.click(),
       onSourceFilesSelected: (e) => this.onSourceFilesSelected(e),

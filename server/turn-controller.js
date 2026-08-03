@@ -196,17 +196,82 @@ export function createTurnController(deps) {
   // Gate one turn's instruction context. Returns null when there is no corpus
   // (an empty gate is a no-op, never a crash), otherwise the report for SSE +
   // persistence plus the system message to prepend to the model call.
+  //
+  // Two corpora can be in force at once: the app's own instruction set, and —
+  // when the conversation lives in a project — that project's instructions,
+  // written by the reader and of any length. Both go through the SAME gate
+  // (R3: one scoreFold, one budget discipline, one folded index), just with
+  // different fold sets and their own budgets, so a long project manual cannot
+  // crowd out the app's identity and citation rules or vice versa. Each keeps
+  // its own block so the model can tell whose rule it is reading.
   function gateInstructionBlock({ question, conv, turnId }) {
-    if (!instructionGate.folds.length) return null;
-    const r = instructionGate.gate({ question, history: recentUserQuestions(conv, turnId) });
+    const history = recentUserQuestions(conv, turnId);
+    const blocks = [];
+    const reports = [];
+
+    const inForce = [];
+
+    if (instructionGate.folds.length) {
+      const r = instructionGate.gate({ question, history });
+      blocks.push(r.systemMessage);
+      reports.push({ corpus: "app", ...summarizeGate(r) });
+      inForce.push(...instructionGate.folds);
+    }
+
+    const project = deps.projectInstructionFolds ? deps.projectInstructionFolds(conv) : null;
+    if (project?.folds?.length) {
+      const projectGate = createInstructionGate({
+        folds: project.folds,
+        budgetTokens: project.budgetTokens,
+        label: "PROJECT INSTRUCTION GATE",
+      });
+      const r = projectGate.gate({ question, history });
+      blocks.push(r.systemMessage);
+      reports.push({ corpus: "project", ...summarizeGate(r) });
+      inForce.push(...project.folds);
+    }
+
+    if (!blocks.length) return null;
+    const systemMessage = blocks.join("\n\n");
+    const merged = reports.reduce((acc, r) => ({
+      activeIds: acc.activeIds.concat(r.activeIds),
+      foldedIds: acc.foldedIds.concat(r.foldedIds),
+      overflow: acc.overflow + r.overflow,
+    }), { activeIds: [], foldedIds: [], overflow: 0 });
+
+    return {
+      activeIds: merged.activeIds,
+      foldedIds: merged.foldedIds,
+      // Every fold that could have been in force this turn, both corpora. R9's
+      // output review checks the answer against the rules that governed it, so
+      // it has to see the project's rules too — reviewing a project answer
+      // against only the app's manual would pass a reply that breaks the very
+      // instruction the reader wrote.
+      folds: inForce,
+      blockTokens: gateCountTokens(systemMessage),
+      budget: reports.reduce((n, r) => n + r.budget, 0),
+      overflow: merged.overflow,
+      // Per-corpus detail, so a reader auditing why a rule did or did not
+      // apply can see which manual it came from rather than one flat list.
+      corpora: reports,
+      stats: {
+        gap: reports.every((r) => r.gap),
+        rejectedByBudget: reports.reduce((n, r) => n + r.rejectedByBudget, 0),
+      },
+      systemMessage,
+    };
+  }
+
+  function summarizeGate(r) {
     return {
       activeIds: r.activeIds,
       foldedIds: r.foldedIds,
       blockTokens: gateCountTokens(r.systemMessage),
       budget: r.stats.budget,
       overflow: r.stats.overflow,
-      stats: { gap: r.stats.gap, rejectedByBudget: r.stats.rejectedByBudget },
-      systemMessage: r.systemMessage,
+      gap: r.stats.gap,
+      rejectedByBudget: r.stats.rejectedByBudget,
+      crowdedOutIds: r.stats.crowdedOutIds,
     };
   }
 
@@ -219,6 +284,10 @@ export function createTurnController(deps) {
       blockTokens: g.blockTokens,
       budget: g.budget,
       overflow: g.overflow,
+      // Which manual each rule came from. A flat id list cannot answer "was
+      // that my project's rule or the app's?", and that is the first question
+      // a reader asks when an answer surprises them.
+      corpora: g.corpora,
     });
   }
 
@@ -399,7 +468,7 @@ export function createTurnController(deps) {
     if (gate) {
       review = reviewOutput({
         question, answer: finalText,
-        gate: { activeIds: gate.activeIds, folds: instructionGate.folds, stats: gate.stats || {} },
+        gate: { activeIds: gate.activeIds, folds: gate.folds || instructionGate.folds, stats: gate.stats || {} },
         groundText,
       });
       while (review.verdict === "FLAGGED" && iterations < 2) {
@@ -423,7 +492,7 @@ export function createTurnController(deps) {
         finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
         review = reviewOutput({
           question, answer: finalText,
-          gate: { activeIds: gate.activeIds, folds: instructionGate.folds, stats: gate.stats || {} },
+          gate: { activeIds: gate.activeIds, folds: gate.folds || instructionGate.folds, stats: gate.stats || {} },
           groundText,
         });
       }
@@ -722,6 +791,7 @@ export function createTurnController(deps) {
             activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
             blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
             gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
+            corpora: gateInfo.corpora,
           } : null,
         });
         sendEvent("completed", {
@@ -831,6 +901,7 @@ export function createTurnController(deps) {
             activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
             blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
             gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
+            corpora: gateInfo.corpora,
           } : null,
         });
         sendEvent("completed", {

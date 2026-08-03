@@ -321,6 +321,71 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 
 ---
 
+### 10b. Project Instructions
+
+**What it is:** Per-project rules the model must obey, written by the reader, of
+any length, delivered by surf-and-fold so a long manual costs a bounded block
+rather than the context window.
+
+**Why users need it:** A project is not just a pile of documents, it is a way of
+working — cite the statute, never promise a delivery date, never name a client
+beside a matter number. Those rules have to reach the model *as written*: an
+instruction is read to be obeyed, so a paraphrased one produces an answer that
+was correct according to a manual nobody wrote.
+
+**How it manifests:**
+- `GET /api/projects/:id/instructions` — the text, plus the compile report and
+  the fold list it produced
+- `PUT /api/projects/:id/instructions` — `{ text, instructionBudget? }`
+- `POST /api/projects/:id/instructions/preview` — `{ question }` → exactly
+  which rules would be in force for that question, which would be folded away,
+  and which matched but did not fit
+- `server/project-instructions.js` segments the text into folds; the *same*
+  `instruction-gate.js` that serves the built-in instruction set gates them
+  (INSTRUCTION-LAW R3: one relevance mechanism, not two)
+- The left panel's **Instructions** row opens the editor; the sources log
+  reports how the text was folded
+
+**How length is handled:**
+- Under the per-turn budget → handed over whole, always in force. Folding
+  exists to fit a budget; applying it to text that already fits would hide
+  rules behind a relevance test for no reason.
+- Over it → segmented at `##` headings (verbatim slices, asserted), each fold
+  declaring signals derived from its own distinctive terms. The matching folds
+  are surfaced verbatim; the rest are named in the folded index (R4).
+- Granularity is derived from the budget by *measuring* the resulting block,
+  not predicting it, so the index can name every fold (R4) without the block
+  overrunning its budget (R5).
+
+**Success criteria:**
+- Instructions are stored and surfaced byte for byte — never summarized (R1)
+- A rule surfaces on the turns it applies to and is named, not vanished, on the
+  turns it does not (R4)
+- A turn matching no rule says so rather than letting the model improvise
+  policy (R2)
+- The block fits its budget regardless of how long the instructions are (R5)
+- **A rule that matched but did not fit is named as such** — "matched but
+  crowded out" must never read like "no rule applies"
+
+**Measured:** a 333 KB / 95 000-token manual (300 sections) stores verbatim and
+gates within budget. At the default 2800-token budget the matching rule is
+crowded out — and says so, naming the fold and the remedy. Raising the
+project's `instructionBudget` to 6000 compiles it to 101 folds and surfaces the
+exact rule verbatim in a 5352-token block with no overflow.
+
+**How to test:**
+1. Open a project → **Instructions** → paste rules with `##` headings → Save
+2. The log reports whether they were kept whole or folded, and into how many
+3. `POST /api/projects/:id/instructions/preview` with a question that matches
+   one section → that section is `active`, the others `folded`
+4. Preview a question matching nothing → `stats.gap` is true
+5. Paste a very long manual → if a matching rule cannot fit, the response
+   carries `crowdedOut` and a `warning` naming it
+6. `node scripts/test-project-instructions.mjs` — 18 checks covering R1–R5,
+   verbatim round-tripping at ~900 KB, and sidecar cleanup on project delete
+
+---
+
 ### 11. Complex Task Decomposition (Holonic)
 
 **What it is:** Break big asks ("write a 5-page essay") into grounded sub-tasks with mechanical citations.
@@ -535,6 +600,13 @@ EOChat is an infinite-memory conversational interface powered by the eoreader5 s
 - `GET /api/verbatim/context?span_id=<id>` — get span context
 - `GET /api/fold?source=<ref>` — fold projection of a source
 - `GET /api/source/text?source=<ref>` — read source text by byte range
+
+### Project instructions
+- `GET /api/projects/:id/instructions` — text + compile report + fold list
+- `PUT /api/projects/:id/instructions` — `{ text, instructionBudget? }`; any
+  length, stored verbatim
+- `POST /api/projects/:id/instructions/preview` — `{ question }` → which rules
+  would be active, which folded, and which `crowdedOut` by the budget
 
 ### Priors
 - `GET /api/priors` — list priors (each entry carries `disabled: boolean`)

@@ -48,6 +48,8 @@ import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies } from "
 import { createModelRouter } from "./model-router.js";
 import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
+import { compileInstructionFolds } from "./project-instructions.js";
+import { createInstructionGate, countTokens as gateCountTokens, DEFAULT_INSTRUCTION_BUDGET } from "./instruction-gate.js";
 import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // Static, not dynamic: the request handler is synchronous, and the module only
 // catalogs on import — ingest stays lazy behind ensurePriorsIngested().
@@ -179,8 +181,64 @@ try {
 // ── Conversations — the new conversational surface's durable state + turn coordinator ──
 
 const conversationStore = new ConversationStore();
+// A project's own instructions, compiled to folds and cached against the
+// file's mtime.
+//
+// This is deliberately synchronous. It runs on the turn path, where the
+// instruction block has to be assembled BEFORE the model call it governs — an
+// await here is an opportunity for the rules to arrive late, and a rule that
+// arrives after the answer is not a rule. The file is small, the compile is
+// pure, and both are skipped entirely unless the text actually changed.
+const projectFoldCache = new Map(); // projectId -> { mtimeMs, folds, report }
+
+function projectIdForConversation(conv) {
+  // Conversations opened inside a project carry the project as their space and
+  // its pool; a conversation outside one uses the shared "corpus" pool.
+  const id = conv?.spaceId || (conv?.pool && conv.pool !== "corpus" ? conv.pool : null);
+  return id || null;
+}
+
+// The project's own instruction budget, read from the project file. Cached
+// alongside the folds because it decides how they are compiled.
+function projectBudget(projectId) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(MEMORY_DIR, "projects", `${projectId}.json`), "utf8"));
+    const n = Number(raw.instructionBudget);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_INSTRUCTION_BUDGET;
+  } catch {
+    return DEFAULT_INSTRUCTION_BUDGET;
+  }
+}
+
+function projectInstructionFolds(conv) {
+  const projectId = projectIdForConversation(conv);
+  if (!projectId) return null;
+  let stat;
+  try {
+    stat = fs.statSync(projectStore.instructionsPath(projectId));
+  } catch {
+    projectFoldCache.delete(projectId);
+    return null; // no instructions for this project is a no-op, never an error
+  }
+  const budgetTokens = projectBudget(projectId);
+  const hit = projectFoldCache.get(projectId);
+  if (hit && hit.mtimeMs === stat.mtimeMs && hit.budgetTokens === budgetTokens) {
+    return { folds: hit.folds, budgetTokens };
+  }
+  try {
+    const text = fs.readFileSync(projectStore.instructionsPath(projectId), "utf8");
+    const compiled = compileInstructionFolds(text, { idPrefix: "proj", budgetTokens });
+    projectFoldCache.set(projectId, { mtimeMs: stat.mtimeMs, budgetTokens, ...compiled });
+    return { folds: compiled.folds, budgetTokens };
+  } catch (err) {
+    console.error(`[proxy] project instructions failed to compile for ${projectId}: ${err.message}`);
+    return null;
+  }
+}
+
 const turnController = createTurnController({
   conversationStore,
+  projectInstructionFolds,
   groundQuery: engineGroundQuery,
   target: TARGET,
   anthropicKey: ANTHROPIC_KEY,
@@ -3845,6 +3903,101 @@ const server = http.createServer((req, res) => {
         if (req.method === "DELETE" && segments.length === 3) {
           const result = await projectStore.remove(segments[2]);
           return sendJson(200, result);
+        }
+
+        // ── Project instructions ──
+        //
+        // The rules the model must obey inside this project. Any length: they
+        // are stored verbatim and compiled to folds that the instruction gate
+        // surfs and folds per turn, so a long manual costs a bounded block
+        // rather than the whole window (INSTRUCTION-LAW R5).
+
+        // GET /api/projects/:id/instructions — the text, plus how it will be
+        // gated. The compile report ships with the text on purpose: a reader
+        // who cannot see that their manual was folded into 40 pieces, or that
+        // one section can never surface, cannot act on it.
+        if (req.method === "GET" && segments.length === 4 && segments[3] === "instructions") {
+          const record = await projectStore.getInstructions(segments[2]);
+          const budgetTokens = projectBudget(segments[2]);
+          const { folds, report } = compileInstructionFolds(record.text, { idPrefix: "proj", budgetTokens });
+          return sendJson(200, {
+            ...record,
+            report,
+            folds: folds.map((f) => ({
+              id: f.id, title: f.title, always: f.always,
+              signals: f.signals, fingerprint: f.fingerprint,
+              tokens: gateCountTokens(f.body),
+            })),
+          });
+        }
+
+        // PUT /api/projects/:id/instructions — replace them. Returns the same
+        // shape as GET so the caller sees the consequence of what it wrote
+        // without a second round trip.
+        if (req.method === "PUT" && segments.length === 4 && segments[3] === "instructions") {
+          const data = await readJsonBody();
+          if (typeof data.text !== "string") {
+            return sendJson(400, { error: "'text' (string) is required" });
+          }
+          if (data.instructionBudget !== undefined) {
+            await projectStore.update(segments[2], { instructionBudget: data.instructionBudget });
+          }
+          const record = await projectStore.setInstructions(segments[2], data.text);
+          projectFoldCache.delete(segments[2]);
+          const budgetTokens = projectBudget(segments[2]);
+          const { folds, report } = compileInstructionFolds(record.text, { idPrefix: "proj", budgetTokens });
+          return sendJson(200, {
+            ...record,
+            report,
+            folds: folds.map((f) => ({
+              id: f.id, title: f.title, always: f.always,
+              signals: f.signals, fingerprint: f.fingerprint,
+              tokens: gateCountTokens(f.body),
+            })),
+          });
+        }
+
+        // POST /api/projects/:id/instructions/preview — given a question, show
+        // exactly which rules WOULD be in force and which would be folded away.
+        //
+        // LAWS.md L2b: the path to evidence begins at the thing in question.
+        // "Why did it not follow my rule?" is asked about a specific question,
+        // so it must be answerable by asking about that specific question —
+        // not by reading the gate's source or guessing at its keywords.
+        if (req.method === "POST" && segments.length === 5 && segments[3] === "instructions" && segments[4] === "preview") {
+          const data = await readJsonBody();
+          const record = await projectStore.getInstructions(segments[2]);
+          const budgetTokens = projectBudget(segments[2]);
+          const { folds, report } = compileInstructionFolds(record.text, { idPrefix: "proj", budgetTokens });
+          if (!folds.length) {
+            return sendJson(200, {
+              question: data.question || "", report, active: [], folded: [],
+              gap: true,
+              note: "This project has no instructions, so nothing is in force. That is an empty manual, not a silent one.",
+            });
+          }
+          const gate = createInstructionGate({ folds, budgetTokens, label: "PROJECT INSTRUCTION GATE" });
+          const r = gate.gate({ question: String(data.question || ""), history: data.history || [], debug: true });
+          // A rule that matched but did not fit is the failure most easily
+          // mistaken for the gate working. It is called out by name here, with
+          // the remedy, rather than left as a count in a stats object.
+          const crowdedOut = (r.stats.crowdedOutIds || []).map((id) => {
+            const f = folds.find((x) => x.id === id);
+            return { id, title: f?.title || id, tokens: f ? gateCountTokens(f.body) : null };
+          });
+          return sendJson(200, {
+            question: data.question || "",
+            report,
+            active: r.surfaced.map((f) => ({ id: f.id, title: f.title, always: f.always, tokens: gateCountTokens(f.body) })),
+            folded: r.folded.map((f) => ({ id: f.id, title: f.title, fingerprint: f.fingerprint })),
+            crowdedOut,
+            ...(crowdedOut.length ? {
+              warning: `${crowdedOut.length} instruction(s) matched this question but did not fit the ${budgetTokens}-token budget, so the model would not see them. This is not "no rule applies" — raise the project's instructionBudget or split these sections with more headings.`,
+            } : {}),
+            scores: r.scores,
+            stats: r.stats,
+            systemMessage: r.systemMessage,
+          });
         }
 
         // ── Project knowledge sources ──
