@@ -255,6 +255,49 @@ forbids, a measurement that catches it):
 > licenses exactly the string-thinking the omnimodal principle exists to
 > forbid.
 
+Three more, from the surf/fold follow-on work, each grounded in a measured
+result above rather than asserted:
+
+> **"Lossless" claims about a fold or summary organ mean zero fabrication in
+> what is surfaced, independently verifiable against real source offsets —
+> never information-theoretic completeness.** A compressed altitude
+> necessarily omits most of the source; that omission is the entire value
+> of compressing. A claim of "lossless fold" is honest only when every
+> retained claim, at every altitude, re-slices to real source text at its
+> claimed offset (measured here: 424/424, cross-checked two independent
+> ways) — and dishonest the moment it is read as "nothing was left out."
+> This project already has one hard-won lesson in exactly this shape (the
+> corpus-prior dead end, documented in `scripts/derive-audio-prior.mjs`);
+> this is the fold-compression sibling of it and deserves the same
+> explicit guardrail.
+
+> **A prior sourced from outside the text being read is not automatically
+> better than one derived from the text's own preceding context — test it,
+> do not assume it.** A background distribution built from a genuinely
+> separate work (here: the Iliad, for Odyssey surprise-scoring) measurably
+> *worsened* both a real-detail-ranking test and a real-vs-noise
+> discrimination test, because the external source shared the target's
+> formulaic tradition too closely: a naive linear blend diluted local
+> contrast instead of sharpening it. "External" and "useful" are different
+> properties; conflating them is the same class of mistake as the corpus-
+> prior dead end, just with an easier-to-miss failure mode (it fails
+> quietly worse, not obviously broken) — this is a genuine extension of that
+> existing principle, not a duplicate of it, and worth being named as its
+> own numbered dead-end in whichever document tracks those.
+
+> **A "prompt deeper reading" / drill-down trigger must be driven by a real,
+> organ-computed significance signal (surprise, boundary detection, or
+> equivalent) — never by searching the compressed context for a specific
+> word or phrase.** Keyword-triggered drill-down is the flooding-by-
+> occurrence failure mode the fold architecture exists to replace, merely
+> relocated to the trigger instead of the context. Measured here:
+> `significanceSpine`'s real forward-surprise, run once over the whole
+> document forward-only, found a genuine narrative turning point
+> unprompted and undirected by any keyword — the correct shape for this
+> mechanism, in contrast to this probe's own first draft, which used
+> `text.includes()` and was corrected specifically because of this
+> principle.
+
 ## Reproduction
 
 ```
