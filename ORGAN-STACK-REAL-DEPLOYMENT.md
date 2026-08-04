@@ -442,6 +442,63 @@ side was validated against real ground truth. That is a narrower claim
 than the text section supports, and is reported as narrower, not inflated
 to match it.
 
+## Music's own forward-surprise: completing the omnimodal parity, not just claiming it
+
+Asked directly: why should "structural surprise" be a text-only question?
+Every earlier audio result in this document used organs built for other
+jobs (spectral-flux variability, holon separation, onset/tempo) as
+indirect evidence that audio *could* support real/noise discrimination —
+this investigation never built audio's own version of the actual
+mechanism, `significanceSpine` itself: sequential, forward-only, scored
+against a decaying local window of recent context, never looking ahead.
+`scripts/probe-audio-forward-surprise.mjs` does that directly.
+
+Text's `forwardScore` uses discrete KL-divergence because a sentence is a
+bag of many word-tokens. A single audio frame (~186ms) is one continuous
+30-dimensional vector (12 chroma + 13 timbre + 5 moments), not a bag of
+anything — so the faithful analog is a local Gaussian model: track each
+dimension's running mean/variance over the last ~28s of frames, score a
+new frame's surprise as its summed per-dimension squared deviation
+(a diagonal Mahalanobis distance), same question ("how much does this
+depart from what recent context predicted"), asked in the vocabulary a
+continuous signal actually has.
+
+**Two real bugs caught in this new code before trusting any result from
+it — the same discipline as every other probe in this document, now
+applied to a mechanism built mid-conversation rather than to the engine.**
+The first run scored beginning at 5 frames of history and produced a "top
+peak" 29,000x larger than the second-ranked one — a cold-start artifact
+exactly analogous to what `significanceSpine`'s own header already warns
+against and guards with a `minHistory` parameter, which this new code
+initially lacked. It also used one shared epsilon variance-floor across
+all 30 dimensions despite those dimensions having wildly different
+natural scales (spectral flux runs in the hundreds; a chroma bin does
+not), letting a low-variance dimension's z-score blow up and dominate the
+summed score. Fixed: a real warm-up guard (60 frames, ~11s) before any
+score is trusted, and a per-dimension variance floor set relative to that
+dimension's own variance over the whole recording rather than one
+constant for all of them.
+
+**Corrected result: real audio shows meaningfully higher local-surprise
+variability than every noise control, in a sensible gradient** — real
+CV=1.76, fixed-grid shuffle CV=0.66, variable-grid shuffle CV=0.75, white
+noise CV=0.31. The top peaks check out against acoustic features never
+used to build the score: t=67.0s shows a real 4.5x RMS jump (a genuine
+loud entrance); t=21.8s shows RMS dropping to near-silence relative to
+its recent context (a sudden hush, not a loud moment) — the mechanism
+catches large deviation in *either* direction because it scores squared
+deviation, not signed change, which is architecturally correct and
+happened to surface a musically real, qualitatively different category of
+surprise (a compositional pause) without being built to look for one.
+
+This is the omnimodal claim completed rather than only argued for: text
+has a validated forward-surprise mechanism (with real, documented limits
+on a morphologically rich language); audio now has its own, built with
+the same architecture, validated against the same kind of real/noise
+controls, and caught making the same class of self-inflicted measurement
+errors this whole investigation has repeatedly found and corrected in
+itself as readily as in the engine under test.
+
 ## Proposed constitutional-level takeaway
 
 State as a testable principle, the way LAWS.md states laws (a failure it
@@ -562,6 +619,7 @@ node scripts/probe-unrelated-prior.mjs               # same-tradition (Iliad) vs
 node scripts/probe-all-literature-prior.mjs          # 13-work, 6-genre aggregate prior — fetches ~4.2MB, slower
 node scripts/select-best-priors.mjs                  # validates the cheap-proxy tool against all 13 individually, ~5min
 node scripts/select-best-priors-audio.mjs            # same tool, unmodified, on real audio field-vector signatures
+node scripts/probe-audio-forward-surprise.mjs        # audio's own significanceSpine analog, real vs. noise controls
 ```
 
 Video (the third modality named alongside music) was scoped out of this
