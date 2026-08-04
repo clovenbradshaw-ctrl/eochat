@@ -52,7 +52,9 @@ const REFUSAL_SIGNALS = [
 const ANSWER_REFUSAL = /\b(?:i can'?t (?:do|help|provide|share|give|honor)|can'?t (?:share|give|provide|honor)|not able to|against (?:our |the |my )?(?:policy|rules|instructions|manual)|i[ '']?m (?:afraid |sorry )?(?:i )?(?:not|unable)|that would violate|i won'?t|unfortunately.*can'?t|no,? i can'?t|can'?t help with that)\b/i;
 
 // The gating mechanism itself — R4 and the gate-control folds forbid naming it.
-const MECHANISM_LEAK = /\b(?:instruction gate|ACTIVE FOLDS|FOLDED FOLDS|NOT active this turn|fingerprint index|folded away|surfaced this turn|NO FOLD SURFACED|gating mechanism|gate block|the gate decides)\b/i;
+// Includes bare fold ids ("proj-035", "core-style"): a fold id in an answer is
+// the mechanism surfacing in the reader's face, exactly what R4 forbids.
+const MECHANISM_LEAK = /\b(?:instruction gate|ACTIVE FOLDS|FOLDED FOLDS|NOT active this turn|fingerprint index|folded away|surfaced this turn|NO FOLD SURFACED|gating mechanism|gate block|the gate decides|proj-\d+[\w-]*)\b/i;
 
 function normalize(text) {
   return String(text || "")
@@ -60,6 +62,221 @@ function normalize(text) {
     .replace(/[–—]/g, "-")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// Style directives the manual itself declares, detected in the ACTIVE folds so
+// the review enforces only what the manual asks — R1's verbatim rule applied
+// to the reviewer, not a hard-coded style. A fold that demands couplets turns
+// rhyme-checking on; a fold that demands bracket citations turns the citation
+// check on. Corpora with neither are unaffected.
+const STYLE_DIRECTIVES = {
+  // "rhyming couplets", "a string of rhyming couplets", "each couplet its own
+  // line" — any fold that names the couplet form is a rhyme mandate.
+  rhyme: /couplet/i,
+  // "must be followed by a bracket number referencing the loaded passage", or
+  // the literal "[n]" the gate folds describe.
+  bracketCitations: /bracket number|\[\s*n\s*\]/i,
+  // Fixed-shape forms. Each of these names a NON-default chat-model output
+  // shape, and the review enforces it mechanically the way it enforces rhyme
+  // and citations: whatever the manual demands, the output is measured
+  // against, not trusted.
+  sonnet: /sonnet/i,
+  haiku: /haiku/i,
+  acrostic: /acrostic/i,
+  // "Never use the letter 'e'." — the letter is extracted, not hard-coded.
+  lipogram: /never use the letter ['"]([a-z])['"]/i,
+  // "Every line must begin with the word Because." — the word is extracted.
+  anaphora: /every (?:line|sentence) (?:must )?begin[s]? with the word ['"]?([a-z]+)['"]?/i,
+};
+
+// Format directives — document structure rules that apply to EVERY answer
+// regardless of what the surf mechanism surfaced. A manual that specifies an
+// output format (sections, length, citation style) is always enforced because
+// format is a meta-rule about HOW to answer, not WHAT to answer.
+const FORMAT_DIRECTIVES = {
+  // "Output format: Research note" or "Required sections" — document structure.
+  outputFormat: /output format|required sections/i,
+  // "Section 1: Claim" or "Section 2: Evidence" — section structure.
+  sectionStructure: /section \d+:\s*\w+/i,
+  // "Sources: [n]" — source line format.
+  sourceLine: /sources?:\s*\[\d+\]/i,
+  // "Do not add headers" or "no blank lines between sections" — formatting rules.
+  formattingRules: /do not add (?:headers|blank lines|titles)/i,
+};
+
+// The rhyme key of a word: the tail from its last vowel group onward. "night"
+// and "light" both key to "ight"; "truth" and "truth" key to "uth"; "alone"
+// and "bone" both key to "e". A mechanical proxy for true rhyme — identical
+// words always match, real rhymes usually do, non-rhymes never do.
+export function rhymeKey(word) {
+  const w = String(word || "").toLowerCase();
+  const m = w.match(/([aeiouy]+[^aeiouy]*)$/);
+  return m ? m[1] : w;
+}
+
+/**
+ * Mechanical couplet health — the same ruler the probes use and the review
+ * flags against. Consecutive non-empty lines pair up; a pair rhymes when its
+ * last words are identical or share a rhyme key.
+ *
+ * @returns {{ lines: number, paired: number, ratio: number, verdict: string }}
+ *   verdict: "couplets" (ratio ≥ 0.5), "partial" (0 < ratio < 0.5), "prose"
+ *   (ratio 0), "too short" (fewer than 2 lines).
+ */
+export function coupletHealth(text) {
+  const lines = String(text || "")
+    .split("\n")
+    .map((l) => l.replace(/[^A-Za-z0-9'’\- ]/g, " ").trim())
+    .filter(Boolean);
+  if (lines.length < 2) return { lines: lines.length, paired: 0, ratio: 0, verdict: "too short" };
+  let paired = 0;
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    const a = lines[i].split(/\s+/).pop().toLowerCase();
+    const b = lines[i + 1].split(/\s+/).pop().toLowerCase();
+    if (a === b || rhymeKey(a) === rhymeKey(b)) paired++;
+  }
+  const ratio = paired / Math.floor(lines.length / 2);
+  return { lines: lines.length, paired, ratio, verdict: ratio >= 0.5 ? "couplets" : ratio > 0 ? "partial" : "prose" };
+}
+
+// Shared line helper for the shape checks: non-empty lines, each reduced to
+// its last real word the way coupletHealth reduces them, so rhyme-key tests on
+// sonnet lines behave exactly like the couplet test does.
+function shapeLines(text) {
+  return String(text || "")
+    .split("\n")
+    .map((l) => l.replace(/[^A-Za-z0-9'’\- ]/g, " ").trim())
+    .filter(Boolean);
+}
+
+function lastWord(line) {
+  return line.split(/\s+/).pop().toLowerCase();
+}
+
+// Sonnet: exactly 14 lines, rhyme pattern abab cdcd efef gg. The check is the
+// same ruler as the couplet check applied to a stricter grid: line count must
+// be exact, and each of the 7 rhyme pairs must land. Syllable metre is left to
+// the writer — a chat model that cannot hold 14 lines and a rhyme grid has
+// already failed the form without needing scansion.
+export function sonnetHealth(text) {
+  const lines = shapeLines(text);
+  const pattern = [[0, 2], [1, 3], [4, 6], [5, 7], [8, 10], [9, 11], [12, 13]];
+  let rhyming = 0;
+  if (lines.length === 14) {
+    for (const [a, b] of pattern) {
+      const ra = lastWord(lines[a]);
+      const rb = lastWord(lines[b]);
+      if (ra === rb || rhymeKey(ra) === rhymeKey(rb)) rhyming++;
+    }
+  }
+  const verdict = lines.length === 14 && rhyming === pattern.length ? "sonnet"
+    : lines.length === 14 && rhyming >= 4 ? "partial"
+    : "not_sonnet";
+  return { lines: lines.length, rhyming, pattern: "abab cdcd efef gg", verdict };
+}
+
+// A deliberate, standard approximation of English syllable count (vowel
+// groups, silent trailing e, the -le coda). It is a proxy, exactly like
+// rhymeKey: it is strict enough to flag a 17-line paragraph passed off as a
+// haiku, and it never claims to be a phonologist.
+export function syllableCount(word) {
+  const w = String(word || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!w) return 0;
+  if (w.length <= 3) return 1;
+  let count = (w.match(/[aeiouy]+/g) || []).length;
+  if (w.endsWith("e") && !/[aeiou]e$/.test(w)) count--;
+  if (w.endsWith("le") && w.length > 2 && !/[aeiou]le$/.test(w)) count++;
+  return count < 1 ? 1 : count;
+}
+
+// Haiku: three lines of 5, 7 and 5 syllables.
+export function haikuHealth(text) {
+  const lines = shapeLines(text);
+  const counts = lines.map((l) => l.split(/\s+/).reduce((s, w) => s + syllableCount(w), 0));
+  const verdict = counts.length === 3 && counts[0] === 5 && counts[1] === 7 && counts[2] === 5
+    ? "haiku" : "not_haiku";
+  return { lines: lines.length, counts, verdict };
+}
+
+// Acrostic: the first letters of the first keyword.length lines spell the
+// keyword. Models are poor at tracking letter positions, which is exactly why
+// the shape is interesting — the check is trivial and unforgiving.
+export function acrosticHealth(text, keyword = "") {
+  const kw = String(keyword || "").toLowerCase();
+  const lines = shapeLines(text);
+  const got = lines.slice(0, kw.length).map((l) => (l[0] || "").toLowerCase()).join("");
+  const verdict = kw && got === kw ? "acrostic" : "not_acrostic";
+  return { keyword: kw, got, lines: lines.length, verdict };
+}
+
+// Anaphora: every non-empty line must begin with the mandated word.
+export function anaphoraHealth(text, word = "") {
+  const w = String(word || "").toLowerCase();
+  const lines = shapeLines(text);
+  const bad = lines.filter((l) => !l.toLowerCase().startsWith(w)).length;
+  const verdict = lines.length > 0 && bad === 0 ? "anaphora" : "not_anaphora";
+  return { word: w, lines: lines.length, bad, verdict };
+}
+
+// Lipogram: the banned letter must appear nowhere in the answer.
+export function lipogramCheck(text, letter = "") {
+  const ch = String(letter || "").toLowerCase();
+  const count = ch ? (String(text || "").toLowerCase().match(new RegExp(ch, "g")) || []).length : 0;
+  return { letter: ch, count, ok: count === 0 };
+}
+
+export function detectFormatDirectives(allFolds) {
+  const bodies = (allFolds || []).map((f) => f.body || "").join("\n");
+  return {
+    outputFormat: FORMAT_DIRECTIVES.outputFormat.test(bodies),
+    sectionStructure: FORMAT_DIRECTIVES.sectionStructure.test(bodies),
+    sourceLine: FORMAT_DIRECTIVES.sourceLine.test(bodies),
+    formattingRules: FORMAT_DIRECTIVES.formattingRules.test(bodies),
+  };
+}
+
+export function checkFormatCompliance(text, allFolds) {
+  const directives = detectFormatDirectives(allFolds);
+  const issues = [];
+  const lines = text.split("\n").filter(Boolean);
+
+  if (directives.outputFormat) {
+    if (lines.length < 6) issues.push(`too few lines: ${lines.length} (need 6-10)`);
+    if (lines.length > 10) issues.push(`too many lines: ${lines.length} (need 6-10)`);
+
+    const hasClaim = lines[0] && /\[\d+\]/.test(lines[0]);
+    const hasEvidence = lines.some((l) => /^- ".+?"\s*\[\d+\]/.test(l));
+    const hasAnalysis = lines.some((l) => /^(This (shows|suggests|indicates)|The|It)/.test(l));
+    const hasSource = lines[lines.length - 1] && /^Sources?:\s*\[\d+\]/.test(lines[lines.length - 1]);
+
+    if (!hasClaim) issues.push("Section 1: missing claim with citation [n]");
+    if (!hasEvidence) issues.push("Section 2: missing evidence bullet points");
+    if (!hasAnalysis) issues.push("Section 3: missing analysis sentences");
+    if (!hasSource) issues.push("Section 4: missing source line");
+
+    const quotes = text.match(/"[^"]+"/g) || [];
+    if (quotes.length < 2) issues.push(`only ${quotes.length} quotes (need 2-4)`);
+    if (quotes.length > 4) issues.push(`${quotes.length} quotes (max 4)`);
+  }
+
+  return { ok: issues.length === 0, issues, directives };
+}
+
+function detectStyleDirectives(activeFolds) {
+  const bodies = (activeFolds || []).map((f) => f.body || "").join("\n");
+  const one = (re) => {
+    const m = re.exec(bodies);
+    return m ? m[1] : null;
+  };
+  return {
+    rhyme: STYLE_DIRECTIVES.rhyme.test(bodies),
+    bracketCitations: STYLE_DIRECTIVES.bracketCitations.test(bodies),
+    sonnet: STYLE_DIRECTIVES.sonnet.test(bodies),
+    haiku: STYLE_DIRECTIVES.haiku.test(bodies),
+    acrostic: STYLE_DIRECTIVES.acrostic.test(bodies) ? one(/spell[s]? ['"]?([a-z]{2,})['"]?/i) : null,
+    lipogram: one(STYLE_DIRECTIVES.lipogram),
+    anaphora: one(STYLE_DIRECTIVES.anaphora),
+  };
 }
 
 /**
@@ -131,10 +348,105 @@ export function reviewOutput({ question = "", answer = "", gate, groundText = ""
     flags.push({ type: "mechanism_leak", detail: "the answer names the gating mechanism, which the folds say is internal" });
   }
 
+  // R9, style clause — the manual's own form rules, verified on the output the
+  // way R9 verifies facts and refusals. A manual that declares a couplet form
+  // or a bracket-citation rule is enforced mechanically: prose under a couplet
+  // mandate and uncited text-claims under a citation mandate are violations of
+  // the manual before they reach the reader.
+  const directives = detectStyleDirectives(activeFolds);
+  if (directives.rhyme) {
+    const health = coupletHealth(text);
+    if (health.verdict === "prose" || health.verdict === "too short") {
+      flags.push({
+        type: "not_rhyming_couplets",
+        detail: `the active folds require every answer in rhyming couplets; the answer's ${health.lines} line(s) do not rhyme in pairs (${health.paired}/${Math.floor(health.lines / 2)} pair(s)). Every pair of consecutive lines must end with the same word or a true rhyme, aa bb cc. Write the answer afresh as a string of short rhyming couplets — at least three, each couplet its own pair of lines — and do NOT keep a single-paragraph form.`,
+      });
+    }
+  }
+  if (directives.bracketCitations && !/\[\d+\]/.test(text)) {
+    flags.push({
+      type: "missing_citations",
+      detail: "the active folds require every text-claim to be followed by a bracket number [n] referencing the loaded passage it came from; the answer contains no citation brackets. Add the bracket number for each claim drawn from the loaded passages.",
+    });
+  }
+
+  // Fixed-shape clauses, same R9 logic: the manual named a form, the output is
+  // measured against it, and a violation is flagged for correction — never
+  // trusted because the model "tried".
+  if (directives.sonnet) {
+    const health = sonnetHealth(text);
+    if (health.verdict !== "sonnet") {
+      flags.push({
+        type: "not_a_sonnet",
+        detail: `the active folds require a sonnet: exactly 14 lines rhyming ${health.pattern}; the answer has ${health.lines} line(s) and ${health.rhyming}/7 rhyme-pair(s) landing. Write exactly 14 lines with that pattern.`,
+      });
+    }
+  }
+  if (directives.haiku) {
+    const health = haikuHealth(text);
+    if (health.verdict !== "haiku") {
+      flags.push({
+        type: "not_a_haiku",
+        detail: `the active folds require a haiku: three lines of 5, 7 and 5 syllables; the answer's ${health.lines} line(s) run ${health.counts.length ? health.counts.join("/") : "none"}. Write exactly three lines of 5-7-5 syllables.`,
+      });
+    }
+  }
+  if (directives.acrostic) {
+    const health = acrosticHealth(text, directives.acrostic);
+    if (health.verdict !== "acrostic") {
+      flags.push({
+        type: "not_acrostic",
+        detail: `the active folds require the first letters of the first ${health.keyword.length} lines to spell ${health.keyword.toUpperCase()}; they spell "${health.got || "(fewer lines than needed)"}". Write lines whose initial letters spell ${health.keyword.toUpperCase()}.`,
+      });
+    }
+  }
+  if (directives.lipogram) {
+    const health = lipogramCheck(text, directives.lipogram);
+    if (!health.ok) {
+      flags.push({
+        type: "banned_letter",
+        detail: `the active folds require the letter '${health.letter}' never to appear; it appears in ${health.count} place(s). Rewrite the whole answer without the letter '${health.letter}'.`,
+      });
+    }
+  }
+  if (directives.anaphora) {
+    const health = anaphoraHealth(text, directives.anaphora);
+    if (health.verdict !== "anaphora") {
+      flags.push({
+        type: "anaphora_broken",
+        detail: `the active folds require every line to begin with "${health.word}"; ${health.bad} of ${health.lines} line(s) do not. Begin every line with "${health.word}".`,
+      });
+    }
+  }
+
+  // Format compliance — always enforced, even if the format fold was folded by
+  // the surf mechanism. Format rules define HOW to answer, not WHAT to answer,
+  // and are therefore meta-rules that apply to every response. The check runs
+  // against ALL folds, not just active ones.
+  const formatCheck = checkFormatCompliance(text, gate.folds);
+  if (!formatCheck.ok) {
+    for (const issue of formatCheck.issues) {
+      flags.push({
+        type: "format_violation",
+        detail: `format violation: ${issue}. Follow the output format specified in the manual.`,
+      });
+    }
+  }
+
+  const formatDirectives = detectFormatDirectives(gate.folds);
+  const shapeNotes = [
+    directives.sonnet ? "sonnet+" : "sonnet-",
+    directives.haiku ? "haiku+" : "haiku-",
+    directives.acrostic ? `acrostic+(${directives.acrostic.toUpperCase()})` : "acrostic-",
+    directives.lipogram ? `lipogram+(${directives.lipogram})` : "lipogram-",
+    directives.anaphora ? `anaphora+(${directives.anaphora})` : "anaphora-",
+    formatDirectives.outputFormat ? "format+" : "format-",
+  ].join(" ");
+
   return {
     verdict: flags.length ? "FLAGGED" : "PASS",
     flags,
-    notes: [`${activeFolds.length} active fold(s), ${claims.length} claim(s) traced`],
+    notes: [`${activeFolds.length} active fold(s), ${claims.length} claim(s) traced, style ${directives.rhyme ? "rhyme+" : "rhyme-"}${directives.bracketCitations ? "citations+" : "citations-"}, ${shapeNotes}`],
   };
 }
 

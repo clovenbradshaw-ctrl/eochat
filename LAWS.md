@@ -329,6 +329,68 @@ the floor.
 
 ---
 
+## L4 — Format compliance is always enforced
+
+**Format rules apply to every answer, regardless of what the surf mechanism
+surfaced.**
+
+The surf mechanism decides which *content* folds are active this turn — which
+topics, which facts, which policies. But format rules define *how* to answer,
+not *what* to answer. A manual that says "output format: Research note with 4
+sections" or "do not add headers" is a meta-rule that applies to every response,
+whether or not the format fold was surfaced by the gate.
+
+The failure this prevents: a format fold with low relevance scores gets folded
+by the surf mechanism, and the model produces prose when the manual requires
+structured sections. The review sees no format fold in the active set and passes
+the answer. The reader gets the wrong structure and has no way to know the
+manual specified one.
+
+### Clauses
+
+- **L4a — Format directives are detected from all folds, not just active ones.**
+  The review checks the answer against format patterns found in *any* fold's
+  body — output format, section structure, source line format, formatting rules.
+  A folded format fold is still a format rule; folding means "not surfaced to the
+  model this turn," not "does not exist."
+- **L4b — Format violations are flagged like any other R9 violation.** The
+  `format_violation` flag type carries the specific issue (too few lines, missing
+  evidence bullets, section headers present) so the correction pass can fix it.
+- **L4c — Cross-turn correction passes format flags forward.** When a turn is
+  flagged for format violations, the next turn receives the flags as correction
+  context. The model sees "your previous answer was flagged" and fixes only the
+  flagged violations. This is the same correction mechanism R9 uses for content
+  violations, applied to format.
+
+### Measurement
+
+`checkFormatCompliance()` (output-review.js) detects format directives from all
+folds and checks the answer against them. A format fold excluded from activeIds
+but present in the fold array is still enforced. The check returns `{ ok, issues,
+directives }` and each issue becomes a `format_violation` flag.
+
+### What measurement actually showed
+
+The two-pass test (frankenstein-part-*.txt + two-pass-manual.md) measured this:
+
+1. **First pass**: model produces 5 lines, no section structure. Format fold
+   `proj-002-output-format-research-note` was FOLDED by the surf mechanism.
+   Review: FLAGGED (format_violation: too few lines). Without the format fix,
+   this would have been PASS — the format fold was not in the active set.
+
+2. **Second pass** (with correction context): model produces 9 lines with
+   section headers, 2 quotes, correct source line. Format check: FAIL (headers
+   present, claim on wrong line). The model *tried* to fix the format but added
+   headers the manual forbids.
+
+3. **Key finding**: the model improves with correction context but needs
+   iteration to get format right. The cross-turn correction mechanism works —
+   flags are passed forward and the model attempts to fix them. The format
+   compliance check catches violations that the surf mechanism would have
+   missed.
+
+---
+
 ## Candidate laws
 
 Observed as consistent practice but not yet enforced by a check. Promote by

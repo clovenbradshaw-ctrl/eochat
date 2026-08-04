@@ -251,11 +251,21 @@ does not silently swallow a bad answer. The server corrects a flagged answer by
 re-asking the model to fix only the flagged violations, then re-reviews, with a
 bounded loop (≤2) so a stubborn answer ships flagged, never hidden.
 
+**Cross-turn correction.** When the within-turn correction loop cannot resolve
+all flags (the answer ships flagged), the next turn receives the flags as
+correction context. The model sees "your previous answer was flagged" with the
+specific violations and fixes only those. This extends correction across turns
+when the model needs more than one pass to get format or content right. The
+correction context includes the flagged violations and the active fold ids from
+the previous turn, so the model knows what grounds to use.
+
 **Measurement.** Every served answer is reviewed against that turn's folds and
 evidence; a flagged verdict is emitted as `review_report` and persisted on the
 answer, with `corrected` and iteration count. The check (`R9a`) proves the
 reviewer flags an ungrounded claim, a refusal-compiled request, and a mechanism
-leak, and passes a grounded compliant answer.
+leak, and passes a grounded compliant answer. Cross-turn correction is verified
+by the two-pass test: a flagged first pass produces a second pass that attempts
+to fix the violations.
 
 **Ground.** III.3 (honesty is not optional and is a mechanism, not a mood), and
 the always-on honesty + refusal folds.

@@ -582,15 +582,32 @@ export function createTurnController(deps) {
     const needCorrection = () => review.verdict === "FLAGGED" || denial.verdict === "FLAGGED";
 
     if (gate || facts.length) {
+      // The correction pass regenerates the answer, so it must see the same
+      // numbered passages the first pass saw — a [3] it writes is meaningless
+      // if it never saw passage 3. Rebuilt from the turn's own citation table
+      // so the bracket numbers agree with resolveCitationBrackets.
+      const correctionPassages = lastCitations?.length
+        ? "CITED PASSAGES — the bracket numbers in your answer must reference these passages:\n\n" +
+          lastCitations.map((c, i) => `[${i + 1}] ${c.text || ""}`).join("\n\n")
+        : "";
       while (needCorrection() && iterations < 2) {
         const correction = buildCorrectionSystemContent(allFlags(), gate?.activeIds);
         let next;
         try {
+          // The correction directive goes LAST, as the final user content — the
+          // same convention narrative/code/svg-longform use. A bare question as
+          // the final turn re-rolls the original dice (which already failed);
+          // the flagged-violations frame must be the most recent thing the
+          // model reads before generating.
           next = await callModelNonStreaming([
             ...(gate?.systemMessage ? [{ role: "system", content: gate.systemMessage }] : []),
             ...(memory?.message ? [{ role: "system", content: memory.message }] : []),
-            { role: "system", content: correction },
-            { role: "user", content: question },
+            ...(correctionPassages ? [{ role: "system", content: correctionPassages }] : []),
+            // Show the model the exact text that was flagged, so "fix ONLY the
+            // flagged violations" means something it can act on — a blind
+            // regeneration from the question alone re-rolls the same dice.
+            ...(finalText ? [{ role: "system", content: `Your previous answer (rewrite it to fix ONLY the flagged violations):\n\n${finalText.slice(0, 4000)}` }] : []),
+            { role: "user", content: `${question}\n\n${correction}` },
           ], { provider, modelOverride });
         } catch {
           break; // keep the flagged text; the report will show correction was not achieved
@@ -1130,19 +1147,40 @@ export function createTurnController(deps) {
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
     const effectiveMode = mode || conv.mode || "chat";
     const effectiveWebSearch = webSearch !== undefined ? webSearch : (conv.webSearch || false);
+
+    // Cross-turn correction: if the previous turn's active answer was flagged,
+    // inject the flags as correction context into this turn's question. The
+    // model sees "your previous answer was flagged" and fixes only the flagged
+    // violations. This extends the within-turn correction loop (finalizeAndReview)
+    // across turns when the model can't fix everything in one pass.
+    let effectiveQuestion = question;
+    const turns = conv.turns || [];
+    if (turns.length > 0) {
+      const prevTurn = turns[turns.length - 1];
+      const prevAnswer = (prevTurn.answers || []).find((a) => a.id === prevTurn.activeAnswerId);
+      if (prevAnswer?.review?.verdict === "FLAGGED" && prevAnswer.review.flags?.length) {
+        const correctionContext = buildCorrectionSystemContent(prevAnswer.review.flags, prevAnswer.instructionGate?.activeIds || []);
+        effectiveQuestion = `${question}\n\n${correctionContext}`;
+        sendEvent("cross_turn_correction", {
+          turnId: turn?.id, previousTurnId: prevTurn.id,
+          flags: prevAnswer.review.flags.map((f) => f.type),
+        });
+      }
+    }
+
     const { turn } = await conversationStore.appendTurn(conversationId, {
-      question, sourceScope: effectiveScope, attachments,
+      question: effectiveQuestion, sourceScope: effectiveScope, attachments,
     });
     const answer = await conversationStore.addAnswer(conversationId, turn.id, {});
     sendEvent("accepted", {
-      turnId: turn.id, answerId: answer.id, question,
+      turnId: turn.id, answerId: answer.id, question: effectiveQuestion,
       sourceScope: effectiveScope, pool: pool || conv.pool || "corpus",
       mode: effectiveMode, webSearch: effectiveWebSearch,
     });
 
     const run = runAnswer({
       conv, turn, answerId: answer.id,
-      question, sourceScope: effectiveScope, pool: pool || conv.pool,
+      question: effectiveQuestion, sourceScope: effectiveScope, pool: pool || conv.pool,
       provider, model, mode: effectiveMode, webSearch: effectiveWebSearch,
     }, sendEvent);
 
