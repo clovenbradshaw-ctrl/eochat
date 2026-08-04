@@ -431,6 +431,92 @@ decide whether to trust the draft or wait for correction.
 
 ---
 
+## L6 — No implied completeness
+
+**Between showing a reader a compressed or truncated view of a source and
+showing them the source itself, the interface never implies the compressed
+view is everything.**
+
+A fold, a withheld-candidates list, a summary — every one of these
+necessarily omits something, and that omission is not a defect, it is the
+point of compressing. But a reader who cannot tell "this is a deliberate,
+navigable truncation" from "this is everything there is" will eventually be
+burned by the first case while trusting it like the second. Measured
+directly, not hypothetically: `engineFoldSource` already computes
+`withheld_total` (the true count before its own `limit` truncates the
+`withheld` array) specifically so, in its own comment, "a truncated list
+cannot be mistaken for the whole one" — and until this law's check found it,
+the fold panel's own "N shown" note compared only against its
+already-engine-truncated array, never against that true total. The engine
+was honest; the interface built on top of it silently was not.
+
+### Clauses
+
+- **L6a — A truncation the engine discloses must be reconciled, not
+  independently recomputed.** Any UI surface that lists items an engine
+  projection has already capped (`limit`, `withheld_total`,
+  `withheld_truncated`, or any future field of the same shape) must compare
+  its own "N shown" language against the engine's real total, not just
+  against the length of whatever array it happens to hold client-side.
+
+### Measurement
+
+`scripts/check-laws.mjs::checkNoImpliedCompleteness` — static, not live (the
+live version of this check needs a browser rendering real ingested content
+against the fold panel, which this script has no harness for; the checks
+elsewhere in this document that need a running proxy get one, this one does
+not need one to verify what it verifies). Confirms `ui/index.html`'s
+withheld-candidates panel reconciles its display note against
+`castDocs`-derived `withheldTotal` before claiming a count is complete.
+
+---
+
+## L7 — No silent degradation across language or medium
+
+**When an organ produces no signal because the content is outside what it
+can read — wrong script, wrong medium, wrong register — the interface says
+so. It never presents an empty or negative result as if it were a
+considered finding.**
+
+`cube/index.js`'s terrain classifier is, by its own header's admission, an
+English lexicon. Real ancient Greek correctly produces no signal from it —
+that is the classifier behaving exactly as designed, refusing to guess
+outside its competence. What was missing was telling the reader which of
+two very differently-shaped things they were looking at: "Signal detected:
+NO (dominant: Void)" reads, unqualified, like a claim about the *source* —
+that this passage is genuinely about nothing, an absence. The true state —
+"this specific classifier cannot read this script at all" — is a claim
+about the *tool's own scope*, and a reader (or a model) cannot tell the two
+apart from an identically-shaped empty result.
+
+### Clauses
+
+- **L7a — A no-signal result from a scope-limited organ discloses the scope
+  limit.** When an organ whose competence is documented as partial (a
+  language-specific lexicon, a medium-specific perceiver) returns no signal,
+  the surface presenting that result states the organ's known scope
+  alongside the negative finding, rather than presenting the negative
+  finding alone.
+- **L7b — The disclosure does not become noise.** The same surface must
+  render cleanly, without the scope caveat, when the organ does find real
+  signal — an always-on caveat is as dishonest in the other direction as a
+  silent one, because a reader who sees it on every result stops reading it
+  at all.
+
+### Measurement
+
+`scripts/check-laws.mjs::checkNoSilentDegradation` — real, not mocked: runs
+the actual vendored cube classifier (`vendor/eoreader5`, via
+`buildReadingFromBytes`) against real ancient Greek text and real English
+text with genuine terrain signal, through `server/terrain-report-format.js`'s
+`formatTerrainReport` — the exact function `terrain_report`'s tool handler
+calls, extracted to its own module so it is unit-testable without a live
+proxy or a model round-trip. Confirms the scope-ambiguity disclosure is
+present on the Greek case (L7a) and absent on the clean-signal English case
+(L7b).
+
+---
+
 ## Candidate laws
 
 Observed as consistent practice but not yet enforced by a check. Promote by

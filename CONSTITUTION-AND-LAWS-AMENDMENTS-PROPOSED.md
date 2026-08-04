@@ -207,50 +207,52 @@ silently blend.
 
 ---
 
-## Part B — Proposed new entries for `LAWS.md` (eochat host behavior)
+## Part B — APPLIED to `LAWS.md` as L6 and L7
 
 Narrower in scope than Part A on purpose — `LAWS.md` binds the host (clock,
 I/O, routing, UX) and explicitly cannot license a change to engine reading.
 These two are about how eochat communicates to a user, not about organ
-design.
+design. Unlike Part A, these have actually been applied — see `LAWS.md`
+for the final text, `scripts/check-laws.mjs::checkNoImpliedCompleteness`
+and `::checkNoSilentDegradation` for the real, currently-passing checks,
+and `server/proxy.js` / `server/terrain-report-format.js` / `ui/index.html`
+for the real fixes each law's check verifies.
 
-### Proposed L6 — No implied completeness
+**What changed between the first draft (below, kept for the record) and
+what actually shipped:** the first draft cited `multiAltitudeFold` for L6 —
+the standalone eoreader5 altitude-ladder mechanism this whole investigation
+tested directly. Checking eochat's actual production fold surface
+(`engineFoldSource`, reached through `/api/fold`) before writing a check
+found that mechanism isn't what eochat's UI renders at all, and — more
+importantly — found the UI's *real* surface already had substantial,
+deliberate anti-completeness-implying discipline (a `withheld`/`gaps`/
+provenance-tier system, careful comments about not letting absence read as
+a footnote). The real, live gap was narrower and more precise than the
+first draft guessed: `engineFoldSource` already computes `withheld_total`
+specifically so a truncated list can't be mistaken for the whole one, and
+the UI already threaded that total through per-document — but the specific
+panel listing withheld candidates compared its own "N shown" note against
+its own already-engine-truncated array, not against that real total. Fixed,
+not just documented, and the check verifies the fix.
 
-**Between showing a reader a compressed or folded view of a source and
-showing them the source itself, the interface never implies the compressed
-view is everything.**
+L7 held up close to as drafted: `terrain_report`'s "Signal detected: NO
+(dominant: Void)" line, unqualified, was a real, live instance of exactly
+what the law forbids, fixed by disclosing the scope ambiguity inline.
 
-A fold, summary, or altitude view necessarily omits most of the source —
-that is its function, not a defect. But a reader who cannot tell "this is
-a deliberate, navigable compression" from "this is the whole story" will
-eventually be burned by the first case while trusting it like the second.
-Every compressed view eochat shows a reader must carry a visible, honest
-signal of its own incompleteness and a real path to the fuller material
-underneath it — not a footnote, an affordance.
+Original draft text, for the record:
 
-**Check (proposed):** any UI surface that renders `multiAltitudeFold` (or
-any future fold/summary organ) output at less than its maximum altitude
-must render a visible drill-down affordance in the same view, not a
-separate settings toggle a reader has to already know to look for.
-
-### Proposed L7 — No silent degradation across language or medium
-
-**When an organ produces no signal because the content is outside what it
-can read (wrong script, wrong medium, wrong register), the interface says
-so — it never presents an empty or zero result as if it were a considered
-finding.**
-
-`cube/index.js` correctly returns no terrain signal on Greek because it is
-an English lexicon. That is the right ENGINE behavior. It is the wrong APP
-behavior to show a reader "Terrain: none detected" without distinguishing
-it from "Terrain: Field" — the first is `refuses to guess outside its
-competence`, the second is a real reading, and a reader cannot tell them
-apart from the same-shaped empty result.
-
-**Check (proposed):** any UI surface presenting an organ's output must be
-able to render a distinct "outside this organ's scope" state, sourced from
-that organ's own documented scope (see A2 above), separately from a
-genuine null/negative finding.
+> **Proposed L6 — No implied completeness.** Between showing a reader a
+> compressed or folded view of a source and showing them the source
+> itself, the interface never implies the compressed view is everything.
+> Check (proposed): any UI surface that renders `multiAltitudeFold` output
+> at less than its maximum altitude must render a visible drill-down
+> affordance in the same view.
+>
+> **Proposed L7 — No silent degradation across language or medium.** When
+> an organ produces no signal because the content is outside what it can
+> read, the interface says so. Check (proposed): any UI surface presenting
+> an organ's output must be able to render a distinct "outside this
+> organ's scope" state, separately from a genuine null/negative finding.
 
 ---
 
