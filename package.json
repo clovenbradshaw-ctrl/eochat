@@ -14,6 +14,7 @@
     "test:conversation-store": "node scripts/test-conversation-store.mjs",
     "test:turn-controller": "node scripts/test-turn-controller.mjs",
     "test:engine-ground": "node scripts/test-engine-ground.mjs",
+    "test:senses-runtime": "node scripts/test-senses-runtime.mjs",
     "test:project-instructions": "node scripts/test-project-instructions.mjs",
     "check:laws": "node scripts/check-laws.mjs",
     "postinstall": "git submodule update --init --recursive || true; node scripts/link-vendor-workspaces.mjs || true",
