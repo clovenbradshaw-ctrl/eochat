@@ -23,6 +23,11 @@
      nothing at load — the model itself is only fetched once init() is
      called (toggling "Local" on). -->
 <script type="module" src="./webllm-client.js"></script>
+<!-- Senses that install: Hugging Face vision models downloaded into this
+     browser and run here via Transformers.js, wired through window.EOSenses
+     for the same reason as above. Nothing is fetched at load — the weights
+     come down only when a sense is installed from Settings → Senses. -->
+<script type="module" src="./senses-runtime.js"></script>
 <!-- Universal file reading: identification by magic bytes, encoding detection,
      and client-side extraction for the container formats (DOCX/PPTX/XLSX/ODF/
      EPUB/ZIP/TAR/gzip/RTF/notebooks/mail). Published on window.EOFormats for
@@ -943,6 +948,7 @@
       <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:10px; min-height:0; overflow:hidden;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Senses</span>
         <span style="font-size:12px; color:#8C877C; line-height:1.5;">A library of vision models — screen grounding, general vision, OCR, and object detection. Subscribe to add one to your library; switch on "active" to run it on ingestion — several can be active at once. A sense needs an endpoint (self-hosted or cloud) before it actually runs; until then it's a library entry, not a working pipeline, and ingestion says so.</span>
+        <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">These reach models bigger than a browser can hold, at the cost of a server you host. For models that need neither — installed into this tab from Hugging Face and run here — see <span style="color:#4A463E;">Settings → Senses</span>. Both families run side by side on the same upload.</span>
         <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; max-width:100%;" class="eo-scrollbar">
           <sc-for list="{{ senseGenres }}" as="genre">
             <div style="border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4; overflow:hidden;">
@@ -1791,13 +1797,13 @@
 
   <sc-if value="{{ settingsOpen }}">
   <div onClick="{{ closeSettings }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:10vh 24px 24px; z-index:60;">
-    <div onClick="{{ stopSettingsClick }}" class="eo-fade-in" style="width:100%; max-width:480px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:16px;">
+    <div onClick="{{ stopSettingsClick }}" class="eo-fade-in" style="width:100%; max-width:560px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:16px;">
       <div style="display:flex; align-items:center; justify-content:space-between;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#6E6A60;">Settings</span>
         <button type="button" aria-label="Close settings" onClick="{{ closeSettings }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
       </div>
 
-      <div style="display:flex; flex-direction:column; gap:12px; flex:1; overflow-y:auto; max-height:52vh;" class="eo-scrollbar">
+      <div style="display:flex; flex-direction:column; gap:12px; flex:1; overflow-y:auto; max-height:62vh;" class="eo-scrollbar">
         <div style="display:flex; flex-direction:column; gap:8px;">
           <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">API Keys</span>
           <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">{{ settingsKeysHint }}</span>
@@ -1859,6 +1865,106 @@
                 <button type="button" onClick="{{ purgeLocalModels }}" style="align-self:flex-start; display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; border-radius:8px; background:none; color:#C0392B; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 9px; cursor:pointer;"><i class="ph ph-trash" style="font-size:12px;"></i>Delete downloaded models</button>
               </sc-if>
             </div>
+          </sc-if>
+        </div>
+
+        <div style="height:1px; background:#EBE6DC;"></div>
+
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">Senses</span>
+          <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">Machine-learning models from Hugging Face, installed into this browser and run here — no endpoint, no proxy, nothing leaves the tab. Install one, switch it on, and it reads every image you upload. Uninstalling deletes the weights again.</span>
+          <span style="font-size:11px; color:{{ sensesEnvColor }}; line-height:1.5;">{{ sensesEnvHint }}</span>
+
+          <div style="display:flex; gap:6px;">
+            <button type="button" onClick="{{ sensesShowLibrary }}" style="border:1px solid {{ sensesLibraryBorder }}; background:{{ sensesLibraryBg }}; color:{{ sensesLibraryColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;">Library · {{ sensesInstalledLabel }}</button>
+            <button type="button" onClick="{{ sensesShowHub }}" style="border:1px solid {{ sensesHubBorder }}; background:{{ sensesHubBg }}; color:{{ sensesHubColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;">Find on Hugging Face</button>
+          </div>
+
+          <sc-if value="{{ sensesTabIsLibrary }}">
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <sc-for list="{{ browserSenseGroups }}" as="g">
+              <div style="display:flex; flex-direction:column; gap:5px;">
+                <span style="display:flex; align-items:baseline; gap:7px;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#6E6A60;">{{ g.name }}</span>
+                  <span style="font-size:10.5px; color:#A39D91;">{{ g.detail }}</span>
+                </span>
+                <sc-for list="{{ g.items }}" as="bs">
+                  <div style="border:1px solid #E7E2D8; border-radius:8px; background:#FFFDFA; overflow:hidden;">
+                    <div style="display:flex; align-items:center; gap:8px; padding:8px 9px;">
+                      <button type="button" onClick="{{ bs.toggleContent }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:7px; text-align:left; border:0; background:none; padding:0; cursor:pointer; font-family:inherit;">
+                        <i class="{{ bs.chevronClass }}" style="font-size:10px; color:#A39D91; flex:none;"></i>
+                        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:#26241F;">{{ bs.name }}<span style="color:#A39D91;"> · {{ bs.vendor }}</span></span>
+                      </button>
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; letter-spacing:.03em; color:{{ bs.statusColor }}; background:{{ bs.statusBg }}; border-radius:5px; padding:2px 6px; flex:none; white-space:nowrap;">{{ bs.statusChip }}</span>
+                      <button type="button" onClick="{{ bs.installAction }}" style="border:1px solid {{ bs.installBorder }}; background:none; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:11px; color:{{ bs.installBorder }}; cursor:pointer; flex:none;">{{ bs.installLabel }}</button>
+                      <span style="display:flex; align-items:center; gap:4px; flex:none;">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">on</span>
+                        <button type="button" aria-label="Use this sense on ingestion" aria-pressed="{{ bs.enabled }}" onClick="{{ bs.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background:{{ bs.enabledSwitchBg }}; opacity:{{ bs.enabledOpacity }}; position:relative; cursor:pointer; padding:0;">
+                          <span style="position:absolute; top:2px; left:{{ bs.enabledKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                        </button>
+                      </span>
+                    </div>
+                    <sc-if value="{{ bs.installing }}">
+                      <div style="padding:0 9px 9px; display:flex; flex-direction:column; gap:4px;">
+                        <div style="height:3px; border-radius:2px; background:#EBE6DC; overflow:hidden;">
+                          <div style="height:100%; width:{{ bs.percentWidth }}; background:#1F5A4C; transition:width .2s;"></div>
+                        </div>
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#6E6A60;">{{ bs.statusText }}</span>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ bs.hasError }}">
+                      <div style="padding:0 9px 9px;">
+                        <span style="font-size:10.5px; color:#A3592B; line-height:1.5;">{{ bs.error }}</span>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ bs.expanded }}">
+                      <div style="padding:8px 9px 10px 25px; display:flex; flex-direction:column; gap:7px; border-top:1px solid #EBE6DC; margin:0 9px;">
+                        <span style="font-size:11px; color:#6E6A60; line-height:1.55;">{{ bs.summary }}</span>
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:{{ bs.hubColor }};">{{ bs.hubLine }}</span>
+                        <sc-if value="{{ bs.needsLabels }}">
+                          <div style="display:flex; flex-direction:column; gap:3px;">
+                            <span style="font-size:10.5px; color:#8C877C; line-height:1.5;">This model only finds what you name — comma-separated things to look for.</span>
+                            <input type="text" placeholder="{{ bs.promptPlaceholder }}" value="{{ bs.prompt }}" onChange="{{ bs.onPromptChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; padding:5px 8px; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#26241F; outline:none;" />
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ bs.removable }}">
+                          <button type="button" onClick="{{ bs.removeFromLibrary }}" style="align-self:flex-start; border:1px solid #E0DACE; background:none; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:10.5px; color:#A3592B; cursor:pointer;">Remove from library</button>
+                        </sc-if>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-for>
+            <span style="font-size:10.5px; color:#A39D91; line-height:1.55;">{{ sensesLibraryFooter }}</span>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ sensesTabIsHub }}">
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <input type="text" placeholder="e.g. florence, ocr, detection — blank lists the most downloaded" value="{{ sensesHubQuery }}" onChange="{{ onSensesHubQuery }}" style="flex:1; min-width:0; border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:6px 9px; font-family:inherit; font-size:11.5px; color:#26241F; outline:none;" />
+              <button type="button" onClick="{{ runSensesHubSearch }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:8px; padding:6px 11px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer; flex:none;">{{ sensesHubButtonLabel }}</button>
+            </div>
+            <span style="font-size:10.5px; color:{{ sensesHubStatusColor }}; line-height:1.55;">{{ sensesHubStatus }}</span>
+            <div style="display:flex; flex-direction:column; gap:5px; max-height:220px; overflow-y:auto;" class="eo-scrollbar">
+              <sc-for list="{{ sensesHubResults }}" as="hr">
+                <div style="display:flex; align-items:center; gap:8px; border:1px solid #E7E2D8; border-radius:8px; background:#FFFDFA; padding:6px 9px;">
+                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:1px;">
+                    <span style="font-size:11.5px; color:#26241F; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ hr.id }}</span>
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:{{ hr.licenseColor }};">{{ hr.meta }}</span>
+                  </div>
+                  <a href="{{ hr.url }}" target="_blank" rel="noopener" style="font-size:10.5px; color:#8C877C; flex:none;">HF ↗</a>
+                  <sc-if value="{{ hr.inLibrary }}">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#1F5A4C; flex:none;">in library</span>
+                  </sc-if>
+                  <sc-if value="{{ hr.notInLibrary }}">
+                    <button type="button" onClick="{{ hr.add }}" style="border:1px solid #1F5A4C; background:none; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:10.5px; color:#1F5A4C; cursor:pointer; flex:none;">Add</button>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
           </sc-if>
         </div>
       </div>
@@ -2109,6 +2215,18 @@ class Component extends DCLogic {
     // subscribable-in-place, it has to be "added" first (which is what turns
     // it into an ordinary entry in _senses). null = never checked.
     _sensesDiscover: null, _sensesDiscoverError: null, sensesDiscoverLoading: false,
+    // The other family of senses: Hugging Face models installed into THIS
+    // browser and run here (senses-runtime.js / window.EOSenses), no endpoint
+    // and no proxy. Mirrored from that module's snapshot rather than owned
+    // here — install state describes the browser's cache, and this file is
+    // not the authority on what is in it. null until the module reports in.
+    //
+    // Kept separate from `_senses` on purpose: the two families are backed by
+    // different stores for a real reason (a hosted endpoint is shared, a
+    // downloaded model is per-browser), and merging them into one list would
+    // mean syncing "enabled" to a machine where the weights were never
+    // downloaded. They meet only in the ingest paths, which take both.
+    _browserSenses: null, browserSenseOpen: {}, sensesHubQuery: '', settingsSensesTab: 'library',
     // Per-source engine projections, keyed by source name.
     //
     // `folds` carries the cast: referents a per-text prior actually typed, the
@@ -2219,6 +2337,15 @@ class Component extends DCLogic {
         window.EOWebLLM.init();
       }
     }
+    // window.EOSenses (senses-runtime.js) owns install/enable state for the
+    // browser-installed senses; this only mirrors its snapshot so render()
+    // can read it synchronously. Every install progress tick arrives through
+    // here, which is what keeps the download from looking like a hang.
+    if (window.EOSenses) {
+      this._unsubBrowserSenses = window.EOSenses.subscribe((snap) => {
+        this.setState({ _browserSenses: snap });
+      });
+    }
     this.bindEntityClicks();
   }
   componentWillUnmount() {
@@ -2226,6 +2353,7 @@ class Component extends DCLogic {
     if (this._healthTimer) clearInterval(this._healthTimer);
     if (this._onWindowKeyDown) document.removeEventListener('keydown', this._onWindowKeyDown);
     if (this._unsubLocalModel) this._unsubLocalModel();
+    if (this._unsubBrowserSenses) this._unsubBrowserSenses();
     if (this._onEntitySpanClick) document.removeEventListener('click', this._onEntitySpanClick);
   }
 
@@ -2885,16 +3013,177 @@ class Component extends DCLogic {
     this.fetchSensesDiscover(false);
   }
 
-  // Every active, connected sense in a category — what the ingest paths
-  // actually have to work with. A sense that's active but has no endpoint is
-  // deliberately excluded here (not run) and reported separately by the
-  // caller, per LAWS.md L2e: an unreachable sense is a gap, not a skip.
-  _activeConnectedSenses(category) {
-    return (this.state._senses || []).filter(sn => sn.category === category && sn.active && sn.endpoint);
+  // ── Browser-installed senses — the other half of the library, backed by
+  // window.EOSenses (senses-runtime.js) instead of the proxy. These download
+  // real weights into this browser and run here, so "install" costs bandwidth
+  // and disk and "on" actually runs something. Every method below is a thin
+  // pass-through: the module owns the state, this owns the log line, because
+  // a multi-hundred-megabyte download that leaves no trace in the activity
+  // log is exactly the silence LAWS.md L1 forbids. ──
+
+  // senses-runtime.js is a module script, so a network hiccup or a browser
+  // that refuses ES modules leaves this page running with no window.EOSenses
+  // at all. Every entry point below goes through here so that case surfaces
+  // as one specific sentence rather than a TypeError in the console and a
+  // button that does nothing.
+  _sensesRuntime() {
+    if (!window.EOSenses) {
+      this.logAdd('⊘', 'The in-browser senses runtime (senses-runtime.js) did not load, so nothing can be installed here. Reload the page; if it persists, the file is missing next to index.html.', 'sources');
+      return null;
+    }
+    return window.EOSenses;
   }
 
+  _browserSenseList() {
+    return (this.state._browserSenses && this.state._browserSenses.library) || [];
+  }
+
+  _browserSense(id) {
+    return this._browserSenseList().find(sn => sn.id === id) || null;
+  }
+
+  async installBrowserSense(id) {
+    const runtime = this._sensesRuntime();
+    if (!runtime) return;
+    const sense = this._browserSense(id);
+    const name = sense ? sense.name : id;
+    this.logAdd('○', `Installing "${name}" into this browser — downloading weights from Hugging Face…`, 'sources');
+    const result = await runtime.installWithRetry(id);
+    if (!result.ok) {
+      this.logAdd('⊘', `Could not install "${name}" — ${result.error}`, 'sources');
+      return;
+    }
+    const size = result.bytes ? ` (${(result.bytes / (1024 * 1024)).toFixed(1)} MB)` : '';
+    this.logAdd('●', `Installed "${name}"${size} — running on ${result.device}. Switch it on to use it on ingestion.`, 'sources');
+  }
+
+  async uninstallBrowserSense(id) {
+    const runtime = this._sensesRuntime();
+    if (!runtime) return;
+    const sense = this._browserSense(id);
+    const name = sense ? sense.name : id;
+    const result = await runtime.uninstall(id);
+    // How many cached files were actually deleted, not just "removed" — an
+    // uninstall whose whole point is reclaiming disk should say whether it did.
+    this.logAdd('○', `Uninstalled "${name}" — ${result.deleted} cached file(s) deleted from this browser`, 'sources');
+  }
+
+  toggleBrowserSenseEnabled(id) {
+    const runtime = this._sensesRuntime();
+    if (!runtime) return;
+    const sense = this._browserSense(id);
+    if (!sense) return;
+    if (!sense.installed) {
+      this.logAdd('⊘', `"${sense.name}" is not installed yet — install it first, then switch it on.`, 'sources');
+      return;
+    }
+    const next = !sense.enabled;
+    const result = runtime.setEnabled(id, next);
+    if (!result.ok) {
+      this.logAdd('⊘', `Could not switch "${sense.name}" ${next ? 'on' : 'off'} — ${result.error}`, 'sources');
+      return;
+    }
+    this.logAdd(next ? '●' : '○', `${next ? 'Switched on' : 'Switched off'} "${sense.name}" for ingestion`, 'sources');
+  }
+
+  setBrowserSensePrompt(id, text) {
+    if (window.EOSenses) window.EOSenses.setPrompt(id, text);
+  }
+
+  toggleBrowserSenseItem(id) {
+    const opening = !this.state.browserSenseOpen[id];
+    this.setState(s => ({ browserSenseOpen: { ...s.browserSenseOpen, [id]: !s.browserSenseOpen[id] } }));
+    // The Hub facts a row shows — license, download size, popularity — are
+    // fetched when the row is opened rather than shipped in the catalog, so
+    // nothing here is a remembered claim about a repo that may have changed.
+    if (opening) {
+      const sense = this._browserSense(id);
+      if (sense && !sense.hub && window.EOSenses) window.EOSenses.loadHubMeta(id);
+    }
+  }
+
+  // Searches the Hub straight from this browser — no proxy in the path, so
+  // this is the discovery route that works on the static build where
+  // /api/senses/discover cannot be reached at all.
+  async searchSensesHub() {
+    const runtime = this._sensesRuntime();
+    if (!runtime) return;
+    const q = this.state.sensesHubQuery;
+    this.logAdd('○', `Searching Hugging Face for browser-runnable vision models${q ? ` matching "${q}"` : ''}…`, 'sources');
+    const result = await runtime.searchHub(q);
+    if (result.error) {
+      this.logAdd('⊘', `Hugging Face search failed — ${result.error}`, 'sources');
+      return;
+    }
+    const dropped = result.filteredOut ? `, ${result.filteredOut} skipped (task this browser can't turn into text)` : '';
+    this.logAdd('○', `Hugging Face: ${result.results.length} installable model(s)${dropped}`, 'sources');
+  }
+
+  addHubSense(result) {
+    const runtime = this._sensesRuntime();
+    if (!runtime) return;
+    const added = runtime.addFromHub(result);
+    if (!added.ok) {
+      this.logAdd('⊘', `Could not add "${result.id}" — ${added.error}`, 'sources');
+      return;
+    }
+    this.logAdd('●', `Added "${result.id}" to the senses library — install it to download the weights`, 'sources');
+    // Re-run the search so the row it came from flips to "in library" from
+    // the same click, rather than staying an "Add" button that now lies.
+    if (this.state._browserSenses && this.state._browserSenses.search && this.state._browserSenses.search.results) {
+      runtime.searchHub(this.state._browserSenses.search.query);
+    }
+  }
+
+  async removeHubSense(id) {
+    const runtime = this._sensesRuntime();
+    if (!runtime) return;
+    const result = await runtime.removeFromLibrary(id);
+    if (!result.ok) {
+      this.logAdd('⊘', `Could not remove "${id}" — ${result.error}`, 'sources');
+      return;
+    }
+    this.logAdd('○', `Removed "${id}" from the senses library`, 'sources');
+  }
+
+  // Every sense in a category that is switched on AND can actually run —
+  // what the ingest paths have to work with. Both families qualify: a hosted
+  // sense with an endpoint, and a browser sense whose weights are installed.
+  // Anything switched on that cannot run is deliberately excluded here and
+  // reported separately by the caller, per LAWS.md L2e: an unreachable sense
+  // is a gap, not a skip.
+  _activeConnectedSenses(category) {
+    const hosted = (this.state._senses || [])
+      .filter(sn => sn.category === category && sn.active && sn.endpoint)
+      .map(sn => ({ ...sn, runtime: 'endpoint', scope: 'page' }));
+    const browser = this._browserSenseList()
+      .filter(sn => sn.category === category && sn.enabled && sn.installed);
+    return [...hosted, ...browser];
+  }
+
+  // Two different gaps, each named as itself. "Active but no endpoint" and
+  // "switched on but never installed" have different fixes, and collapsing
+  // them into one "not connected" message would send the reader to the wrong
+  // one half the time.
   _activeDisconnectedSenses(category) {
-    return (this.state._senses || []).filter(sn => sn.category === category && sn.active && !sn.endpoint);
+    const hosted = (this.state._senses || [])
+      .filter(sn => sn.category === category && sn.active && !sn.endpoint)
+      .map(sn => ({ ...sn, runtime: 'endpoint', gap: 'no endpoint set — add one in the Senses tab' }));
+    const browser = this._browserSenseList()
+      .filter(sn => sn.category === category && sn.enabled && !sn.installed)
+      .map(sn => ({ ...sn, gap: 'not installed — install it in Settings → Senses' }));
+    return [...hosted, ...browser];
+  }
+
+  // One call site for both families. A browser sense runs in this tab, a
+  // hosted one goes over the wire, and both return { text } — so the ingest
+  // paths below never branch on which kind they got.
+  async _callSense(sense, blob, extra = {}) {
+    if (sense.runtime === 'browser') {
+      if (!window.EOSenses) throw new Error('the in-browser senses runtime did not load — reload the page');
+      return window.EOSenses.run(sense.id, blob, extra);
+    }
+    return this._callSenseEndpoint(sense, blob, extra);
   }
 
   // Sends one image to one connected sense's endpoint and asks what it sees.
@@ -5172,13 +5461,23 @@ class Component extends DCLogic {
       // must see the same PDF-OCR behavior they always had. Anything
       // subscribed and activated in Senses runs *alongside* it, additively —
       // activating a sense never turns Tesseract off.
-      const otherOcrSenses = this._activeConnectedSenses('ocr').filter(sn => sn.id !== 'tesseract');
+      const readyOcrSenses = this._activeConnectedSenses('ocr').filter(sn => sn.id !== 'tesseract');
+      // A sense that reads one cropped line (TrOCR and its kin) is not run
+      // here: this loop renders whole pages, and handing a page to a
+      // line-level model returns one line's worth of text that reads like a
+      // failed transcription rather than a refusal. Named, not skipped —
+      // a reader who switched it on is owed the reason it did not appear.
+      const otherOcrSenses = readyOcrSenses.filter(sn => sn.scope !== 'image');
+      const lineOnlyOcrSenses = readyOcrSenses.filter(sn => sn.scope === 'image');
       const disconnectedOcrSenses = this._activeDisconnectedSenses('ocr').filter(sn => sn.id !== 'tesseract');
       const senseTexts = new Map();
       const runTesseract = !hasText && typeof Tesseract !== 'undefined';
       const runSenses = !hasText && otherOcrSenses.length > 0;
       if (!hasText && disconnectedOcrSenses.length) {
-        this.logAdd('⊘', `Active for OCR but not connected — no endpoint set for ${disconnectedOcrSenses.map(s => s.name).join(', ')}. Add one in the Senses tab.`, 'sources');
+        this.logAdd('⊘', `Switched on for OCR but not usable — ${disconnectedOcrSenses.map(s => `${s.name} (${s.gap})`).join('; ')}`, 'sources');
+      }
+      if (!hasText && lineOnlyOcrSenses.length) {
+        this.logAdd('○', `Not run on full pages — ${lineOnlyOcrSenses.map(s => s.name).join(', ')} transcribe one cropped line at a time. Tesseract.js handled the page OCR; upload a cropped line image to use them.`, 'sources');
       }
       if (runTesseract || runSenses) {
         this.logAdd('○', `No text layer in "${file.name}" — running OCR…`, 'sources');
@@ -5209,7 +5508,7 @@ class Component extends DCLogic {
             for (const sense of otherOcrSenses) {
               try {
                 this.logAdd('○', `OCR page ${i}/${pdf.numPages} (${sense.name})…`, 'sources');
-                const data = await this._callSenseEndpoint(sense, blob, { page: i, pages: pdf.numPages });
+                const data = await this._callSense(sense, blob, { page: i, pages: pdf.numPages });
                 const t = (data && data.text) || '';
                 senseTexts.set(sense.id, (senseTexts.get(sense.id) || '') + t + '\n\n');
                 eotEntries.push({ kind: 'sense-ocr', sense: sense.name, page: i, chars: t.length });
@@ -5284,8 +5583,8 @@ class Component extends DCLogic {
     if (!senses.length) {
       this.markSource(file.name, { processing: false, glyph: '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
       const gapNote = disconnected.length
-        ? ` — active but not connected: ${disconnected.map(s => s.name).join(', ')}. Add an endpoint in Senses.`
-        : ' — no vision sense is active. Pick one in the Senses tab and give it an endpoint.';
+        ? ` — switched on but not usable: ${disconnected.map(s => `${s.name} (${s.gap})`).join('; ')}`
+        : ' — no vision sense is running. Open Settings → Senses and install one (it downloads into this browser and needs no server), or give a sense an endpoint in the Senses tab.';
       // The reader shows the picture either way; this is why there is no text
       // beside it, said in the reader rather than only in the activity log.
       this._noteFileGap(file.name, `the image displays, but nothing indexed it${gapNote}`);
@@ -5297,16 +5596,16 @@ class Component extends DCLogic {
     const sections = [];
     for (const sense of senses) {
       try {
-        const data = await this._callSenseEndpoint(sense, file);
+        const data = await this._callSense(sense, file);
         const t = (data && data.text) || '';
-        if (t.trim()) sections.push(`--- ${sense.name} (${sense.category}) ---\n\n${t.trim()}`);
+        if (t.trim()) sections.push(`--- ${sense.name} (${sense.category}${sense.runtime === 'browser' ? ', in-browser' : ''}) ---\n\n${t.trim()}`);
         else this.logAdd('○', `${sense.name} returned nothing for "${file.name}"`, 'sources');
       } catch (err) {
         this.logAdd('⊘', `${sense.name} failed on "${file.name}" — ${err.message}`, 'sources');
       }
     }
     if (disconnected.length) {
-      this.logAdd('⊘', `Also active but not connected: ${disconnected.map(s => s.name).join(', ')}`, 'sources');
+      this.logAdd('⊘', `Also switched on but not usable: ${disconnected.map(s => `${s.name} (${s.gap})`).join('; ')}`, 'sources');
     }
 
     if (!sections.length) {
@@ -7094,6 +7393,153 @@ class Component extends DCLogic {
       settingsLocalBg: S.localModel ? '#1F5A4C' : 'none',
       settingsLocalColor: S.localModel ? '#FFFDFA' : '#8C877C',
       settingsLocalIcon: S.localModelStatus === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
+
+      // ── Settings → Senses. Hugging Face models installed into this browser
+      // (window.EOSenses / senses-runtime.js). Every fact shown here about a
+      // repo — license, download size, popularity — comes from the Hub at
+      // install or on expanding the row, never from a remembered constant, so
+      // a row cannot go on advertising a license the model no longer has. ──
+      sensesEnvHint: (S._browserSenses && S._browserSenses.env && S._browserSenses.env.hint)
+        || (typeof window !== 'undefined' && !window.EOSenses
+            ? 'The in-browser senses runtime (senses-runtime.js) did not load, so nothing can be installed here. Reload the page; if it persists, the file is missing next to index.html.'
+            : 'Checking what this browser can run…'),
+      sensesEnvColor: (typeof window !== 'undefined' && !window.EOSenses)
+        || (S._browserSenses && S._browserSenses.env && (!S._browserSenses.env.runnable || !S._browserSenses.env.cache))
+        ? '#A3592B' : '#8C877C',
+      sensesInstalledLabel: S._browserSenses
+        ? `${S._browserSenses.installedCount} installed · ${S._browserSenses.enabledCount} on`
+        : 'loading…',
+      sensesTabIsLibrary: S.settingsSensesTab !== 'hub',
+      sensesTabIsHub: S.settingsSensesTab === 'hub',
+      sensesShowLibrary: () => this.setState({ settingsSensesTab: 'library' }),
+      sensesShowHub: () => {
+        this.setState({ settingsSensesTab: 'hub' });
+        // First open searches immediately rather than showing an empty panel
+        // with a button — the most-downloaded list is a useful answer to
+        // "what can I install?" and costs one request.
+        if (!(S._browserSenses && S._browserSenses.search && (S._browserSenses.search.results || S._browserSenses.search.loading))) {
+          this.searchSensesHub();
+        }
+      },
+      sensesLibraryBorder: S.settingsSensesTab !== 'hub' ? '#1F5A4C' : '#E0DACE',
+      sensesLibraryBg: S.settingsSensesTab !== 'hub' ? '#E4EEE9' : '#FFFDFA',
+      sensesLibraryColor: S.settingsSensesTab !== 'hub' ? '#1F5A4C' : '#8C877C',
+      sensesHubBorder: S.settingsSensesTab === 'hub' ? '#1F5A4C' : '#E0DACE',
+      sensesHubBg: S.settingsSensesTab === 'hub' ? '#E4EEE9' : '#FFFDFA',
+      sensesHubColor: S.settingsSensesTab === 'hub' ? '#1F5A4C' : '#8C877C',
+      browserSenseGroups: (() => {
+        const lib = this._browserSenseList();
+        const order = (S._browserSenses && S._browserSenses.categoryOrder) || ['grounding', 'vlm', 'ocr', 'detection'];
+        const labels = {
+          grounding: { name: 'Screen grounding', detail: 'where something is on screen' },
+          vlm: { name: 'General vision', detail: 'what an image shows' },
+          ocr: { name: 'OCR', detail: 'text in an image' },
+          detection: { name: 'Object detection', detail: 'what + where' },
+        };
+        return order
+          .map(cat => ({ cat, items: lib.filter(sn => sn.category === cat) }))
+          .filter(g => g.items.length)
+          .map(g => ({
+            id: g.cat,
+            name: (labels[g.cat] || {}).name || g.cat,
+            detail: (labels[g.cat] || {}).detail || '',
+            items: g.items.map(sn => {
+              const opened = !!S.browserSenseOpen[sn.id];
+              // Four states, four different next actions — a single
+              // "installed / not installed" pair would hide the one that
+              // matters most, which is weights that were installed and have
+              // since been evicted from the browser cache.
+              const chip = sn.installing ? `${sn.percent}%`
+                : sn.cacheMissing ? 'cache cleared'
+                : sn.installed ? `installed${sn.device ? ` · ${sn.device}` : ''}`
+                : (sn.sizeLabel ? `${sn.sizeLabel} download` : 'not installed');
+              return {
+                id: sn.id,
+                name: sn.name,
+                vendor: sn.vendor,
+                summary: sn.summary,
+                statusChip: chip,
+                statusColor: sn.installed && !sn.cacheMissing ? '#1F5A4C' : (sn.installing ? '#4A463E' : '#A3592B'),
+                statusBg: sn.installed && !sn.cacheMissing ? '#E4EEE9' : (sn.installing ? '#F2EFE8' : '#FBEFE3'),
+                installLabel: sn.installing ? 'Installing…' : (sn.installed ? 'Uninstall' : 'Install'),
+                installBorder: sn.installed && !sn.installing ? '#A3592B' : '#1F5A4C',
+                installAction: (e) => {
+                  e.stopPropagation();
+                  if (sn.installing) return;
+                  if (sn.installed) this.uninstallBrowserSense(sn.id);
+                  else this.installBrowserSense(sn.id);
+                },
+                installing: sn.installing,
+                percentWidth: `${Math.max(2, sn.percent)}%`,
+                statusText: sn.statusText,
+                hasError: !!sn.error,
+                error: sn.error || '',
+                enabled: sn.enabled,
+                enabledSwitchBg: sn.enabled ? '#1F5A4C' : '#E0DACE',
+                enabledKnobLeft: sn.enabled ? '13px' : '2px',
+                // Dimmed rather than hidden while uninstalled — the switch
+                // exists before it can be used, and clicking it says why
+                // instead of doing nothing.
+                enabledOpacity: sn.installed ? 1 : 0.45,
+                toggleEnabled: (e) => { e.stopPropagation(); this.toggleBrowserSenseEnabled(sn.id); },
+                expanded: opened,
+                chevronClass: opened ? 'ph ph-caret-down' : 'ph ph-caret-right',
+                toggleContent: () => this.toggleBrowserSenseItem(sn.id),
+                hubLine: sn.hub
+                  ? `${sn.hub.license}${sn.hub.licenseFlag ? ' ⚠' : ''} · ${sn.sizeLabel || 'size unknown'}${sn.hub.sizeIsWholeRepo ? ' (whole repo — no quantized build)' : ''} · ${sn.hub.downloads.toLocaleString()} downloads · ${sn.task}`
+                  : `${sn.task} · reading license and size from Hugging Face…`,
+                hubColor: sn.hub && sn.hub.licenseFlag ? '#A3592B' : '#A39D91',
+                needsLabels: sn.needsLabels,
+                prompt: sn.prompt,
+                promptPlaceholder: sn.promptEffective,
+                onPromptChange: (e) => this.setBrowserSensePrompt(sn.id, e.target.value),
+                removable: sn.source === 'hub',
+                removeFromLibrary: (e) => { e.stopPropagation(); this.removeHubSense(sn.id); },
+              };
+            }),
+          }));
+      })(),
+      // The two families are additive, not alternatives, and a reader looking
+      // at an empty-ish install list should know the other one exists rather
+      // than concluding senses don't work here.
+      sensesLibraryFooter: (() => {
+        const hosted = (S._senses || []).filter(sn => sn.active);
+        const connected = hosted.filter(sn => sn.endpoint).length;
+        if (!hosted.length) return 'Endpoint-backed senses (Holo2, Qwen3-VL, dots.mocr and the rest) live in the Senses tab — they need a server you host, but reach models far larger than a browser can hold.';
+        return `Plus ${hosted.length} endpoint-backed sense(s) switched on in the Senses tab, ${connected} with an endpoint set.`;
+      })(),
+      sensesHubQuery: S.sensesHubQuery,
+      onSensesHubQuery: (e) => this.setState({ sensesHubQuery: e.target.value }),
+      runSensesHubSearch: () => this.searchSensesHub(),
+      sensesHubButtonLabel: (S._browserSenses && S._browserSenses.search && S._browserSenses.search.loading) ? 'Searching…' : 'Search',
+      // "Found nothing" and "couldn't reach the Hub" are different facts and
+      // must not read alike; so is "found 30, hid 26 because this browser
+      // can't run them", which is why the filtered count is printed rather
+      // than left to explain a mysteriously short list.
+      sensesHubStatus: (() => {
+        const search = S._browserSenses && S._browserSenses.search;
+        if (!search || (!search.results && !search.error && !search.loading)) {
+          return 'Searches huggingface.co for models tagged transformers.js — the ones that can run in a browser at all.';
+        }
+        if (search.loading) return 'Querying huggingface.co/api/models…';
+        if (search.error) return `Could not reach Hugging Face — ${search.error}`;
+        const n = search.results.length;
+        const dropped = search.filteredOut
+          ? ` · ${search.filteredOut} hidden (task this browser can't turn into text)`
+          : '';
+        return n ? `${n} installable model(s)${dropped}` : `No installable models matched${dropped}`;
+      })(),
+      sensesHubStatusColor: (S._browserSenses && S._browserSenses.search && S._browserSenses.search.error) ? '#A3592B' : '#A39D91',
+      sensesHubResults: (((S._browserSenses && S._browserSenses.search && S._browserSenses.search.results) || [])).map(r => ({
+        id: r.id,
+        url: r.url,
+        meta: `${r.category} · ${r.license}${r.licenseFlag ? ' ⚠' : ''} · ${r.downloads.toLocaleString()} downloads`,
+        licenseColor: r.licenseFlag ? '#A3592B' : '#A39D91',
+        inLibrary: r.inLibrary,
+        notInLibrary: !r.inLibrary,
+        add: () => this.addHubSense(r),
+      })),
+
       ...this._localCatalogProps(S),
       proxyLive: live, proxyDead: engineUnavailable,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
