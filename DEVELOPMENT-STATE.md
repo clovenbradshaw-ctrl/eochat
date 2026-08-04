@@ -453,6 +453,17 @@ these files call a model (Ollama) and touch the filesystem, both of which are
 `eochat-laws` (LAWS.md L1 — no dead air — is why every runner streams
 per-file/per-scene progress rather than blocking silently).
 
+## Another constitution-relevant item, unrelated to the above
+
+`ORGAN-STACK-REAL-DEPLOYMENT.md` (repo root) — the organ stack (vendor/
+eoreader5) run against real non-English-text and real audio deployment
+material, not synthetic fixtures. Found two Latin/ASCII-only bugs
+(`perceiver/text/surfaces.js`'s `\b` anchor, `emergence/store/index.js`'s
+tokenizer) plus a proposed testable principle for when omnimodal/universal
+claims in organ documentation should be trusted. Staged in eochat only
+because `eo-constitution` was not reachable from the session that did this
+work — belongs there, not here, once someone with access can move it.
+
 ## Key files, for quick orientation
 
 - `eochat/server/task-log.js` (+`.test.js`) — the spine, do not modify lightly
