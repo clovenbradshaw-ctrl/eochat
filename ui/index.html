@@ -6870,9 +6870,24 @@ class Component extends DCLogic {
       // proposed is routine. They are coloured apart because only one is a bug.
       color: w.from_prior ? '#A3592B' : '#8A857A',
     }));
-    const voidCandidateNote = castWithheld.length > 60
-      ? `60 of ${castWithheld.length} shown, prior-named first`
-      : `${castWithheld.length} candidate${castWithheld.length === 1 ? '' : 's'}`;
+    // LAWS.md L6 — engine-ground.js's engineFoldSource already computes
+    // withheld_total (the TRUE count before its own `limit` truncates the
+    // withheld array) and withheld_truncated specifically so "a truncated
+    // list cannot be mistaken for the whole one" (its own comment). That
+    // total was already threaded into castOfEnabledSources as d.withheldTotal
+    // and shown per-document (see the `cast:` summary line below), but this
+    // panel's own "N shown" note compared only against castWithheld.length —
+    // the already-engine-truncated array — so a document where the ENGINE
+    // itself had capped withheld at 40 out of, say, 200 real candidates would
+    // read as "40 candidates" here with nothing indicating 160 more exist
+    // upstream of this UI ever seeing them. Reconciled against the real
+    // total the engine already computed, not just this panel's own display cap.
+    const withheldTrueTotal = castDocs.reduce((sum, d) => sum + (d.withheldTotal || 0), 0);
+    const voidCandidateNote = withheldTrueTotal > castWithheld.length
+      ? `${Math.min(60, castWithheld.length)} of ${castWithheld.length} available shown (${withheldTrueTotal} total — the engine itself withheld the rest; refold with a higher limit to see more)`
+      : castWithheld.length > 60
+        ? `60 of ${castWithheld.length} shown, prior-named first`
+        : `${castWithheld.length} candidate${castWithheld.length === 1 ? '' : 's'}`;
     // Gaps are grouped by the field they are about, so nine engine gaps about
     // one unwired organ read as one finding instead of nine complaints.
     const voidGapRows = (() => {

@@ -48,6 +48,7 @@ import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies, PERCEIV
 import { createModelRouter } from "./model-router.js";
 import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
+import { formatTerrainReport } from "./terrain-report-format.js";
 import { compileInstructionFolds } from "./project-instructions.js";
 import { createInstructionGate, countTokens as gateCountTokens, DEFAULT_INSTRUCTION_BUDGET } from "./instruction-gate.js";
 import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
@@ -1803,42 +1804,13 @@ const toolHandlers = {
       const { buildReadingFromBytes } = await import(perceiverDispatchUrl());
       const bytes = await fsp.readFile(args.path);
       const reading = await buildReadingFromBytes(bytes);
-      const report = reading.terrain_report;
-      const gate = reading.born_gate;
-
-      if (!report) return `[No terrain report available for ${args.path}]`;
-
-      const lines = [
-        `Terrain Report for: ${args.path}`,
-        `Medium: ${report.medium}`,
-        `Signal detected: ${gate?.signalDetected ? "YES" : "NO"} ${gate?.signalDetected ? "" : "(dominant: Void)"}`,
-        `Covered (${report.covered?.length ?? 0}/9): ${(report.covered ?? []).join(", ") || "none"}`,
-        `Uncovered: ${(report.uncovered ?? []).join(", ") || "none"}`,
-        ``,
-      ];
-
-      const ev = report.evidence ?? {};
-      if (ev.states != null) lines.push(`States: ${ev.states}`);
-      if (ev.events != null) lines.push(`Events: ${ev.events}`);
-      if (ev.categories != null) lines.push(`Categories: ${ev.categories}`);
-      if (ev.associations != null) lines.push(`Associations: ${ev.associations}`);
-      if (ev.voids != null) lines.push(`Voids: ${ev.voids}`);
-      if (ev.paradigms != null) lines.push(`Paradigms: ${ev.paradigms}`);
-      if (ev.atmospheres != null) lines.push(`Atmosphere descriptors: ${ev.atmospheres}`);
-      if (ev.lenses != null) lines.push(`Lens characteristics: ${ev.lenses}`);
-      if (ev.holonicLevels) lines.push(`Holonic: states=${ev.holonicLevels.states}, events=${ev.holonicLevels.events}, phases=${ev.holonicLevels.phases}`);
-      if (ev.dominantTerrain) lines.push(`Dominant terrain: ${ev.dominantTerrain}`);
-      if (ev.dominantStance) lines.push(`Dominant stance: ${ev.dominantStance}`);
-      if (ev.classifier) lines.push(`Classifier: ${ev.classifier}`);
-      if (ev.terrainAmplitudes) {
-        const top = ev.terrainAmplitudes
-          .filter((a) => a.amplitude > 0.01)
-          .sort((a, b) => b.amplitude - a.amplitude)
-          .slice(0, 5);
-        if (top.length) lines.push(`Top terrain amplitudes: ${top.map((t) => `${t.label}=${t.amplitude.toFixed(3)}`).join(", ")}`);
-      }
-
-      return lines.join("\n");
+      // Formatting lives in terrain-report-format.js, not inline here, so
+      // scripts/check-laws.mjs's L7 check can import and test the EXACT
+      // production text (real ambiguity-disclosure included) without needing
+      // a live proxy or a model round-trip — proxy.js starts an HTTP server
+      // as a side effect of module load, so it cannot itself be imported
+      // just to unit-test one handler's output.
+      return formatTerrainReport(reading.terrain_report, reading.born_gate, args.path);
     } catch (err) {
       return `[Error analyzing ${args.path}: ${err.message}]`;
     }
