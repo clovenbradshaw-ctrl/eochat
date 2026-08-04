@@ -288,15 +288,55 @@ widely noted in Homeric scholarship as stylistically distinct) — ranks 10th
 of 24 by this measure, not conspicuously high, reported as-is rather than
 adjusted to fit the expectation that raised the check in the first place.
 
-**Combined verdict across both probes:** a linearly-blended, whole-corpus
-external prior from a work in the same formulaic tradition underperforms
-the existing within-text mechanism at every grain tested here — entity-
-level sentence surprise, structural boundary detection, and (more weakly,
-exploratory) macro content-zone differentiation. This does not settle
-whether *any* external prior could help at *any* grain — it settles that
-this specific, simple construction of one does not, at three grains it was
-actually tested against, and that finding is now reproducible rather than
-theorized.
+**Combined verdict across both probes:** a whole-corpus external prior from
+a work in the same formulaic tradition underperforms the existing
+within-text mechanism at every grain tested here — entity-level sentence
+surprise, structural boundary detection, and (more weakly, exploratory)
+macro content-zone differentiation.
+
+## Does a genuinely UNRELATED prior fare differently than a same-tradition one?
+
+Asked directly, and worth testing rather than assuming either answer:
+`scripts/probe-unrelated-prior.mjs` repeats both the entity-level and
+structure-level tests with a third, genuinely unrelated real source —
+Herodotus's *Histories*, 5th-century Ionic PROSE history (fetched from the
+same trusted Perseus source, its own TEI paragraph structure handled on its
+own terms rather than forced through the Odyssey/Iliad verse extractor) —
+against the same Odyssey subject text and the same real ground truth.
+"Unrelated" is measured, not asserted: lexical overlap with the Odyssey
+(Jaccard over each corpus's top 2000 words) is 13.0% for Herodotus vs. 36.6%
+for the Iliad.
+
+One architectural correction made before running this, worth stating on its
+own: the earlier probes' 50/50 "blend" condition averaged the external
+prior and the local within-text window into one hybrid distribution before
+scoring — letting the content-pass (recent real text) leak into what should
+be a clean, independent read of "surprising relative to genre." This probe
+computes local-surprise and external-surprise as two separate,
+independently derived numbers, never merged into a shared distribution. A
+prior's role stays strictly on the scoring side in both probes — it has
+never touched or altered any span's literal content, which has always
+stayed pure, verified source text — but keeping the *scores* themselves
+uncontaminated by each other turned out to matter for interpretability too.
+
+**Result: the unrelated prior clearly beats the same-tradition one at both
+grains, and nearly matches the baseline at the structural grain — but still
+does not clearly surpass the within-text baseline outright.**
+
+| | entity-level rank (disguise line) | boundary recall | boundary precision |
+|---|---|---|---|
+| within-text baseline | top 7.6% | 25.0% | 35.3% |
+| Iliad (same-tradition, 36.6% overlap) | top 28.3% | 16.7% | 16.0% |
+| Herodotus (unrelated, 13.0% overlap) | top 11.4% | 25.0% | 30.0% |
+
+This refines rather than overturns the earlier finding: the problem was
+never "external priors are inherently bad," it was specifically that the
+Iliad's high lexical/formulaic overlap with the Odyssey caused a naive
+frequency comparison to dilute local contrast instead of sharpening it. A
+genuinely distant source doesn't carry that same dilution — at the
+structural grain it comes close enough to the specialized within-text
+mechanism (identical recall, comparable precision) to call it competitive,
+even though it still didn't clearly win either test outright.
 
 ## Proposed constitutional-level takeaway
 
@@ -334,26 +374,41 @@ result above rather than asserted:
 
 > **A prior sourced from outside the text being read is not automatically
 > better than one derived from the text's own preceding context — test it,
-> do not assume it, and do not assume a grain where it failed is the only
-> grain where it would fail.** A background distribution built from a
-> genuinely separate work (here: the Iliad, for Odyssey surprise-scoring)
-> measurably *worsened* every test run against it, at every grain tested —
-> entity-level sentence surprise, real structural boundary detection
-> (checked against 24 real book markers, not invented ground truth), and
-> more weakly macro content-zone differentiation — because the external
-> source shared the target's formulaic tradition too closely: a naive
-> linear blend diluted local contrast instead of sharpening it at every
-> scale tried. "External" and "useful" are different properties;
-> conflating them is the same class of mistake as the corpus-prior dead
-> end, just with an easier-to-miss failure mode (it fails quietly worse,
-> not obviously broken) — worth naming as its own numbered dead-end in
-> whichever document tracks those. One more thing this specific chase
-> surfaced: the first structure-level run mis-set the comparison itself
-> (a boundary-detection threshold that did not match what production code
-> actually uses) and would have reported the *opposite* conclusion had it
-> not been checked against the real call site before being trusted — a
-> reminder that a probe's own calibration is exactly as fallible as the
-> engine it is testing, and needs exactly the same discipline.
+> do not assume it — and when it underperforms, measure WHY before
+> concluding external priors don't work at all.** A background distribution
+> built from a work in the same formulaic tradition as the subject text
+> (here: the Iliad, for Odyssey surprise-scoring) measurably *worsened*
+> every test run against it — entity-level sentence surprise, real
+> structural boundary detection (checked against 24 real book markers, not
+> invented ground truth), and more weakly macro content-zone
+> differentiation. Retested with a genuinely unrelated source (Herodotus,
+> 13.0% lexical overlap vs. the Iliad's 36.6%, measured not assumed): the
+> unrelated prior clearly outperformed the same-tradition one at every
+> grain, and matched the within-text baseline's recall exactly at the
+> structural grain, though it still did not clearly surpass the baseline
+> outright at either grain. The general lesson is sharper for having tested
+> both: **relatedness to the subject text is not incidental to whether an
+> external prior helps or hurts — a naive frequency comparison against a
+> too-similar source dilutes local contrast, while a sufficiently distant
+> source largely avoids that failure mode without yet clearly beating a
+> well-tuned within-text mechanism.** "External" and "useful" are different
+> properties, and now "how external" turns out to matter too; conflating
+> any of these is the same class of mistake as the corpus-prior dead end
+> already documented in `derive-audio-prior.mjs`, worth naming as its own
+> numbered dead-end (with this relatedness caveat attached) in whichever
+> document tracks those. A related, purely architectural correction from
+> the same chase: a prior must be kept on the scoring side only, as an
+> independent surprise signal — never blended into a shared distribution
+> with the local within-text window (an early version of this test did
+> exactly that), and never allowed to touch or alter the literal content of
+> any span, which must always stay pure, independently-verifiable source
+> text. Also worth recording: the first structure-level run mis-set the
+> comparison itself (a boundary-detection threshold that did not match what
+> production code actually uses) and would have reported the *opposite*
+> conclusion had it not been checked against the real call site before
+> being trusted — a reminder that a probe's own calibration is exactly as
+> fallible as the engine it is testing, and needs exactly the same
+> discipline.
 
 > **A "prompt deeper reading" / drill-down trigger must be driven by a real,
 > organ-computed significance signal (surprise, boundary detection, or
@@ -378,6 +433,7 @@ node scripts/probe-organs-real-deployment-audio.mjs  # audio — uses frankenste
 node scripts/probe-surf-fold-odyssey.mjs             # surf/fold compression + provenance + spine-triggered drill-down
 node scripts/probe-surf-fold-odyssey-surprise.mjs    # external (Iliad) prior experiment — also fetches + caches
 node scripts/probe-external-prior-structure-level.mjs  # same experiment at structure/macro grain, real ground truth
+node scripts/probe-unrelated-prior.mjs               # same-tradition (Iliad) vs. unrelated (Herodotus) prior, both grains
 ```
 
 Video (the third modality named alongside music) was scoped out of this
