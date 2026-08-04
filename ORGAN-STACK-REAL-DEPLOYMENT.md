@@ -338,6 +338,49 @@ structural grain it comes close enough to the specialized within-text
 mechanism (identical recall, comparable precision) to call it competitive,
 even though it still didn't clearly win either test outright.
 
+## Does turning on ALL the literature priors do even better?
+
+Asked directly: if a single unrelated work helps more than a single
+same-tradition one, does broadening to a genuinely large, multi-genre
+sample of Greek literature help more still? `scripts/probe-all-literature-
+prior.mjs` builds one aggregate prior from 13 real works across 9
+attested genres — epic (Iliad), didactic epic (Hesiod x2), tragedy
+(Aeschylus, Sophocles, Euripides), comedy (Aristophanes), philosophy
+(Plato's *Republic*), history (Herodotus, Thucydides), oratory
+(Demosthenes), prose memoir (Xenophon), lyric (Pindar) — 4,177,263 chars
+total, all fetched from the same trusted Perseus source, using a simpler
+generic tag-stripping extractor since bulk vocabulary for a background
+distribution doesn't need the clean structural boundaries the Odyssey's
+own ground truth required.
+
+**It does not win. It lands between the two single-work priors already
+tested, tracking lexical overlap almost exactly:**
+
+| prior | lexical overlap w/ Odyssey | entity-level rank | boundary recall | boundary precision |
+|---|---|---|---|---|
+| within-text baseline | — | top 7.6% | 25.0% | 35.3% |
+| Iliad alone (same-tradition) | 36.6% | top 28.3% | 16.7% | 16.0% |
+| **all 13 works, 6 genres** | **23.1%** | **top 17.7%** | **25.0%** | **27.3%** |
+| Herodotus alone (unrelated) | 13.0% | top 11.4% | 25.0% | 30.0% |
+
+Overlap 13.0% → 23.1% → 36.6% tracks entity-rank 11.4% → 17.7% → 28.3%
+almost monotonically. The aggregate's overlap sits *between* the two
+single-work priors, not below both, because it still *contains* the
+Iliad's high-overlap vocabulary as part of the mix — averaging in eleven
+genuinely distant works does not cancel out one highly-similar source
+dragging the net relatedness back up. At the structural grain the
+aggregate ties the baseline's recall (as Herodotus alone did) but with
+lower precision than Herodotus alone.
+
+**The finding this sharpens: net relatedness to the subject text is the
+lever, not corpus size or genre breadth.** A single, well-chosen distant
+source (Herodotus, 620K fewer chars than the aggregate) outperformed a
+4.2-million-character, 13-work, 6-genre sample, because that sample's
+average relatedness was higher, not lower, than the single best choice.
+"Turn on more priors" is not the same claim as "turn on the right prior,"
+and this is a measured instance of the difference, not an assumption
+about it.
+
 ## Proposed constitutional-level takeaway
 
 State as a testable principle, the way LAWS.md states laws (a failure it
@@ -386,18 +429,23 @@ result above rather than asserted:
 > unrelated prior clearly outperformed the same-tradition one at every
 > grain, and matched the within-text baseline's recall exactly at the
 > structural grain, though it still did not clearly surpass the baseline
-> outright at either grain. The general lesson is sharper for having tested
-> both: **relatedness to the subject text is not incidental to whether an
-> external prior helps or hurts — a naive frequency comparison against a
-> too-similar source dilutes local contrast, while a sufficiently distant
-> source largely avoids that failure mode without yet clearly beating a
-> well-tuned within-text mechanism.** "External" and "useful" are different
-> properties, and now "how external" turns out to matter too; conflating
-> any of these is the same class of mistake as the corpus-prior dead end
-> already documented in `derive-audio-prior.mjs`, worth naming as its own
-> numbered dead-end (with this relatedness caveat attached) in whichever
-> document tracks those. A related, purely architectural correction from
-> the same chase: a prior must be kept on the scoring side only, as an
+> outright at either grain. Tested a third way — a 13-work, 6-genre,
+> 4.2-million-character aggregate prior — and it did NOT do better still:
+> it landed BETWEEN the single-work priors, tracking measured lexical
+> overlap (13.0% / 23.1% / 36.6%) almost monotonically with performance,
+> because the aggregate still contained the high-overlap source as part of
+> its mix. The general lesson is sharper for having tested three
+> constructions, not one: **relatedness to the subject text — not
+> "external vs. internal," not corpus size, not genre breadth — is the
+> variable that determines whether a prior helps or hurts, and averaging
+> in many distant sources does not cancel out one closely related source
+> pulling net relatedness back up.** "External" and "useful" are different
+> properties; so are "more data" and "the right data." Conflating any of
+> these is the same class of mistake as the corpus-prior dead end already
+> documented in `derive-audio-prior.mjs`, worth naming as its own numbered
+> dead-end (with this relatedness caveat attached) in whichever document
+> tracks those. A related, purely architectural correction from the same
+> chase: a prior must be kept on the scoring side only, as an
 > independent surprise signal — never blended into a shared distribution
 > with the local within-text window (an early version of this test did
 > exactly that), and never allowed to touch or alter the literal content of
@@ -434,6 +482,7 @@ node scripts/probe-surf-fold-odyssey.mjs             # surf/fold compression + p
 node scripts/probe-surf-fold-odyssey-surprise.mjs    # external (Iliad) prior experiment — also fetches + caches
 node scripts/probe-external-prior-structure-level.mjs  # same experiment at structure/macro grain, real ground truth
 node scripts/probe-unrelated-prior.mjs               # same-tradition (Iliad) vs. unrelated (Herodotus) prior, both grains
+node scripts/probe-all-literature-prior.mjs          # 13-work, 6-genre aggregate prior — fetches ~4.2MB, slower
 ```
 
 Video (the third modality named alongside music) was scoped out of this
