@@ -237,6 +237,67 @@ searching for a word." Both claims are now backed by numbers, not asserted;
 the external-prior attempt is recorded as a real, informative negative
 result rather than quietly dropped.
 
+## Does the external prior fare better at the structural level than the entity level?
+
+The entity-level result raised an obvious follow-on question, asked
+directly: maybe an external genre prior is the wrong tool for one
+character's one sentence, but the right tool for something coarser —
+finding real structural boundaries (book/scene divisions) or
+differentiating large content-zones, rather than local narrative surprise.
+`scripts/probe-external-prior-structure-level.mjs` tests this with real
+ground truth: the Odyssey's own 24 real book-boundary markers (from the
+source TEI structure, not invented), and `text-organ.js`'s own
+`detectBoundaries` (frame-to-frame KL-divergence, z-scored against a local
+window — text-organ.js's existing structural-boundary organ, unmodified as
+the baseline, then re-run with the external distribution as the background
+instead of the local window, same z-scoring shell, so any difference is
+attributable to that one change).
+
+**One self-caught calibration bug worth recording before the result.** The
+first run of this probe used `detectBoundaries`'s own default
+`zThreshold=2.5` and found the baseline detecting **zero** boundaries at
+all — which would have made the external prior look like a clear win purely
+by comparison to a broken baseline. Checked before trusting it: `grep` of
+`multi-altitude-fold.js` and `entity-fold.js` shows production actually
+calls `detectBoundaries(frames, { zThreshold: 1.8 })`, not the function's
+own default. Re-run at the production threshold, the baseline finds real
+structure perfectly reasonably (17 boundaries, 6/24 real book-starts
+matched, 25.0% recall / 35.3% precision — against a ~4.5% base rate for 24
+true positives among 539 frames, a real signal). This is the third
+self-caught methodology bug in this investigation (after the TEI
+attribute-order regex and the provenance whitespace-normalization miss),
+and it mattered here specifically because trusting the first run would have
+reported the *opposite* conclusion from the corrected one.
+
+**At the corrected threshold, the external prior is worse at structure too,
+not better:** 25 boundaries detected, only 4/24 matched (16.7% recall,
+16.0% precision — precision roughly halved versus baseline). A 50/50 blend
+performs almost identically to the external-only version (16.7% recall,
+14.3% precision). The hypothesis that a same-tradition external prior would
+help at a coarser grain, even though it hurt at the sentence-entity grain,
+does **not** hold up empirically for this construction of "external prior"
+— it is worse at both granularities tested so far.
+
+A second, exploratory (no comparable hard ground truth) check: ranking all
+24 books by KL-divergence of their own vocabulary against the external
+Iliad prior. Book length and divergence score correlate at only -0.469 (not
+close to ±1, so the ranking is not simply a length artifact), which is a
+mild positive sign for the measure being real, even though it didn't help
+boundary detection. One independent spot-check — Book 11 (the Nekyia,
+widely noted in Homeric scholarship as stylistically distinct) — ranks 10th
+of 24 by this measure, not conspicuously high, reported as-is rather than
+adjusted to fit the expectation that raised the check in the first place.
+
+**Combined verdict across both probes:** a linearly-blended, whole-corpus
+external prior from a work in the same formulaic tradition underperforms
+the existing within-text mechanism at every grain tested here — entity-
+level sentence surprise, structural boundary detection, and (more weakly,
+exploratory) macro content-zone differentiation. This does not settle
+whether *any* external prior could help at *any* grain — it settles that
+this specific, simple construction of one does not, at three grains it was
+actually tested against, and that finding is now reproducible rather than
+theorized.
+
 ## Proposed constitutional-level takeaway
 
 State as a testable principle, the way LAWS.md states laws (a failure it
@@ -273,17 +334,26 @@ result above rather than asserted:
 
 > **A prior sourced from outside the text being read is not automatically
 > better than one derived from the text's own preceding context — test it,
-> do not assume it.** A background distribution built from a genuinely
-> separate work (here: the Iliad, for Odyssey surprise-scoring) measurably
-> *worsened* both a real-detail-ranking test and a real-vs-noise
-> discrimination test, because the external source shared the target's
-> formulaic tradition too closely: a naive linear blend diluted local
-> contrast instead of sharpening it. "External" and "useful" are different
-> properties; conflating them is the same class of mistake as the corpus-
-> prior dead end, just with an easier-to-miss failure mode (it fails
-> quietly worse, not obviously broken) — this is a genuine extension of that
-> existing principle, not a duplicate of it, and worth being named as its
-> own numbered dead-end in whichever document tracks those.
+> do not assume it, and do not assume a grain where it failed is the only
+> grain where it would fail.** A background distribution built from a
+> genuinely separate work (here: the Iliad, for Odyssey surprise-scoring)
+> measurably *worsened* every test run against it, at every grain tested —
+> entity-level sentence surprise, real structural boundary detection
+> (checked against 24 real book markers, not invented ground truth), and
+> more weakly macro content-zone differentiation — because the external
+> source shared the target's formulaic tradition too closely: a naive
+> linear blend diluted local contrast instead of sharpening it at every
+> scale tried. "External" and "useful" are different properties;
+> conflating them is the same class of mistake as the corpus-prior dead
+> end, just with an easier-to-miss failure mode (it fails quietly worse,
+> not obviously broken) — worth naming as its own numbered dead-end in
+> whichever document tracks those. One more thing this specific chase
+> surfaced: the first structure-level run mis-set the comparison itself
+> (a boundary-detection threshold that did not match what production code
+> actually uses) and would have reported the *opposite* conclusion had it
+> not been checked against the real call site before being trusted — a
+> reminder that a probe's own calibration is exactly as fallible as the
+> engine it is testing, and needs exactly the same discipline.
 
 > **A "prompt deeper reading" / drill-down trigger must be driven by a real,
 > organ-computed significance signal (surprise, boundary detection, or
@@ -307,6 +377,7 @@ node scripts/probe-organs-real-deployment.mjs        # text/Greek — fetches + 
 node scripts/probe-organs-real-deployment-audio.mjs  # audio — uses frankenstein-overture.wav already in the repo
 node scripts/probe-surf-fold-odyssey.mjs             # surf/fold compression + provenance + spine-triggered drill-down
 node scripts/probe-surf-fold-odyssey-surprise.mjs    # external (Iliad) prior experiment — also fetches + caches
+node scripts/probe-external-prior-structure-level.mjs  # same experiment at structure/macro grain, real ground truth
 ```
 
 Video (the third modality named alongside music) was scoped out of this
