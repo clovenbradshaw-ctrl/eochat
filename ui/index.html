@@ -28,6 +28,14 @@
      for the same reason as above. Nothing is fetched at load — the weights
      come down only when a sense is installed from Settings → Senses. -->
 <script type="module" src="./senses-runtime.js"></script>
+<!-- Universal file reading: identification by magic bytes, encoding detection,
+     and client-side extraction for the container formats (DOCX/PPTX/XLSX/ODF/
+     EPUB/ZIP/TAR/gzip/RTF/notebooks/mail). Published on window.EOFormats for
+     the same reason as EOWebLLM — the Component below is eval'd as a plain
+     script and cannot `import`. Everything in it is platform-native
+     (DecompressionStream, DOMParser, TextDecoder), so unlike the CDN libs
+     above it cannot fail to load independently of this page. -->
+<script type="module" src="./file-formats.js"></script>
 </head>
 <body>
 <x-dc>
@@ -80,9 +88,14 @@
      the narrow-screen media query below. */
   .eo-mobile-only { display: none; }
   .eo-backdrop { display: none; }
+  /* Rendered markdown. The host is a <div>, not a <span>: marked emits
+     <p>/<ul>/<pre>, and a block-level host is what actually matches that
+     content. (The old <span> host rendered the same, because it was a flex
+     item and so blockified anyway — but only by accident of its container.) */
   .eo-md { line-height:1.72; text-wrap:pretty; word-break:break-word; }
   .eo-md p { margin:0 0 .6em; }
-  .eo-md p:last-child { margin-bottom:0; }
+  .eo-md > :first-child { margin-top:0; }
+  .eo-md > :last-child { margin-bottom:0; }
   .eo-md ul, .eo-md ol { margin:.3em 0; padding-left:1.5em; }
   .eo-md li { margin:.15em 0; }
   .eo-md code { font-family:'IBM Plex Mono', monospace; font-size:.85em; background:#F1EEE7; border-radius:4px; padding:.15em .4em; color:#26241F; }
@@ -603,7 +616,7 @@
               </sc-if>
               <sc-if value="{{ turn.a }}">
                 <div style="max-width:96%; display:flex; flex-direction:column; gap:8px; border-radius:8px; outline: {{ turn.surfOutline }}; outline-offset:2px;">
-                  <span class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ turn.answerHtml }}}</span>
+                  <div class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ turn.answerHtml }}}</div>
                   <sc-if value="{{ turn.wasInterrupted }}">
                     <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A3592B;">⊘ stopped — partial answer</span>
                   </sc-if>
@@ -715,7 +728,7 @@
           </sc-for>
           <sc-if value="{{ streamingAnswer }}">
             <div style="max-width:96%; display:flex; flex-direction:column; gap:8px;">
-              <span class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ streamingAnswerHtml }}}</span>
+              <div class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ streamingAnswerHtml }}}</div>
               <sc-if value="{{ model }}">
                 <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">via {{ model }}</span>
               </sc-if>
@@ -753,7 +766,7 @@
             <input type="text" placeholder="Waiting for response…" value="" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#8C877C; padding:6px 0; cursor:default;" readonly />
           </sc-if>
           <sc-if value="{{ !inputDisabled }}">
-            <textarea class="eo-input-text" aria-label="Ask across your sources" placeholder="{{ composerPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" ref="{{ setComposerInput }}" rows="{{ 1 }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; line-height:1.5; color:#1B1A17; padding:6px 0; resize:none; overflow-y:auto; max-height:40vh;"></textarea>
+            <textarea class="eo-input-text" aria-label="Ask across your sources" placeholder="{{ composerPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" ref="{{ setComposerInput }}" rows="{{ 1 }}" style="flex:1; min-width:0; box-sizing:border-box; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; line-height:1.5; color:#1B1A17; padding:6px 0; resize:none; overflow-y:auto; max-height:40vh;"></textarea>
           </sc-if>
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
           <sc-if value="{{ hasModels }}">
@@ -1080,7 +1093,7 @@
               <sc-for list="{{ composeResultSections }}" as="rs">
                 <div style="display:flex; flex-direction:column; gap:8px;">
                   <span style="font-size:13.5px; font-weight:500; color:#26241F;">{{ rs.label }}</span>
-                  <span class="eo-md" style="font-size:13.5px; color:#1B1A17;">{{{ rs.contentHtml }}}</span>
+                  <div class="eo-md" style="font-size:13.5px; color:#1B1A17;">{{{ rs.contentHtml }}}</div>
                   <sc-for list="{{ rs.citations }}" as="cit">
                     <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
                       <div style="display:flex; align-items:center; gap:8px;">
@@ -1183,6 +1196,16 @@
           <span style="font-size:11.5px; color:#7A5A38; line-height:1.55;">{{ readerHighlightNote }}</span>
         </div>
       </sc-if>
+      <sc-if value="{{ hasReaderGap }}">
+        <!-- What this app could and could not do with these bytes, said once,
+             at the top, in the reader's own words. A capability this app
+             lacks is a named gap — never an empty panel the reader has to
+             interpret, and never text invented to fill one. -->
+        <div style="display:flex; align-items:flex-start; gap:7px; padding:9px 20px; background:#FBF6EF; border-bottom:1px solid #EADFCE;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A3592B; flex:none;">◱</span>
+          <span style="font-size:11.5px; color:#7A5A38; line-height:1.55;">{{ readerGapNote }}</span>
+        </div>
+      </sc-if>
       <sc-if value="{{ showSectionChips }}">
       <div style="display:flex; gap:6px; flex-wrap:wrap; padding:10px 20px; border-bottom:1px solid #EBE6DC;">
         <sc-for list="{{ docOutline }}" as="sec">
@@ -1253,6 +1276,91 @@
             <div style="display:flex; align-items:center; gap:8px; margin-bottom:18px; padding:0 2px; color:#A39D91; font-size:11.5px;">
               <span style="font-size:13px;">⊘</span>
               <span>Waveform is a mechanical amplitude trace, click to seek — no perceiver runs here, nothing is transcribed or analysed.</span>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ readerIsImage }}">
+            <!-- An image's native medium is the picture. Before this panel
+                 existed an uploaded .png opened as an empty reader: the bytes
+                 were held in a blob URL nothing ever rendered. Whatever a
+                 vision sense said about it appears below, attributed — the
+                 picture is the source, the description is a reading of it. -->
+            <div style="border:1px solid #EBE6DC; border-radius:10px; background:#FFFDFA; padding:12px; display:flex; justify-content:center; margin-bottom:8px;">
+              <img src="{{ readerImageSrc }}" alt="{{ readerName }}" style="max-width:100%; max-height:62vh; display:block; border-radius:6px; object-fit:contain;" />
+            </div>
+            <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; margin-bottom:16px;">{{ readerBinaryMeta }}</span>
+          </sc-if>
+
+          <sc-if value="{{ readerIsArchive }}">
+            <!-- An archive's content IS its listing. Text members are pulled
+                 out and indexed underneath; anything else is named and sized,
+                 which is the whole of what can be said about it without a
+                 decoder for its format. -->
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91;">{{ readerArchiveMeta }}</span>
+            </div>
+            <div style="overflow:auto; max-height:44vh; border:1px solid #E4DFD5; border-radius:8px; margin-bottom:16px;" class="eo-scrollbar">
+              <div style="display:grid; grid-template-columns: 1fr auto auto;">
+                <span style="padding:7px 11px; background:#F2EFE8; border-bottom:1px solid #E4DFD5; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#4A463E;">Entry</span>
+                <span style="padding:7px 11px; background:#F2EFE8; border-bottom:1px solid #E4DFD5; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#4A463E; text-align:right;">Size</span>
+                <span style="padding:7px 11px; background:#F2EFE8; border-bottom:1px solid #E4DFD5; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#4A463E; text-align:right;">Read</span>
+                <sc-for list="{{ readerArchiveRows }}" as="row">
+                  <span style="padding:6px 11px; font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#26241F; border-bottom:1px solid #F2EFE8; word-break:break-all;">{{ row.name }}</span>
+                  <span style="padding:6px 11px; font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#8C877C; border-bottom:1px solid #F2EFE8; text-align:right; white-space:nowrap;">{{ row.size }}</span>
+                  <span style="padding:6px 11px; font-family:'IBM Plex Mono', monospace; font-size:11px; color:{{ row.readColor }}; border-bottom:1px solid #F2EFE8; text-align:right; white-space:nowrap;">{{ row.read }}</span>
+                </sc-for>
+              </div>
+            </div>
+            <sc-if value="{{ readerArchiveTruncated }}">
+              <span style="display:block; font-size:11px; color:#A39D91; margin-bottom:14px;">{{ readerArchiveTruncatedNote }}</span>
+            </sc-if>
+          </sc-if>
+
+          <sc-if value="{{ readerIsOpaque }}">
+            <!-- No parser exists for these bytes. That is a statement about
+                 this app, not about the file, so the file is still shown: the
+                 bytes themselves (hex) and the printable runs inside them
+                 (strings). NEITHER is ingested — a strings dump in the search
+                 index would be a citable passage nobody wrote. -->
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px; background:#F2EFE8; border-radius:7px; padding:2px; width:fit-content;">
+              <button type="button" onClick="{{ setBinaryHex }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background:{{ readerHexBg }}; color:{{ readerHexColor }}; font-size:11px; padding:5px 9px; cursor:pointer; font-family:inherit;"><i class="ph ph-binary"></i>Hex</button>
+              <button type="button" onClick="{{ setBinaryStrings }}" style="display:flex; align-items:center; gap:5px; border:0; border-radius:5px; background:{{ readerStringsBg }}; color:{{ readerStringsColor }}; font-size:11px; padding:5px 9px; cursor:pointer; font-family:inherit;"><i class="ph ph-text-aa"></i>Strings</button>
+              <a href="{{ readerDownloadUrl }}" download="{{ readerName }}" style="display:flex; align-items:center; gap:5px; border-radius:5px; font-size:11px; padding:5px 9px; color:#8C877C; text-decoration:none;"><i class="ph ph-download-simple"></i>Save</a>
+            </div>
+            <span style="display:block; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; margin-bottom:8px;">{{ readerBinaryMeta }}</span>
+            <sc-if value="{{ readerShowHex }}">
+              <div style="overflow:auto; max-height:56vh; border:1px solid #EBE6DC; border-radius:8px; background:#FAF8F4; padding:12px 14px; margin-bottom:8px;" class="eo-scrollbar">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; line-height:1.6; color:#4A463E; white-space:pre;">{{ readerHexText }}</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{ readerShowStrings }}">
+              <div style="overflow:auto; max-height:56vh; border:1px solid #EBE6DC; border-radius:8px; background:#FAF8F4; padding:12px 14px; margin-bottom:8px;" class="eo-scrollbar">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; line-height:1.7; color:#4A463E; white-space:pre-wrap; word-break:break-all;">{{ readerStringsText }}</span>
+              </div>
+            </sc-if>
+            <span style="display:block; font-size:11px; color:#A39D91; margin-bottom:16px;">{{ readerBinaryFooter }}</span>
+          </sc-if>
+
+          <sc-if value="{{ readerIsUnrenderable }}">
+            <!-- A source this session never held the bytes of and has no text
+                 for: a binary already in the corpus, or one whose upload
+                 predates this tab. Naming it and offering what IS reachable
+                 beats the empty panel that used to render here. -->
+            <div style="display:flex; flex-direction:column; gap:10px; border:1px solid #EBE6DC; border-radius:10px; background:#FAF8F4; padding:16px 18px; margin-bottom:16px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#4A463E;">{{ readerUnrenderableTitle }}</span>
+              <span style="font-size:11.5px; color:#7A756A; line-height:1.6;">{{ readerUnrenderableNote }}</span>
+              <sc-if value="{{ readerHasDownload }}">
+                <a href="{{ readerDownloadUrl }}" download="{{ readerName }}" style="display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; width:fit-content;"><i class="ph ph-download-simple"></i>save the file</a>
+              </sc-if>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ readerHasAuxText }}">
+            <div style="display:flex; flex-direction:column; gap:8px; border-top:1px solid #EBE6DC; padding-top:14px; margin-bottom:16px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#A39D91;">{{ readerAuxLabel }}</span>
+              <div style="max-height:44vh; overflow-y:auto; background:#FAF8F4; border:1px solid #EBE6DC; border-radius:8px; padding:12px 14px;" class="eo-scrollbar">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; line-height:1.7; color:#3A372F; white-space:pre-wrap; word-break:break-word;">{{ readerAuxText }}</span>
+              </div>
             </div>
           </sc-if>
 
@@ -1730,6 +1838,34 @@
             <button type="button" aria-pressed="{{ localModel }}" onClick="{{ settingsToggleLocal }}" style="display:flex; align-items:center; gap:4px; border:1px solid {{ settingsLocalBorder }}; border-radius:8px; background:{{ settingsLocalBg }}; color:{{ settingsLocalColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ settingsLocalIcon }}" style="font-size:12px;"></i>Local</button>
             <span style="font-size:11px; color:#8C877C;">Answer in-browser via WebLLM (no proxy)</span>
           </div>
+          <sc-if value="{{ hasLocalCatalog }}">
+            <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
+              <div style="display:flex; flex-direction:column; gap:2px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">In-browser model</span>
+                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Weights download into this browser and stay cached. Only one is kept — installing another deletes the current one first to free the space.</span>
+              </div>
+              <sc-for list="{{ localCatalog }}" as="lm">
+                <button type="button" onClick="{{ lm.pick }}" style="display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left; border:1px solid {{ lm.border }}; border-radius:9px; background:{{ lm.bg }}; padding:9px 11px; cursor:pointer; font-family:inherit;">
+                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                      <span style="font-size:12.5px; font-weight:500; color:#26241F;">{{ lm.label }}</span>
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ lm.size }}</span>
+                      <sc-if value="{{ lm.state }}">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.04em; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 6px;">{{ lm.state }}</span>
+                      </sc-if>
+                    </div>
+                    <span style="font-size:11px; color:#8C877C; line-height:1.5;">{{ lm.note }}</span>
+                  </div>
+                </button>
+              </sc-for>
+              <sc-if value="{{ localStorageText }}">
+                <span style="font-size:11px; color:#A39D91;">{{ localStorageText }}</span>
+              </sc-if>
+              <sc-if value="{{ canPurgeLocal }}">
+                <button type="button" onClick="{{ purgeLocalModels }}" style="align-self:flex-start; display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; border-radius:8px; background:none; color:#C0392B; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 9px; cursor:pointer;"><i class="ph ph-trash" style="font-size:12px;"></i>Delete downloaded models</button>
+              </sc-if>
+            </div>
+          </sc-if>
         </div>
 
         <div style="height:1px; background:#EBE6DC;"></div>
@@ -1844,12 +1980,28 @@
 </div>
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;showGlyphs&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;proxyUrl&quot;:{&quot;editor&quot;:&quot;string&quot;,&quot;default&quot;:&quot;http://localhost:11435&quot;,&quot;section&quot;:&quot;Backend&quot;},&quot;sessionId&quot;:{&quot;editor&quot;:&quot;string&quot;,&quot;default&quot;:&quot;eochat&quot;,&quot;section&quot;:&quot;Backend&quot;}}">
-// Shared glyph/label vocabulary for the four source types the reader already
-// knows how to display — pdf(text)/video/audio/link, falling back to an
-// opaque binary. Used both to render the open reader and to mark a freshly
-// uploaded source the same way, so an upload isn't a visually distinct thing.
-const TYPE_GLYPH = { pdf: '●', video: '●', audio: '○', spreadsheet: '▦', link: '○', binary: '◱', image: '◱' };
-const TYPE_LABEL = { pdf: 'Text', video: 'Video', audio: 'Audio', spreadsheet: 'Sheet', link: 'Article', binary: 'File', image: 'Image' };
+// Shared glyph/label vocabulary for every source kind the reader can display.
+// Used both to render the open reader and to mark a freshly uploaded source
+// the same way, so an upload isn't a visually distinct thing.
+//
+// The kinds themselves are file-formats.js's taxonomy (window.EOFormats),
+// mirrored here so this page still renders if that module hasn't evaluated
+// yet — a race that only exists for the first paint, but which would
+// otherwise show every source as an unlabelled blank.
+const TYPE_GLYPH = {
+  text: '●', code: '⌗', data: '⌗', pdf: '●', document: '▤', presentation: '▨',
+  ebook: '▥', notebook: '▤', email: '✉', subtitle: '⌇', spreadsheet: '▦',
+  image: '◱', video: '●', audio: '○', archive: '▩', font: 'A', binary: '◱', link: '○',
+};
+const TYPE_LABEL = {
+  text: 'Text', code: 'Code', data: 'Data', pdf: 'PDF', document: 'Document',
+  presentation: 'Slides', ebook: 'Book', notebook: 'Notebook', email: 'Email',
+  subtitle: 'Captions', spreadsheet: 'Sheet', image: 'Image', video: 'Video',
+  audio: 'Audio', archive: 'Archive', font: 'Font', binary: 'File', link: 'Article',
+};
+// Which kinds the reader renders as running text. Everything else has its own
+// panel (a picture, a transport, an entry listing, a hex dump).
+const TEXT_SHAPED_KINDS = new Set(['text', 'code', 'data', 'pdf', 'document', 'presentation', 'ebook', 'notebook', 'email', 'subtitle']);
 
 // A display name that is layout, not a being. Section numbers ("II", "III"),
 // page figures ("1987"), and standalone structural headings ("Section",
@@ -1984,6 +2136,11 @@ class Component extends DCLogic {
     // for everyone else too once the first health check finds no engine at
     // all (see _defaultToLocalModelIfNoEngine).
     localModel: ON_GH_PAGES, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
+    // Mirrors of window.EOWebLLM's catalog: which in-browser models can be
+    // installed, which is active, which are already on disk, and how much
+    // storage this origin is using. Only one model is ever kept — installing
+    // another evicts the rest (see webllm-client.js selectModel).
+    localModelId: null, localCatalog: [], localStorageEstimate: null,
     spacesOpen: false, activeSpaceId: 'default', chatMode: 'chat', leftCollapsed: false, selectedEntity: null, activeTurnId: null,
     // Mobile off-canvas drawers for the Sources (left) and Entities (right)
     // panels below 900px. The desktop layout never reads these — the CSS only
@@ -2029,6 +2186,12 @@ class Component extends DCLogic {
     log: [],
     draftAttachments: [], editingTitleId: null, editTitleValue: '',
     readerContent: {},
+    // What each uploaded source turned out to BE, as read from its bytes:
+    // format identification, extraction method, encoding, any named gap, and
+    // for a file with no parser the hex/strings surfaces the reader shows in
+    // place of text. Keyed by source name, same as readerContent.
+    readerFileInfo: {},
+    readerBinaryView: 'hex',
     // Compose tab: a deliberate long-form generation action, distinct from
     // ambient chat — always runs holonic_task directly via /api/holonic
     // rather than waiting for the model to choose to call it. `composeSections`
@@ -2162,9 +2325,10 @@ class Component extends DCLogic {
     // runs, independent of React mount order — but guard anyway in case this
     // page is ever loaded without it.
     if (window.EOWebLLM) {
-      this.setState({ localModelStatus: window.EOWebLLM.status, localModelProgress: window.EOWebLLM.progress, localModelError: window.EOWebLLM.error });
+      const seed = window.EOWebLLM.snapshot();
+      this.setState({ localModelStatus: seed.status, localModelProgress: seed.progress, localModelError: seed.error, localModelId: seed.modelId, localCatalog: seed.catalog, localStorageEstimate: seed.storage });
       this._unsubLocalModel = window.EOWebLLM.subscribe((snap) => {
-        this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error });
+        this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error, localModelId: snap.modelId, localCatalog: snap.catalog, localStorageEstimate: snap.storage });
       });
       // localModel defaults on for ON_GH_PAGES (see state init above) — start
       // the download immediately rather than waiting for a manual toggle
@@ -2311,6 +2475,11 @@ class Component extends DCLogic {
   // (past which it scrolls). Height is reset to auto first so the box shrinks
   // again on delete — measuring scrollHeight against a previously grown box
   // only ever reports the old, larger height.
+  // Grow the composer to fit what is typed, up to 40vh. scrollHeight counts
+  // the textarea's padding, so the height assigned back to it has to be a
+  // border-box height (the element sets box-sizing:border-box for exactly
+  // this) — under content-box the padding is added a second time and every
+  // pass leaves the box taller than the text inside it needs.
   autoGrowComposer(el) {
     if (!el) return;
     el.style.height = 'auto';
@@ -3191,6 +3360,11 @@ class Component extends DCLogic {
       settingsOpen: !s.settingsOpen,
       settingsDraftKeys: { ...s._settingsApiKeys },
     }));
+    // Reading the model cache means loading the WebLLM module, so only do it
+    // when the panel that shows the answer is actually coming into view.
+    if (!this.state.settingsOpen && window.EOWebLLM) {
+      window.EOWebLLM.refreshCatalog().catch(() => {});
+    }
   }
   setDraftKey(provider, value) {
     this.setState(s => ({ settingsDraftKeys: { ...s.settingsDraftKeys, [provider]: value } }));
@@ -3225,19 +3399,50 @@ class Component extends DCLogic {
     );
   }
 
+  // The display kind of a source, by name alone.
+  //
+  // This used to be a nine-line regex ladder that knew about eleven
+  // extensions and answered 'binary' for everything else — which is why a
+  // .docx, a .go file, a .epub and a .zip all opened as the same empty panel.
+  // The taxonomy now lives in file-formats.js, next to the parsers that act
+  // on it, so adding a format is one edit rather than two that can disagree.
+  //
+  // Kind by NAME is a first guess; an uploaded file's kind is re-derived from
+  // its actual bytes during ingest (`_uploadKinds`), because the extension is
+  // the one part of a file anyone can change without changing the file.
   inferType(name) {
-    const n = name.toLowerCase();
+    const known = this._uploadKinds && this._uploadKinds.get(name);
+    if (known) return known;
+    const n = String(name || '');
     // Priors are addressed by id, not filename — `prior:coref/pg84-frankenstein`
     // has no extension and would fall through to 'binary', which renders a
     // placeholder instead of the content. Both prior layers are text.
-    if (n.startsWith('prior:')) return 'pdf';
-    if (n.match(/\.(mp4|mov|webm)$/)) return 'video';
-    if (n.match(/\.(wav|mp3|m4a|ogg)$/)) return 'audio';
-    if (n.match(/\.(png|jpe?g|gif|webp|bmp|svg)$/)) return 'image';
-    if (n.match(/\.(csv|tsv|xlsx|xls)$/)) return 'spreadsheet';
-    if (n.match(/\.(pdf|docx|doc|txt|md)$/)) return 'pdf';
-    if (n.startsWith('http')) return 'link';
-    return 'binary';
+    if (n.toLowerCase().startsWith('prior:')) return 'text';
+    if (/^https?:/i.test(n)) return 'link';
+    if (window.EOFormats) return window.EOFormats.kindOf(n);
+    // file-formats.js hasn't evaluated yet (first paint only). Text is the
+    // safer default than binary here: it renders content if there is any,
+    // and this answer is replaced as soon as the module lands.
+    return /\.[a-z0-9]+$/i.test(n) ? 'binary' : 'text';
+  }
+
+  // Record why a source that opened has no indexed text, so the reader can
+  // say it where the reader is looking instead of only in the activity log.
+  _noteFileGap(name, gap) {
+    this.setState(s => ({
+      readerFileInfo: {
+        ...(s.readerFileInfo || {}),
+        [name]: { ...((s.readerFileInfo || {})[name] || {}), gap },
+      },
+    }));
+  }
+
+  // Remember what a file's BYTES turned out to be, so every later render of
+  // that source (the rail, the reader, the orbit) agrees with what was
+  // actually parsed rather than with what the filename claimed.
+  _rememberKind(name, kind) {
+    if (!this._uploadKinds) this._uploadKinds = new Map();
+    if (kind) this._uploadKinds.set(name, kind);
   }
 
   // Splits spreadsheet text into rows/cells for the reader grid. As simple as
@@ -4449,6 +4654,42 @@ class Component extends DCLogic {
     if (window.EOWebLLM) window.EOWebLLM.init();
   }
 
+  // Install a different in-browser model. The old one's weights are deleted
+  // first — gigabytes each, and the browser's storage quota is shared with the
+  // reader's own documents and chats, so keeping two would put that data at
+  // risk of eviction. Confirm before starting: this both throws away a
+  // download the reader already paid for and begins a new one.
+  selectLocalModel(id) {
+    if (!window.EOWebLLM || !id || id === this.state.localModelId) return;
+    const next = (this.state.localCatalog || []).find(m => m.id === id);
+    const current = (this.state.localCatalog || []).find(m => m.id === this.state.localModelId);
+    // `cached === null` means the cache could not be read, not that nothing is
+    // there — the purge runs either way, so warn about it either way rather
+    // than promising a download that quietly deletes something.
+    const installed = (this.state.localCatalog || []).filter(m => m.cached !== false && m.id !== id);
+    const ok = window.confirm(
+      `Install ${next ? next.label : id}${next && next.size ? ' (' + next.size + ')' : ''}?\n\n`
+      + (installed.length
+        ? `This deletes the model you have now${current ? ' (' + current.label + ')' : ''} to free the space, then downloads the new one. Only one local model is kept at a time.`
+        : `It downloads now and stays cached for next time.`)
+    );
+    if (!ok) return;
+    // The model name shown in the composer follows the active model, so keep
+    // the picker's value in step when local mode is what's answering.
+    if (this.state.provider === 'local') this.setState({ model: id });
+    window.EOWebLLM.selectModel(id).catch((e) => {
+      console.error('[eochat] local model switch failed', e);
+    });
+  }
+
+  // Delete every cached model, active one included. The escape hatch when the
+  // browser is out of room and the reader would rather have the space back.
+  purgeLocalModels() {
+    if (!window.EOWebLLM) return;
+    if (!window.confirm('Delete all downloaded local models?\n\nThis frees the space immediately. Answering locally again will re-download the model.')) return;
+    window.EOWebLLM.purgeAll().catch((e) => console.error('[eochat] local model purge failed', e));
+  }
+
   // Render-time facts about the toggle: wanting local mode (`localModel`,
   // the reader's own choice) is a different fact from whether it can
   // currently be used (`localModelStatus`, mirrored from window.EOWebLLM) —
@@ -4491,9 +4732,47 @@ class Component extends DCLogic {
         : status === 'unsupported' ? S.localModelError
         : status === 'loading' ? `${S.localModelProgress.text} ${S.localModelProgress.percent}%`.trim()
         : status === 'error' ? `Local model: ${S.localModelError}`
-        : status === 'ready' ? `Local model ready — ${window.EOWebLLM ? window.EOWebLLM.modelId : ''} (answers stay in this tab, not saved)`
+        : status === 'ready' ? `Local model ready — ${window.EOWebLLM ? window.EOWebLLM.modelLabel() : ''} (answers stay in this tab, not saved)`
         : null,
       localStatusColor: (status === 'error' || status === 'unsupported') ? '#c0341a' : '#8C877C',
+    };
+  }
+
+  // The in-browser model catalog, as the Settings panel renders it. Each row
+  // carries its own state word — active / downloaded / not downloaded — so the
+  // reader can see before clicking which one costs a download and which is
+  // already paid for, and the section says out loud that installing one
+  // removes the others.
+  _localCatalogProps(S) {
+    const rows = (S.localCatalog || []).map((m) => {
+      const active = m.id === S.localModelId;
+      const busy = active && S.localModelStatus === 'loading';
+      return {
+        id: m.id,
+        label: m.label,
+        size: m.size,
+        note: m.note,
+        active,
+        state: busy ? `installing · ${S.localModelProgress.percent}%`
+          : active ? (S.localModelStatus === 'ready' ? 'active' : 'selected')
+          : m.cached === true ? 'downloaded'
+          : m.cached === false ? 'not downloaded'
+          : '',
+        border: active ? '#1F5A4C' : '#E4DFD5',
+        bg: active ? '#F1F5F3' : '#FFFDFA',
+        pick: () => this.selectLocalModel(m.id),
+      };
+    });
+    const est = S.localStorageEstimate;
+    const gb = (n) => (n / 1073741824).toFixed(1) + ' GB';
+    return {
+      localCatalog: rows,
+      hasLocalCatalog: rows.length > 0,
+      localStorageText: est && est.quota
+        ? `Browser storage: ${gb(est.usage)} used of about ${gb(est.quota)} available to this site.`
+        : '',
+      purgeLocalModels: () => this.purgeLocalModels(),
+      canPurgeLocal: rows.some(r => r.state === 'downloaded' || r.state === 'active'),
     };
   }
 
@@ -4712,7 +4991,7 @@ class Component extends DCLogic {
       title: 'Add source',
       label: 'URL or file path',
       placeholder: 'https://example.com/article',
-      hint: 'A URL is fetched, stripped of markup and chunked into the engine. A bare path resolves on the proxy host. To use a file from this machine, upload it — the bytes cross the wire; a link would not. Text formats (.txt/.md/.json/…) are indexed and citable; .csv/.tsv/.xlsx/.xls open as a real spreadsheet grid and are indexed too; .pdf is text-extracted via PDF.js and indexed; video/audio/DOCX have no parser yet, so they open in the reader but are not searchable.',
+      hint: 'A URL is fetched, stripped of markup and chunked into the engine. A bare path resolves on the proxy host. To use a file from this machine, upload it — the bytes cross the wire; a link would not. Almost anything is readable: prose, code and config in any encoding; .pdf via PDF.js with OCR when there is no text layer; .docx/.pptx/.odt/.odp/.epub/.rtf/.ipynb/.eml extracted client-side; .csv/.tsv/.xlsx/.xls/.ods as a real spreadsheet grid; .zip/.tar/.tar.gz listed with their text members indexed. Images display and are indexed by whatever vision sense you activate in Senses; video and audio play but nothing transcribes them. A format with no parser still opens — identified, in hex and printable strings — and says so rather than being indexed as garbage.',
       submitLabel: 'Ingest',
       upload: true,
       onSubmit: (ref) => this.ingestSource(ref)
@@ -4867,7 +5146,7 @@ class Component extends DCLogic {
       title: `Add document to ${project ? project.name : 'project'}`,
       label: 'URL or file path',
       placeholder: 'https://example.com/article',
-      hint: 'A URL is fetched, stripped of markup and chunked into this project\'s knowledge base. A bare path resolves on the proxy host. To use a file from this machine, upload it — text formats (.txt/.md/.json/.csv/.tsv/.xlsx/.xls/.pdf) are indexed and citable in this project; video/audio/DOCX open in the reader but are not searchable.',
+      hint: 'A URL is fetched, stripped of markup and chunked into this project\'s knowledge base. A bare path resolves on the proxy host. To use a file from this machine, upload it — prose, code, config, .pdf, .docx, .pptx, .odt, .epub, .rtf, .ipynb, .eml, spreadsheets and archives are all extracted client-side and citable in this project. Images need a vision sense to be searchable; video and audio play but are not transcribed; a format with no parser opens as identified bytes and says so instead of being indexed as garbage.',
       submitLabel: 'Ingest',
       upload: true,
       projectId,
@@ -4910,14 +5189,29 @@ class Component extends DCLogic {
     }
   }
 
-  // Only these extensions are safe to read with file.text() — everything
-  // `inferType` buckets as video/audio/binary is a real binary format (or, for
-  // .doc/.docx, one this app has no parser for) and decoding it as UTF-8
-  // produces mojibake, not text. Per the nameless-referent principle, a
-  // missing capability is a typed gap, never a silently wrong (garbled) span.
-  // .pdf is handled separately via PDF.js client-side extraction.
-  _isTextIngestible(name) {
-    return /\.(txt|md|markdown|json|js|jsx|ts|tsx|py|csv|tsv|html?|xml|log|css|ya?ml)$/i.test(name);
+  // Every uploaded file keeps a blob URL. It is the only thing that can be an
+  // <img>/<video>/<audio> src or a working download link for bytes that exist
+  // nowhere but this tab, and it costs nothing beyond the File the browser is
+  // already holding.
+  _blobUrlFor(file) {
+    if (!this._uploadBlobUrls) this._uploadBlobUrls = new Map();
+    if (!this._uploadBlobUrls.has(file.name)) this._uploadBlobUrls.set(file.name, URL.createObjectURL(file));
+    return this._uploadBlobUrls.get(file.name);
+  }
+
+  // L1c wants progress from long work; L1b wants signal, not noise. An
+  // archive with 900 members would emit 900 lines through a raw logAdd and
+  // bury everything else in the rail, so intermediate progress is rate-limited
+  // to one line every 400ms. Start and end are never throttled — those are
+  // emitted by the caller directly.
+  _throttledProgress(name) {
+    let last = 0;
+    return (msg) => {
+      const now = Date.now();
+      if (now - last < 400) return;
+      last = now;
+      this.logAdd('○', `"${name}" — ${msg}`, 'sources');
+    };
   }
 
   _extractTitle(text, fallback) {
@@ -4938,59 +5232,112 @@ class Component extends DCLogic {
     return fallback;
   }
 
-  // Uploads split three ways:
-  //  - text-ingestible files: bytes cross the wire and are chunked into the
-  //    engine, same as before — these are citable.
-  //  - .pdf: extracted client-side via PDF.js, then chunked into the engine.
-  //  - everything else (video/audio/doc/binary): no parser exists for these,
-  //    so the file is kept client-side as a blob URL for the reader (video
-  //    plays back; others get the same "not indexed" story the reader already
-  //    tells for pre-existing binary sources) instead of being mangled into
-  //    fake text and corrupting the search index.
+  // Every uploaded file is read as far as this app honestly can, and what
+  // "as far as" means is decided by the file's BYTES, not its name.
+  //
+  // Three paths need code that lives in this file rather than in
+  // file-formats.js, because each of them drives something else on the page:
+  //  - .pdf goes through PDF.js (which also renders pages and drives OCR),
+  //  - .xlsx/.xls prefer SheetJS (it reads legacy .xls and evaluates formulas),
+  //  - images go to the Senses pipeline (subscribed vision models).
+  // Everything else — DOCX, PPTX, ODT/ODS/ODP, EPUB, ZIP, TAR, gzip, RTF,
+  // notebooks, mail, source code, config, and any file at all whose bytes
+  // decode as text in any encoding — goes through EOFormats.extract.
+  //
+  // What has NOT changed is the discipline: a format with a real parser is
+  // parsed and indexed; a format without one is a named gap with its bytes on
+  // display, never mangled into fake text that would put untraceable mojibake
+  // into a corpus whose whole promise is that a citation leads somewhere.
+  //
   // When projectId is given (the left-panel "Documents" add), every ingest
   // below targets the project's own pool instead of the room session.
   async uploadFiles(fileList, projectId) {
     for (const file of fileList) {
       this.addSourceRow(file.name);
       this.markSource(file.name, { processing: true, glyph: '◌', color: '#A39D91' });
-      if (/\.(xlsx|xls)$/i.test(file.name)) {
+      this._blobUrlFor(file);
+
+      // Identify from the head of the file before choosing a reader. A .txt
+      // that is really a ZIP, or a file with no extension at all, is answered
+      // correctly here — the name is only consulted where the bytes are silent.
+      let id = null;
+      if (window.EOFormats) {
+        try {
+          const head = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
+          id = window.EOFormats.identify(file.name, head);
+        } catch { /* unreadable slice — fall back to the name below */ }
+      }
+      const kind = (id && id.kind) || this.inferType(file.name);
+      this._rememberKind(file.name, kind);
+      if (id && id.conflictNote) this.logAdd('◱', `"${file.name}" — ${id.conflictNote}`, 'sources');
+
+      if (kind === 'pdf') { await this._uploadPDFBinary(file, projectId); continue; }
+      if (kind === 'image' && id && id.format !== 'svg') { await this._uploadImageBinary(file, projectId); continue; }
+      if (kind === 'spreadsheet' && /\.(xlsx|xlsm|xlsb|xls)$/i.test(file.name) && typeof XLSX !== 'undefined') {
         await this._uploadSpreadsheetBinary(file, projectId);
         continue;
       }
-      if (/\.pdf$/i.test(file.name)) {
-        await this._uploadPDFBinary(file, projectId);
-        continue;
-      }
-      if (this.inferType(file.name) === 'image') {
-        await this._uploadImageBinary(file, projectId);
-        continue;
-      }
-      const type = this.inferType(file.name);
-      if (!this._isTextIngestible(file.name)) {
-        if (!this._uploadBlobUrls) this._uploadBlobUrls = new Map();
-        this._uploadBlobUrls.set(file.name, URL.createObjectURL(file));
-        const glyph = TYPE_GLYPH[type] || '◱';
-        const label = TYPE_LABEL[type] || 'File';
-        this.markSource(file.name, { processing: false, glyph, color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
-        this.logAdd('◱', `Stored "${file.name}" for reading — ${label.toLowerCase()} isn't parsed for search (no ${type} extractor)`, 'sources');
-        continue;
-      }
-      this.logAdd('○', `Ingesting "${file.name}"…`, 'sources');
-      try {
-        const text = await file.text();
-        const result = await this._ingestTextContent(file.name, text, projectId);
-        this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
-        // Cache locally so the reader can render it (e.g. the spreadsheet grid)
-        // without a round trip back through the proxy's attachment store.
-        this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: text } }));
-        if (type !== 'spreadsheet') this.fetchWindowOutline(file.name, text);
-        this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
-      } catch (err) {
-        this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
-        this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
-      }
+      await this._uploadParsedFile(file, projectId, kind);
     }
     this.fetchSources();
+  }
+
+  // The universal path. Hands the file to EOFormats, then reports exactly one
+  // of three outcomes — indexed, stored-with-a-named-gap, or failed — and
+  // keeps everything the reader needs to display the file either way.
+  async _uploadParsedFile(file, projectId, kindHint) {
+    const name = file.name;
+    if (!window.EOFormats) {
+      this.markSource(name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: 'file reader module unavailable' });
+      this.logAdd('⊘', `Cannot read "${name}" — file-formats.js did not load`, 'sources');
+      return;
+    }
+    this.logAdd('○', `Reading "${name}" — ${(TYPE_LABEL[kindHint] || 'file').toLowerCase()}…`, 'sources');
+    try {
+      const r = await window.EOFormats.extract(file, { onProgress: this._throttledProgress(name) });
+      this._rememberKind(name, r.kind);
+      // Everything the reader panels need, keyed by source name: the format
+      // identification, how it was read, and — for a file with no parser —
+      // the hex and printable-strings surfaces that let it still be looked at.
+      this.setState(s => ({
+        readerFileInfo: {
+          ...(s.readerFileInfo || {}),
+          [name]: {
+            kind: r.kind, format: r.format, label: r.label, method: r.method,
+            encoding: r.encoding, gap: r.gap, note: r.note, conflictNote: r.conflictNote,
+            entries: r.entries, meta: r.meta, size: r.size,
+            hex: r.hex || null, strings: r.strings || null, stringsTruncated: !!r.stringsTruncated,
+          },
+        },
+      }));
+
+      const text = r.text || '';
+      if (!text.trim()) {
+        this.markSource(name, { processing: false, glyph: TYPE_GLYPH[r.kind] || '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+        this.logAdd('◱', `Stored "${name}" for reading — ${r.gap || 'nothing indexable was found in it'}`, 'sources');
+        return;
+      }
+
+      const result = await this._ingestTextContent(name, text, projectId);
+      this.markSource(name, {
+        processing: false,
+        glyph: result.truncated ? '◐' : (TYPE_GLYPH[r.kind] || '●'),
+        color: result.truncated ? '#A3592B' : '#1F5A4C',
+        ingested: true, chunks: result.chunks || 0,
+        truncated: !!result.truncated, droppedChars: result.droppedChars || 0,
+      });
+      // Cache locally so the reader can render it (the spreadsheet grid, the
+      // extracted document) without a round trip back through the proxy's
+      // attachment store.
+      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
+      if (r.kind !== 'spreadsheet') this.fetchWindowOutline(name, text);
+      const how = r.method ? ` via ${r.method}` : '';
+      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${name}"${how} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
+      if (r.note) this.logAdd('◱', `"${name}" — ${r.note}`, 'sources');
+    } catch (err) {
+      this.markSource(name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
+      this.logAdd('⊘', `Upload failed for "${name}" — ${err.message}`, 'sources');
+    }
   }
 
   // LAWS.md L3 — the client used to cut `text` at 500,000 characters before
@@ -5038,23 +5385,45 @@ class Component extends DCLogic {
     this.markSource(file.name, { processing: true, glyph: '◌', color: '#A39D91' });
     this.logAdd('○', `Ingesting "${file.name}" as spreadsheet…`, 'sources');
     if (typeof XLSX === 'undefined') {
-      this.markSource(file.name, { processing: false, glyph: '◱', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
-      this.logAdd('◱', `Stored "${file.name}" for reading — SheetJS didn't load, spreadsheet not parsed`, 'sources');
+      // .xlsx is a ZIP this app can open unaided, so a missing CDN is no
+      // longer the end of the road — only .xls (legacy OLE2) truly needs
+      // SheetJS, and that path reports its own gap.
+      await this._uploadParsedFile(file, projectId, 'spreadsheet');
       return;
     }
     try {
       const buf = await file.arrayBuffer();
       const workbook = XLSX.read(buf, { type: 'array' });
-      const sheetName = workbook.SheetNames[0];
-      const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName]);
+      const names = workbook.SheetNames;
+      // Every sheet, not just the first. The reader's grid renders the first
+      // one; the rest follow behind a labelled break so they are present and
+      // searchable instead of being silently dropped from a workbook the
+      // reader can see has five tabs.
+      const csv = names
+        .map((n, i) => {
+          const body = XLSX.utils.sheet_to_csv(workbook.Sheets[n]);
+          return i === 0 ? body : `\n--- Sheet: ${n} ---\n${body}`;
+        })
+        .join('\n');
+      this._rememberKind(file.name, 'spreadsheet');
       const result = await this._ingestTextContent(file.name, csv, projectId);
-      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
-      this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: csv } }));
-      const moreSheets = workbook.SheetNames.length - 1;
-      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — parsed sheet "${sheetName}"${moreSheets ? ` (${moreSheets} more sheet(s) not shown)` : ''} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
+      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '▦', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
+      this.setState(s => ({
+        readerContent: { ...s.readerContent, [file.name]: csv },
+        readerFileInfo: {
+          ...(s.readerFileInfo || {}),
+          [file.name]: { kind: 'spreadsheet', format: 'xlsx', label: 'Spreadsheet workbook', method: 'sheetjs', size: file.size, meta: { sheets: names.length, sheetNames: names } },
+        },
+      }));
+      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${names.length} sheet(s): ${names.join(', ')} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
-      this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
-      this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
+      // SheetJS refusing a workbook is not the end of the road for .xlsx —
+      // it is a ZIP of XML this app can open unaided, and a reader who is
+      // looking at a file Excel opens fine does not care which library
+      // choked. Only .xls (legacy OLE2) has nowhere else to go, and that
+      // path reports its own named gap.
+      this.logAdd('◱', `SheetJS could not read "${file.name}" (${err.message}) — trying the built-in reader`, 'sources');
+      await this._uploadParsedFile(file, projectId, 'spreadsheet');
     }
   }
 
@@ -5069,8 +5438,8 @@ class Component extends DCLogic {
     try {
       const buf = await file.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-      if (!this._uploadBlobUrls) this._uploadBlobUrls = new Map();
-      this._uploadBlobUrls.set(file.name, URL.createObjectURL(file));
+      this._blobUrlFor(file);
+      this._rememberKind(file.name, 'pdf');
 
       let text = '';
       const layout = [];
@@ -5195,8 +5564,17 @@ class Component extends DCLogic {
   // not indexed — now with a pointer to where that changes.
   async _uploadImageBinary(file, projectId) {
     this.markSource(file.name, { processing: true, glyph: '◌', color: '#A39D91' });
-    if (!this._uploadBlobUrls) this._uploadBlobUrls = new Map();
-    this._uploadBlobUrls.set(file.name, URL.createObjectURL(file));
+    this._blobUrlFor(file);
+    this._rememberKind(file.name, 'image');
+    // The picture itself is displayable the moment it is uploaded, whether or
+    // not any sense ever describes it — record that before asking the senses,
+    // so the reader shows the image instead of an empty panel while they run.
+    this.setState(s => ({
+      readerFileInfo: {
+        ...(s.readerFileInfo || {}),
+        [file.name]: { kind: 'image', format: file.type || null, label: 'Image', size: file.size },
+      },
+    }));
 
     const categories = ['grounding', 'vlm', 'ocr', 'detection'];
     const senses = categories.flatMap(cat => this._activeConnectedSenses(cat));
@@ -5207,6 +5585,9 @@ class Component extends DCLogic {
       const gapNote = disconnected.length
         ? ` — switched on but not usable: ${disconnected.map(s => `${s.name} (${s.gap})`).join('; ')}`
         : ' — no vision sense is running. Open Settings → Senses and install one (it downloads into this browser and needs no server), or give a sense an endpoint in the Senses tab.';
+      // The reader shows the picture either way; this is why there is no text
+      // beside it, said in the reader rather than only in the activity log.
+      this._noteFileGap(file.name, `the image displays, but nothing indexed it${gapNote}`);
       this.logAdd('◱', `Stored "${file.name}" for reading — image not parsed for search${gapNote}`, 'sources');
       return;
     }
@@ -5404,6 +5785,12 @@ class Component extends DCLogic {
   // the attachment store remains the fallback for uploads.
   async fetchSourceContent(name) {
     if (this.state.readerContent[name]) return;
+    // A file whose bytes are already in this tab has been read as far as it
+    // can be; asking the proxy for its "text" would only produce
+    // "(Content not available)" under an image or an archive listing that is
+    // already complete. Text-shaped sources still ask, because the proxy can
+    // hold more of a large document than the upload path kept in memory.
+    if (this._uploadBlobUrls && this._uploadBlobUrls.has(name) && !TEXT_SHAPED_KINDS.has(this.inferType(name))) return;
     const put = (text) => this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
     try {
       const res = await fetch(this.proxyUrl() + '/api/source/text?source=' + encodeURIComponent(name), { signal: AbortSignal.timeout(30000) });
@@ -5466,18 +5853,22 @@ class Component extends DCLogic {
     const files = fileList.map((f, i) => ({ id: Date.now() + '-' + i, name: f.name, file: f }));
     this.setState(s => ({ draftAttachments: s.draftAttachments.concat(files) }));
     this.logAdd('●', `Attached ${fileList.length} file(s)`, 'sources');
-    this.uploadFiles(fileList);
-    fileList.forEach(async (f, i) => {
-      if (this._isTextIngestible(f.name)) {
-        try {
-          const head = await f.slice(0, 4096).text();
-          const title = this._extractTitle(head, f.name);
-          this.setState(s => ({
-            draftAttachments: s.draftAttachments.map(a => a.id === files[i].id ? { ...a, title } : a)
-          }));
-        } catch {}
-      }
-    });
+    // A chip's title comes from the EXTRACTED text, once the upload has read
+    // the file — never from the head of the raw bytes. Reading raw bytes
+    // worked while "ingestible" meant eleven plain-text extensions; the
+    // moment a .docx or a .pptx became readable it started decoding a ZIP's
+    // local file header as UTF-8 and titling the attachment "PK♥♦…slide1".
+    // What the parser produced is the only thing that is text for certain.
+    this.uploadFiles(fileList).then(() => this.setState(s => ({
+      draftAttachments: s.draftAttachments.map(a => {
+        const src = files.find(f => f.id === a.id);
+        if (!src || a.title) return a;
+        if (!TEXT_SHAPED_KINDS.has(this.inferType(src.name))) return a;
+        const text = s.readerContent[src.name];
+        if (typeof text !== 'string' || !text.trim()) return a;
+        return { ...a, title: this._extractTitle(text.slice(0, 4096), src.name) };
+      }),
+    })));
   }
 
   onSourceFilesSelected(e) {
@@ -6211,7 +6602,31 @@ class Component extends DCLogic {
       },
       delete: (e) => { e.stopPropagation(); this.deleteConversation(sp.id); },
     }));
-    const previewByType = { pdf: 'A PDF — text extracted via PDF.js, bonded to this room and citable.', video: 'Structure found by segmenting raw container bytes — no frame decoded.', audio: 'Transcribed locally by an on-device model.', spreadsheet: 'A spreadsheet — parsed into rows and columns, bonded to this room and citable.', link: 'A web source bonded and citable.', binary: 'Preview not available — stored as an opaque binary.' };
+    // The one-line story a source row tells before its text has loaded. Each
+    // line describes a pipeline that actually runs — the audio line used to
+    // claim "transcribed locally by an on-device model", which no code in
+    // this app does and which the reader's own audio panel contradicts three
+    // clicks away.
+    const previewByType = {
+      text: 'Text — chunked into the engine, bonded to this room and citable.',
+      code: 'Source text — chunked into the engine, bonded to this room and citable.',
+      data: 'Structured text — chunked into the engine, bonded to this room and citable.',
+      pdf: 'A PDF — text extracted via PDF.js (OCR when there is no text layer), bonded to this room and citable.',
+      document: 'A word-processor document — its text extracted client-side, bonded to this room and citable.',
+      presentation: 'A slide deck — the text of each slide extracted client-side and citable.',
+      ebook: 'A book — its chapters extracted in spine order and citable.',
+      notebook: 'A notebook — its markdown, code and text outputs extracted and citable.',
+      email: 'A message — headers and body decoded, bonded to this room and citable.',
+      subtitle: 'Captions — chunked into the engine, bonded to this room and citable.',
+      spreadsheet: 'A spreadsheet — parsed into rows and columns, bonded to this room and citable.',
+      archive: 'An archive — its entries listed, its text members extracted and citable.',
+      image: 'An image — it displays in the reader; text only if a vision sense read it.',
+      video: 'Video — it plays in the reader. No frame is decoded and nothing is transcribed.',
+      audio: 'Audio — it plays in the reader with a real waveform. Nothing is transcribed.',
+      font: 'A font — glyph shapes, no text layer to index.',
+      link: 'A web source bonded and citable.',
+      binary: 'No parser for this format — the reader shows its bytes; nothing is indexed.',
+    };
     const roomSources = this.roomSources();
     const activeSources = roomSources.map(s => {
       const type = this.inferType(s.name);
@@ -6555,26 +6970,37 @@ class Component extends DCLogic {
     const readerType = S.readerSourceName ? this.inferType(S.readerSourceName) : null;
     const readerGlyph = TYPE_GLYPH[readerType] || '●';
     const readerTypeLabel = TYPE_LABEL[readerType] || '';
+    // What the bytes turned out to be, recorded at upload. Absent for sources
+    // that arrived some other way (a URL, a corpus book, a prior card) — those
+    // fall back to the name-derived kind above.
+    const readerInfo = (S.readerSourceName && (S.readerFileInfo || {})[S.readerSourceName]) || null;
     // Only claim a pipeline that ran. Video and audio have no perceiver here —
     // their bytes are stored and displayed, nothing is decoded or transcribed —
     // so they name the gap instead of describing an analysis that never happened.
-    const readerPipelineLabel = { video: 'no video perceiver · bytes stored, not decoded', audio: 'no audio perceiver · bytes stored, not transcribed', spreadsheet: 'parsed into rows · cols' }[readerType] || null;
+    // Everything else says how it was actually read, which for the container
+    // formats is the difference between "a document" and "a document we
+    // extracted from OOXML and can therefore cite".
+    const readerPipelineLabel = { video: 'no video perceiver · bytes stored, not decoded', audio: 'no audio perceiver · bytes stored, not transcribed', spreadsheet: 'parsed into rows · cols' }[readerType]
+      || (readerInfo && readerInfo.method ? `read via ${readerInfo.method}${readerInfo.encoding ? ' · ' + readerInfo.encoding : ''}` : null);
     const contentText = S.readerSourceName ? (S.readerContent[S.readerSourceName] || 'Loading content…') : '';
     const contentLines = contentText.split('\n').filter(l => l.trim());
 
-    // `inferType` buckets .txt/.md/prior cards as 'pdf', but only a PDF this
-    // client actually parsed (PDF.js) has a layout. That distinction is what
-    // the render gates need: a real PDF takes the rendered/extracted/split
-    // reader; everything else text-shaped renders as plain text.
+    // Only a PDF this client actually parsed (PDF.js) has a page layout. That
+    // distinction is what the render gates need: a real PDF takes the
+    // rendered/extracted/split reader; everything else text-shaped renders as
+    // plain text.
     const readerIsPDFKind = readerType === 'pdf' && !!(S.readerPDFLayout && S.readerPDFLayout[S.readerSourceName]);
+    // The one question every gate below is really asking: does this source
+    // render as running text, or does it have a panel of its own?
+    const readerTextShaped = TEXT_SHAPED_KINDS.has(readerType) && readerType !== 'spreadsheet';
 
     // ── Reader OVERVIEW — the default surface for a plain text document.
     // Center panel shows the document's structure (title, stats, the engine's
     // boundary-detected headings) and the side rail shows the raw-text PREVIEW.
     // "Read" switches the center to the full text. Only text-shaped sources get
     // an overview; a real PDF keeps its own rendered/extracted/split modes and
-    // video/audio/spreadsheet have no structure to show.
-    const readerOverviewMode = S.readerOverview && readerType === 'pdf' && !readerIsPDFKind && !!S.readerSourceName;
+    // image/video/audio/archive/binary/spreadsheet have no structure to show.
+    const readerOverviewMode = S.readerOverview && readerTextShaped && !readerIsPDFKind && !!S.readerSourceName;
     // Two outlines can exist for the one open document:
     //  - the DOCUMENT outline (S.outlines) is byte-addressed, measured
     //    against the file on disk, and can name a heading past what's
@@ -6634,6 +7060,78 @@ class Component extends DCLogic {
     const readerPreviewMeta = readerPreviewReady
       ? `${readerPreviewContent.trim().split(/\s+/).filter(Boolean).length.toLocaleString()} words`
       : '';
+
+    // ── Panels for sources that are not running text ──────────────────────
+    // An uploaded file's bytes live only in this tab, so its blob URL is the
+    // only thing that can be an <img> src or a working download link. A
+    // source that came from somewhere else (a URL, a file on the proxy host)
+    // is already addressable by its own name.
+    const readerDisplaySrc = S.readerSourceName
+      ? ((this._uploadBlobUrls && this._uploadBlobUrls.get(S.readerSourceName))
+        || (/^https?:|^\.?\//i.test(S.readerSourceName) ? S.readerSourceName : ''))
+      : '';
+    const fmtBytes = (n) => (window.EOFormats ? window.EOFormats.formatBytes(n) : `${n} B`);
+
+    const readerArchiveEntries = (readerInfo && readerInfo.entries) || [];
+    const readerArchiveRows = readerArchiveEntries.slice(0, 500).map(e => {
+      // "Read" is not decoration — it is the difference between a member whose
+      // words are searchable and one that is only listed. Saying which is
+      // which is the whole point of showing the listing.
+      const indexed = contentText.includes(`--- ${e.name} ---`);
+      return {
+        name: e.name,
+        size: fmtBytes(e.size),
+        read: indexed ? 'indexed' : '—',
+        readColor: indexed ? '#1F5A4C' : '#A39D91',
+      };
+    });
+    const readerArchiveMeta = readerInfo && readerInfo.meta
+      ? `${readerInfo.meta.members} entr${readerInfo.meta.members === 1 ? 'y' : 'ies'} · ${readerInfo.meta.textMembersRead || 0} read as text and indexed`
+      : `${readerArchiveEntries.length} entries`;
+
+    // Opaque: identified, but with no parser. Shown as its own bytes rather
+    // than as an empty panel — and only when we actually hold those bytes.
+    const readerOpaque = !!(readerInfo && readerInfo.hex
+      && (readerType === 'binary' || readerType === 'font' || (!contentText.trim() && readerType !== 'image' && readerType !== 'video' && readerType !== 'audio')));
+    const readerBinaryMeta = readerInfo
+      ? [readerInfo.label, readerInfo.format ? `format: ${readerInfo.format}` : null, readerInfo.size != null ? fmtBytes(readerInfo.size) : null]
+        .filter(Boolean).join(' · ')
+      : '';
+    const readerBinaryFooter = readerInfo && readerInfo.hex
+      ? (readerInfo.hex.truncated
+        ? `first ${fmtBytes(readerInfo.hex.shown)} of ${fmtBytes(readerInfo.hex.total)} — neither view is indexed, and neither is a reading of the file`
+        : 'the whole file — neither view is indexed, and neither is a reading of the file')
+      : '';
+
+    // Text that sits under a non-text panel rather than replacing it.
+    const readerAuxReady = !!contentText && contentText !== 'Loading content…' && contentText !== 'Loading prior…'
+      && !String(contentText).startsWith('(Content not available');
+    const readerAuxText = readerAuxReady && (readerType === 'image' || readerType === 'archive') ? contentText : '';
+    // Say where the text under a picture came from. An SVG's words are IN the
+    // file (its <title>/<desc>/<text> nodes); a raster image's words are a
+    // model's reading of it. Labelling both "what the senses read" would
+    // credit a sense that never ran.
+    const readerAuxLabel = readerType !== 'image'
+      ? 'Indexed text from this archive'
+      : (readerInfo && /^svg\//.test(readerInfo.method || '') ? 'Text inside this image' : 'What the senses read in it');
+
+    // One banner, one sentence, for whatever this app could not do with these
+    // bytes — plus the two notes that qualify a successful read (an extension
+    // that lied, a fallback that was taken).
+    const readerGapNote = readerInfo
+      ? [readerInfo.gap, readerInfo.conflictNote, readerInfo.note].filter(Boolean).join(' · ')
+      : '';
+
+    // The last resort, and the one case the reader used to answer with a
+    // blank panel: a source with no text, no bytes in this tab, and no panel
+    // of its own. It still gets a name for what it is and a way out.
+    const readerIsUnrenderable = !!S.readerSourceName && !readerOverviewMode && !readerTextShaped
+      && !readerIsPDFKind && !readerOpaque
+      && !['image', 'video', 'audio', 'archive', 'spreadsheet'].includes(readerType);
+    const readerUnrenderableTitle = `${TYPE_LABEL[readerType] || 'File'} — ${S.readerSourceName || ''}`;
+    const readerUnrenderableNote = readerInfo && readerInfo.gap
+      ? readerInfo.gap
+      : 'No text was extracted from this source and its bytes are not held in this tab, so there is nothing to render here. Re-upload it to read it.';
 
 
     // Locating a cited span: prefer its verbatim text, not its byte offsets.
@@ -7042,6 +7540,7 @@ class Component extends DCLogic {
         add: () => this.addHubSense(r),
       })),
 
+      ...this._localCatalogProps(S),
       proxyLive: live, proxyDead: engineUnavailable,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
       usingLocalModelBadge: !live && usingLocalModel,
@@ -7392,6 +7891,44 @@ class Component extends DCLogic {
       readerName: S.readerSourceName, readerGlyph, readerTypeLabel, readerPipelineLabel,
       showReaderPipeline: !!readerPipelineLabel, showSectionChips: docOutline.length > 1,
       readerIsVideo: readerType === 'video', readerIsAudioType: readerType === 'audio',
+
+      // ── Image / archive / opaque-binary panels ─────────────────────────
+      // Three kinds of source that used to open as an empty reader, each
+      // shown in the medium it actually has: a picture, an entry listing,
+      // and the bytes themselves.
+      readerIsImage: readerType === 'image' && !!readerDisplaySrc,
+      readerImageSrc: readerDisplaySrc,
+      readerIsArchive: readerType === 'archive',
+      readerArchiveRows, readerArchiveMeta,
+      readerArchiveTruncated: readerArchiveEntries.length > readerArchiveRows.length,
+      readerArchiveTruncatedNote: `showing the first ${readerArchiveRows.length} of ${readerArchiveEntries.length} entries`,
+      // "Opaque" is the honest word: bytes this app has identified but cannot
+      // read. Fonts, executables, databases, compressed formats with no
+      // in-browser decoder, and anything whose signature matched nothing.
+      readerIsOpaque: readerOpaque,
+      readerShowHex: readerOpaque && S.readerBinaryView !== 'strings',
+      readerShowStrings: readerOpaque && S.readerBinaryView === 'strings',
+      setBinaryHex: () => this.setState({ readerBinaryView: 'hex' }),
+      setBinaryStrings: () => this.setState({ readerBinaryView: 'strings' }),
+      readerHexBg: S.readerBinaryView !== 'strings' ? '#1F5A4C' : 'transparent',
+      readerHexColor: S.readerBinaryView !== 'strings' ? '#FFFDFA' : '#8C877C',
+      readerStringsBg: S.readerBinaryView === 'strings' ? '#1F5A4C' : 'transparent',
+      readerStringsColor: S.readerBinaryView === 'strings' ? '#FFFDFA' : '#8C877C',
+      readerHexText: readerInfo && readerInfo.hex ? readerInfo.hex.text : '',
+      readerStringsText: readerInfo && readerInfo.strings && readerInfo.strings.length
+        ? readerInfo.strings.join('\n')
+        : 'No printable runs of four characters or more were found in these bytes.',
+      readerBinaryMeta, readerBinaryFooter,
+      readerDownloadUrl: readerDisplaySrc || '',
+      readerHasDownload: !!readerDisplaySrc,
+      readerIsUnrenderable, readerUnrenderableTitle, readerUnrenderableNote,
+      // Text that belongs UNDER a non-text panel: what the senses said about
+      // an image, what was pulled out of an archive's text members.
+      readerHasAuxText: !!readerAuxText,
+      readerAuxText, readerAuxLabel,
+      // The one banner that says what this app could and could not do here.
+      hasReaderGap: !!readerGapNote, readerGapNote,
+
       readerIsSpreadsheet, readerSheetHeader, readerSheetRows, readerSheetGridCols,
       readerSheetTruncated, readerSheetTruncatedNote,
       readerPivotMode: S.readerPivotMode,
@@ -7425,7 +7962,7 @@ class Component extends DCLogic {
       setAudioCanvas: (el) => { this._audioCanvasEl = el; if (el) this._renderAudioWaveform(); },
       onAudioProgress: () => this._drawAudioProgress(),
       seekAudioFromClick: (e) => this._seekAudioFromClick(e),
-      readerShowModeToggle: !readerOverviewMode && readerType !== 'video' && readerType !== 'audio' && readerType !== 'binary' && readerType !== 'spreadsheet' && !readerIsPDFKind,
+      readerShowModeToggle: !readerOverviewMode && readerTextShaped && !readerIsPDFKind,
       // PDF reader — rendered / extracted / split modes with page navigation
       readerIsPDF: readerType === 'pdf' && S.readerPDFLayout && S.readerPDFLayout[S.readerSourceName],
       readerPDFRenderedBg: S.readerPDFView === 'rendered' || S.readerPDFView === 'split' ? '#1F5A4C' : 'transparent',
@@ -7468,7 +8005,7 @@ class Component extends DCLogic {
       // Reader overview — the default surface for a text document. Center
       // panel shows structure (title/stats/headings); the side rail shows the
       // raw-text preview. The toggle flips between Overview and the full text.
-      readerOverviewMode, readerOverviewSupported: readerType === 'pdf' && !readerIsPDFKind,
+      readerOverviewMode, readerOverviewSupported: readerTextShaped && !readerIsPDFKind,
       setReaderOverview: () => this.setState({ readerOverview: true }),
       setReaderRead: () => this.setState({ readerOverview: false }),
       readerOverviewBg: S.readerOverview && readerOverviewMode ? '#1F5A4C' : 'transparent',
@@ -7500,9 +8037,15 @@ class Component extends DCLogic {
       readerPreviewText, readerPreviewMeta,
       readerPreviewStatus: readerPreviewReady
         ? ''
-        : ((S.readerSourceName ? S.readerContent[S.readerSourceName] : '') || 'Loading preview…'),
-      readerModeScroll: !readerOverviewMode && readerType !== 'video' && readerType !== 'audio' && readerType !== 'binary' && readerType !== 'spreadsheet' && !readerIsPDFKind && S.readerViewMode !== 'paginated',
-      readerModePaginated: !readerOverviewMode && readerType !== 'video' && readerType !== 'audio' && readerType !== 'spreadsheet' && !readerIsPDFKind && S.readerViewMode === 'paginated',
+        // "Loading preview…" is a lie for a source that will never have one.
+        // A picture, a font, an executable: the reader beside this rail is
+        // already showing everything there is, and the rail says so instead
+        // of spinning forever on text that is not coming.
+        : (!readerTextShaped && readerType && !readerIsPDFKind
+          ? `${TYPE_LABEL[readerType] || 'This file'} — no text was extracted, so there is no preview. The reader shows the file itself.`
+          : ((S.readerSourceName ? S.readerContent[S.readerSourceName] : '') || 'Loading preview…')),
+      readerModeScroll: !readerOverviewMode && readerTextShaped && !readerIsPDFKind && S.readerViewMode !== 'paginated',
+      readerModePaginated: !readerOverviewMode && readerTextShaped && !readerIsPDFKind && S.readerViewMode === 'paginated',
       setReaderScroll: () => this.setState({ readerViewMode: 'scroll' }),
       setReaderPaginated: () => this.setState({ readerViewMode: 'paginated' }),
       readerScrollColor: S.readerViewMode !== 'paginated' ? '#1F5A4C' : '#8C877C',
