@@ -381,6 +381,67 @@ average relatedness was higher, not lower, than the single best choice.
 and this is a measured instance of the difference, not an assumption
 about it.
 
+## Building a reusable "which priors to activate" tool — and a real correction to the finding above
+
+Asked directly: package the relatedness finding as a reusable tool that
+tells you, for any subject text and any pool of candidate priors, which
+ones are actually worth activating — not specific to Greek, not specific
+to this investigation. `scripts/select-best-priors.mjs` does this in two
+parts: a cheap proxy (`distributionOverlap`, the same Jaccard-over-top-2000
+measure used throughout this section) computable in milliseconds with no
+scoring pass, and `rankPriorCandidates()`, a small, genuinely reusable
+function — subject signature and candidate signatures in, ranked
+recommendation out, no text- or Greek-specific code in it at all.
+
+**Validating it properly (13 real candidates individually, not 3
+data points) overturns the clean story told above, rather than confirming
+it.** Every earlier claim in this section about relatedness being "the
+lever" was built from exactly three data points (Iliad, Herodotus, the
+13-work aggregate) that happened to line up in a monotonic-looking pattern.
+Run against all 13 candidates individually — Iliad, Herodotus, both
+Hesiod works, three tragedians, Aristophanes, Plato, Thucydides,
+Demosthenes, Xenophon, Pindar — the Spearman rank correlation between
+measured lexical overlap and actual entity-level surprise-ranking
+performance is **-0.022**: statistically indistinguishable from no
+relationship at all. The best-performing candidate at the entity grain,
+Thucydides (top 5.0%, beating the within-text baseline's top 7.6%), has
+9.6% overlap — barely different from Demosthenes' 9.1%, the *worst*
+performer (top 27.7%, nearly as bad as the Iliad). Cheap-proxy ranking
+matched the real outcome ranking's exact position only 2 times out of 13.
+The correlation with structural boundary-detection precision is real but
+moderate (-0.451), not the clean signal the 3-point sample suggested;
+correlation with recall is weak (-0.192).
+
+**This does not mean the tool fails at its actual job — it means the cheap
+shortcut inside it does not work as well as 3 points suggested, and the
+tool's real, validated value is as a proper evaluation harness, not a free
+lookup.** `rankPriorCandidates()`, run as a full scoring pass rather than a
+lexical-overlap shortcut, reliably tells you the best candidate — it
+already did, three times over, at N=13, N=3-with-a-flawed-comparison-fixed,
+and N=1-aggregate. What is not yet found is a cheap proxy that predicts
+that outcome without running the real test. That is a genuine open
+problem, not a solved one, and reporting it as solved after 3 points would
+have been exactly the kind of undersampled overclaim this whole
+investigation exists to catch — including, this time, in its own most
+recent finding.
+
+**Omnimodal generalization, demonstrated rather than only claimed:**
+`scripts/select-best-priors-audio.mjs` runs the identical
+`rankPriorCandidates()`/`distributionOverlap()` code, unmodified, against
+signatures built from real audio field vectors (`perceiver/audio/reading
+.js`'s chroma+timbre+moments, quantized into the same `Map<token,
+probability>` shape `wordFrequencies()` produces for text) instead of word
+frequencies. Scope stated plainly: only one real audio file was available
+in this environment (no second real musical work to fetch — the network
+policy blocked every audio-hosting domain tried earlier this session, and
+there is no decoder for a compressed download), so this demonstrates the
+code runs unmodified on real audio-derived signatures (segmenting the one
+real recording into 6 honest, non-overlapping real segments), not that the
+proxy is validated as predictive for any real audio task the way the text
+side was validated against real ground truth. That is a narrower claim
+than the text section supports, and is reported as narrower, not inflated
+to match it.
+
 ## Proposed constitutional-level takeaway
 
 State as a testable principle, the way LAWS.md states laws (a failure it
@@ -458,6 +519,22 @@ result above rather than asserted:
 > fallible as the engine it is testing, and needs exactly the same
 > discipline.
 
+> **Three data points are not a validated relationship, even when they line
+> up monotonically — the same finding stated after N=3 and after N=13 was
+> a different finding, not a more detailed version of the same one.** The
+> relatedness-predicts-performance claim above held cleanly across Iliad,
+> Herodotus, and a 13-work aggregate; run against all 13 individual
+> candidates, the correlation collapsed to statistically indistinguishable
+> from zero for the primary task. Nothing about the earlier 3-point test was
+> methodologically wrong on its own terms — it is simply too small a sample
+> to license the general claim it was used to support, and the failure mode
+> is dangerous precisely because 3 monotonic points feel like confirmation
+> rather than like what they are. Any finding in this document (or
+> elsewhere) built from fewer real candidates than are actually available
+> should be treated as provisional until checked against the fuller set,
+> and this document's own earlier, now-superseded 3-point claim is the
+> concrete example, not a hypothetical one.
+
 > **A "prompt deeper reading" / drill-down trigger must be driven by a real,
 > organ-computed significance signal (surprise, boundary detection, or
 > equivalent) — never by searching the compressed context for a specific
@@ -483,6 +560,8 @@ node scripts/probe-surf-fold-odyssey-surprise.mjs    # external (Iliad) prior ex
 node scripts/probe-external-prior-structure-level.mjs  # same experiment at structure/macro grain, real ground truth
 node scripts/probe-unrelated-prior.mjs               # same-tradition (Iliad) vs. unrelated (Herodotus) prior, both grains
 node scripts/probe-all-literature-prior.mjs          # 13-work, 6-genre aggregate prior — fetches ~4.2MB, slower
+node scripts/select-best-priors.mjs                  # validates the cheap-proxy tool against all 13 individually, ~5min
+node scripts/select-best-priors-audio.mjs            # same tool, unmodified, on real audio field-vector signatures
 ```
 
 Video (the third modality named alongside music) was scoped out of this
