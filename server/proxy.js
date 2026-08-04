@@ -4534,7 +4534,7 @@ const server = http.createServer((req, res) => {
             const { done } = await turnController.startTurn({
               conversationId, question: data.question,
               sourceScope: data.sourceScope, pool: data.pool, attachments: data.attachments || [],
-              provider: data.provider, model: data.model, mode: data.mode, webSearch: data.webSearch,
+              provider: data.provider, model: data.model, draftModel: data.draftModel, mode: data.mode, webSearch: data.webSearch,
             }, sendEvent);
             await done;
           } catch (err) {

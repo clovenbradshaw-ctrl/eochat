@@ -469,12 +469,17 @@ export function createTurnController(deps) {
     return { text, model };
   }
 
-  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride }) {
+  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride, draftModel }) {
     let model, routerCtx;
     const key = _getAnthropicKey();
     const useAnthropic = provider === "anthropic" && key;
     if (useAnthropic) {
       model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
+      routerCtx = null;
+    } else if (draftModel) {
+      // Draft model: use the fastest model that's still good enough. The
+      // correction loop will fix violations with a better model if needed.
+      model = draftModel;
       routerCtx = null;
     } else if (modelOverride) {
       model = modelOverride;
@@ -552,7 +557,7 @@ export function createTurnController(deps) {
   //
   // Order matters: citations/brackets/fidelity are resolved on the final text,
   // whether that text is the original or a correction.
-  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride }) {
+  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel }) {
     let text = rawText;
     let display = formatOutput(text);
     let brackets = resolveCitationBrackets(text, lastCitations).citations;
@@ -590,6 +595,11 @@ export function createTurnController(deps) {
         ? "CITED PASSAGES — the bracket numbers in your answer must reference these passages:\n\n" +
           lastCitations.map((c, i) => `[${i + 1}] ${c.text || ""}`).join("\n\n")
         : "";
+      // Correction model: when a draft model was used, correction uses the
+      // standard model (router pick or override) — a better model that can fix
+      // what the fast draft got wrong. When no draft model, correction uses the
+      // same model as the draft (the default behavior).
+      const correctionModel = draftModel ? modelOverride : undefined;
       while (needCorrection() && iterations < 2) {
         const correction = buildCorrectionSystemContent(allFlags(), gate?.activeIds);
         let next;
@@ -608,7 +618,7 @@ export function createTurnController(deps) {
             // regeneration from the question alone re-rolls the same dice.
             ...(finalText ? [{ role: "system", content: `Your previous answer (rewrite it to fix ONLY the flagged violations):\n\n${finalText.slice(0, 4000)}` }] : []),
             { role: "user", content: `${question}\n\n${correction}` },
-          ], { provider, modelOverride });
+          ], { provider, modelOverride: correctionModel });
         } catch {
           break; // keep the flagged text; the report will show correction was not achieved
         }
@@ -844,10 +854,10 @@ export function createTurnController(deps) {
 
   // The core pipeline shared by a fresh turn and a regenerate — both already
   // have a turnId/answerId and a question by the time this runs.
-  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, mode, webSearch }, sendEvent) {
+  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, draftModel, mode, webSearch }, sendEvent) {
     // Dispatch to mode-specific handler
     if (mode === "surf") {
-      return runSurfAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride }, sendEvent);
+      return runSurfAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, draftModel }, sendEvent);
     }
     if (mode === "think") {
       return runThinkAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride }, sendEvent);
@@ -924,7 +934,7 @@ export function createTurnController(deps) {
 
         let sawStart = false;
         const { text: rawText, model } = await callModelStreaming(messages, {
-          signal: controller.signal, provider, modelOverride,
+          signal: controller.signal, provider, modelOverride, draftModel,
           onDelta: (delta, text) => {
             if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length }); }
             controller._partialText = formatOutput(text);
@@ -932,10 +942,21 @@ export function createTurnController(deps) {
           },
         });
 
+        // Draft info: which model produced this draft. When draftModel is set,
+        // the reader sees both the draft model and the correction model (if any).
+        // This is the auditability the reader needs to know: a fast model drafted
+        // this answer, and a better model may have corrected it.
+        sendEvent("draft_info", {
+          turnId: turn.id, answerId,
+          draftModel: model,
+          correctionModel: draftModel ? (modelOverride || null) : null,
+          corrected: false, // updated after review
+        });
+
         const groundText = webResults.map((r) => `${r.title}\n${r.text || r.snippet || ""}`).join("\n\n");
         const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
           rawText, lastCitations, maxCitation, question,
-          gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
+          gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride, draftModel,
         });
 
         for (const c of brackets) {
@@ -969,6 +990,8 @@ export function createTurnController(deps) {
           text: finalText, annotatedText, model, citations: brackets, gaps, snippets,
           fidelity, grounding_check: groundingCheck, webSearch: true, status: "completed", completedAt: new Date().toISOString(),
           review,
+          draftModel: draftModel || null,
+          correctionModel: draftModel ? (modelOverride || null) : null,
           instructionGate: gateInfo ? {
             activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
             blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
@@ -1056,7 +1079,7 @@ export function createTurnController(deps) {
 
         let sawStart = false;
         const { text: rawText, model } = await callModelStreaming(messages, {
-          signal: controller.signal, provider, modelOverride,
+          signal: controller.signal, provider, modelOverride, draftModel,
           onDelta: (delta, text) => {
             if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
             controller._partialText = formatOutput(text);
@@ -1064,10 +1087,18 @@ export function createTurnController(deps) {
           },
         });
 
+        // Draft info: which model produced this draft.
+        sendEvent("draft_info", {
+          turnId: turn.id, answerId,
+          draftModel: model,
+          correctionModel: draftModel ? (modelOverride || null) : null,
+          corrected: false,
+        });
+
         const groundText = (groundResult.citations || []).map((c) => c.text).join("\n\n");
         const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
           rawText, lastCitations, maxCitation, question,
-          gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride,
+          gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride, draftModel,
         });
 
         for (const c of brackets) {
@@ -1106,6 +1137,8 @@ export function createTurnController(deps) {
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
           text: finalText, annotatedText, model, citations: brackets, gaps, snippets,
           fidelity, grounding_check: groundingCheck, review, status: "completed", completedAt: new Date().toISOString(),
+          draftModel: draftModel || null,
+          correctionModel: draftModel ? (modelOverride || null) : null,
           instructionGate: gateInfo ? {
             activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
             blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
@@ -1142,7 +1175,7 @@ export function createTurnController(deps) {
     }
   }
 
-  async function startTurn({ conversationId, question, sourceScope, pool, attachments, provider, model, mode, webSearch }, sendEvent) {
+  async function startTurn({ conversationId, question, sourceScope, pool, attachments, provider, model, draftModel, mode, webSearch }, sendEvent) {
     const conv = await conversationStore.require(conversationId);
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
     const effectiveMode = mode || conv.mode || "chat";
@@ -1181,7 +1214,7 @@ export function createTurnController(deps) {
     const run = runAnswer({
       conv, turn, answerId: answer.id,
       question: effectiveQuestion, sourceScope: effectiveScope, pool: pool || conv.pool,
-      provider, model, mode: effectiveMode, webSearch: effectiveWebSearch,
+      provider, model, draftModel, mode: effectiveMode, webSearch: effectiveWebSearch,
     }, sendEvent);
 
     return { turnId: turn.id, answerId: answer.id, done: run };

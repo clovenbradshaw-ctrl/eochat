@@ -391,6 +391,46 @@ The two-pass test (frankenstein-part-*.txt + two-pass-manual.md) measured this:
 
 ---
 
+## L5 — Draft transparency is auditable
+
+**The reader knows which model produced the draft and which model corrected it.**
+
+When a fast model drafts an answer and a better model corrects it, the reader
+sees both. This is not decoration — it is the audit trail the reader needs to
+judge the answer's reliability. A fast model that drafts and a slow model that
+corrects are two different confidence levels, and collapsing them into one hides
+the correction history.
+
+### Clauses
+
+- **L5a — The draft model is named.** The `draft_info` SSE event carries the
+  model that produced the first draft. The `completed` event carries the final
+  model. When they differ, the reader knows correction happened.
+- **L5b — The correction model is named.** When the correction loop uses a
+  different model than the draft, the `draft_info` event carries both
+  `draftModel` and `correctionModel`. The answer's persisted record includes
+  both fields.
+- **L5c — The correction pipeline is logged.** Each correction iteration is
+  recorded: the flags that triggered it, the model that corrected, the result.
+  The `review` field on the answer carries `corrected` and `iterations`. The
+  `cross_turn_correction` event logs when flags pass across turns.
+
+### Measurement
+
+Every answer's persisted record includes `draftModel`, `correctionModel`,
+`model` (the final model), and `review` with `corrected`/`iterations`. The
+`draft_info` SSE event is emitted before the correction loop, so the reader
+sees the draft model immediately. The `completed` event carries the final model.
+
+### What this enables
+
+The fastest model that's "good enough" drafts the answer. If it gets format or
+content wrong, the correction loop fixes it with a better model. The reader
+sees: "Drafted by qwen3:8b (3 tok/s). Corrected by phi4-mini." They can
+decide whether to trust the draft or wait for correction.
+
+---
+
 ## Candidate laws
 
 Observed as consistent practice but not yet enforced by a check. Promote by
