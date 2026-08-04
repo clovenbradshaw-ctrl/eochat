@@ -1,10 +1,34 @@
-# Proposed amendments — DRAFT, NOT YET APPLIED
+# Proposed amendments — PARTIALLY DISPOSED 2026-08-04
 
-Every item below is a proposal only. Nothing in this file has been applied
-to `../eo-constitution/` or to `LAWS.md`. It exists so a human (or a
-session with `eo-constitution` access) can review, edit, reject, or apply
-each item individually — do not treat this file's existence as evidence
-any of it is in force.
+Every item below originated as a proposal only. As of 2026-08-04, both parts
+have a disposition, recorded here so this file stops being the last word on
+either:
+
+- **Part A → drafted into `eo-constitution` as formal amendment proposals,
+  not yet applied.** A1/A2/A7 became `AMENDMENT-8-PROPOSAL.md` (the script
+  earning test, II.13); A3/A4 became `AMENDMENT-9-PROPOSAL.md` (the fold
+  fidelity test, II.14); A5/A6/A8 became `AMENDMENT-10-PROPOSAL.md` (the
+  validation discipline test, II.15 — the least shovel-ready of the four,
+  its enforcement shape is still open); A9 became `AMENDMENT-11-PROPOSAL.md`
+  (the surprise-disambiguation test, II.16). Each drafts the raw finding
+  below into the constitution's own testable-article format (IV.1), but per
+  IV.2 an agent proposes and a human still has to dispose — none of these
+  four are applied. Read them in `../eo-constitution/`, not this file, for
+  the current wording.
+- **Part B → folded into `LAWS.md`'s Candidate laws, not promoted to a
+  numbered law.** Both L6 and L7 name a real, defensible principle, but
+  neither has a live surface a check can exercise yet: L6's `multiAltitudeFold`
+  is not wired into any reader-facing surface in this app, and L7's
+  distinguishing signal (why a perceiver found no signal) would have to come
+  from `vendor/eoreader5`, a submodule this checkout does not vendor in. Per
+  this file's own rule — "a law without one [a check] is a slogan" — they sit
+  in Candidate laws until a check can be written, with the exact promotion
+  condition recorded there for each.
+
+The findings themselves, and the original per-item proposed wording, are kept
+below unchanged as the record those dispositions were drawn from — do not
+edit the analysis to match the disposition; edit the disposition if the
+analysis turns out to be wrong instead.
 
 Source: the full investigation in `ORGAN-STACK-REAL-DEPLOYMENT.md` (real
 Greek/audio deployment material run through the organ stack) and its
