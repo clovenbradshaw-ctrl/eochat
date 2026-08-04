@@ -1720,9 +1720,18 @@ const toolHandlers = {
       }
 
       store.ingest(content.slice(0, 50000), "file", { path: args.path, terrain: terrainInfo });
+      // LAWS.md L7a — same conflation server/terrain-report-format.js fixes
+      // for terrain_report's own output, fixed here too: "Void (no signal
+      // detected)" alone reads as a finding about this file, when it may
+      // just as easily mean the classifier's English-only lexicon cannot
+      // read it at all (see cube/index.js; measured directly on real Greek
+      // in ORGAN-STACK-REAL-DEPLOYMENT.md). Kept short — this is an inline
+      // one-line summary, not the full terrain_report — but the ambiguity
+      // is still named, not silently resolved to the reading that looks
+      // like a real finding.
       const terrainSummary = terrainInfo?.signalDetected
         ? ` Terrain: ${terrainInfo.covered.join(", ")}`
-        : " Terrain: Void (no signal detected)";
+        : " Terrain: Void, or outside this English-only classifier's scope (see terrain_report for detail)";
       return `Ingested ${args.path} (${bytes.length} bytes).${terrainSummary}`;
     } catch (err) {
       return `[Error ingesting ${args.path}: ${err.message}]`;
@@ -1733,10 +1742,14 @@ const toolHandlers = {
     const results = store.search(args.query, args.limit || 5);
     if (!results.length) return "(no matches in memory)";
     return results.map((r, i) => {
+      // LAWS.md L7a — same fix as the ingest summary above: an unqualified
+      // "Void" tag here is indistinguishable from "outside this English-
+      // only classifier's scope." Named explicitly, even in this terse a
+      // hint, rather than left to read as a finding.
       const terrain = r.meta?.terrain;
       const terrainHint = terrain?.signalDetected
         ? ` [terrain: ${terrain.covered?.join(",")}]`
-        : (terrain ? " [terrain: Void]" : "");
+        : (terrain ? " [terrain: Void/out-of-scope]" : "");
       return `--- ${i + 1}. (score: ${r.score.toFixed(2)}) ${r.meta.file || r.meta.path || "?"}${terrainHint} ---\n${r.text.slice(0, 500)}`;
     }).join("\n\n");
   },

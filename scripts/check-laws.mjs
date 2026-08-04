@@ -739,6 +739,24 @@ async function checkNoSilentDegradation() {
       ? "real English text with real terrain signal renders cleanly, without the scope caveat cluttering a genuine finding"
       : `unexpected: signal_detected=${englishSignal}, caveat_present=${englishHasCaveat} — either the fixture stopped triggering real signal or the caveat is firing when it should not`,
     { medium: englishReading.terrain_report?.medium, signal_detected: englishSignal });
+
+  // L7c — terrain_report was not the only place this conflation lived.
+  // ingest_file's terrain summary and search_memory's terrain hint both had
+  // the identical unqualified "Void" string. Both are small ternaries
+  // embedded inside large, stateful proxy.js handlers (store.ingest side
+  // effects, session state) — not pulled into their own pure module the way
+  // formatTerrainReport was, so this checks the real shipped source text
+  // directly rather than importing proxy.js (which starts a server as a
+  // side effect of module load; see terrain-report-format.js's header).
+  const proxyPath = path.join(REPO_ROOT, "server", "proxy.js");
+  const proxySrc = fs.existsSync(proxyPath) ? fs.readFileSync(proxyPath, "utf8") : "";
+  const ingestFixed = /Terrain: Void, or outside this English-only classifier's scope/.test(proxySrc);
+  const searchHintFixed = /\[terrain: Void\/out-of-scope\]/.test(proxySrc);
+  record("L7", "L7c", (ingestFixed && searchHintFixed) ? "PASS" : "VIOLATION",
+    (ingestFixed && searchHintFixed)
+      ? "ingest_file's terrain summary and search_memory's terrain hint both disclose the same scope ambiguity terrain_report does, not just the tool handler that was checked first"
+      : `unqualified "Void" still present: ingest summary fixed=${ingestFixed}, search hint fixed=${searchHintFixed}`,
+    { checked: proxyPath, static_check: true });
 }
 
 // ── cleanup ────────────────────────────────────────────────────────────────
