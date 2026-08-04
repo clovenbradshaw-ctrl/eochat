@@ -146,6 +146,97 @@ because they were built the way the constitution's own principle asks for:
   a second, variable-grid control and comparing, not by trusting the first
   result. Lesson for future audio probes here, not a knock on the organ.
 
+## Follow-on: surf/fold as an actual answering mechanism, proven end to end
+
+The organ-by-organ testing above answers "does each piece work." A follow-on
+question was posed directly: if the fold really compresses losslessly with
+full provenance, can it actually answer questions about the Odyssey without
+flooding a model's context window, and drill down on demand the way a real
+reader's *surprise* — not a keyword search — would demand? Two more probes,
+same discipline (real material, real organs, numbers not assertions):
+
+**`scripts/probe-surf-fold-odyssey.mjs`** — `multiAltitudeFold` run for 4
+entities (Odysseus, Telemachus, Athena, Penelope) on the real Odyssey.
+Measured, not assumed:
+
+- **Compression is real and steep.** L0 (top-3-scenes-per-entity,
+  4 entities combined) is 23,536 chars — 4.4% of the 538,646-char source.
+  Even L4 ("dossier, all available scenes," 4 entities) is 81.5%, still less
+  than the raw text plus the overhead of asking about 4 entities separately.
+- **Provenance verified independently, and a bug in this probe's own first
+  attempt is worth recording.** The first version compared each span's raw
+  offset-slice against `span.text` byte-for-byte and found 424/424
+  "mismatches" — alarming, until traced to `text-organ.js`'s own documented
+  behavior: `snapToSentences` collapses interior whitespace to single spaces
+  when building `span.text`, and the module *ships its own recovery
+  function for exactly this*, `locateRawSpan`, whose header states the
+  discipline directly ("neither operation preserves the offset/text pairing
+  exactly... locateRawSpan recovers the true `{offset, length}`... i.e. it
+  finds the literal raw substring the display text was derived from").
+  Fixed to whitespace-normalize before comparing (424/424 now verified) and
+  additionally cross-checked a sample directly through `locateRawSpan`
+  itself (8/8 verified) — using the actual tool the module provides, not
+  only this probe's own comparison logic. This is the same class of finding
+  as the `\b`-anchor bug: a real defect, caught by using real material, this
+  time in the probe rather than the engine — recorded with the same
+  honesty.
+
+**`scripts/probe-surf-fold-odyssey-surprise.mjs` and the second half of
+`probe-surf-fold-odyssey.mjs`** — the harder, more important question,
+raised directly in review: the first SURF draft used `text.includes(needle)`
+as its drill-down trigger, which is exactly the flooding-by-occurrence
+problem this exercise exists to get past, just done in miniature. Rebuilt on
+what the codebase already has for the real job — `summary/spine.js`'s
+`significanceSpine` (forward KL-divergence, read sequentially, forward-only,
+in document order, the same primitive spine.js has always used) — with two
+follow-on tests of how to make that surprise signal work like a reader's:
+
+- **A genuine outside-the-text prior, tried and found to hurt.** Reader
+  surprise is only meaningful against priors from outside the text — so a
+  background word-frequency distribution was built from the *Iliad*
+  (fetched and cached independently, same author/tradition, never touching
+  the Odyssey — the same "prior derived from a DIFFERENT work" discipline
+  `scripts/derive-audio-prior.mjs`'s header already states for music).
+  Blending it in **measurably worsened** both tests run against it: the
+  Odyssey's real disguise-name line (Athena as Mentes, Book 1) ranked in the
+  top 7.6% of surprise under the within-text-only mechanism, dropping to top
+  23.2% at a 50/50 blend and top 28.4% under the external prior alone; the
+  earlier real-vs-word-shuffled CV gap also widened in the wrong direction
+  as external weight increased. Diagnosis: the Iliad and Odyssey share the
+  same formulaic epic diction too closely (oral-formulaic composition,
+  Parry/Lord — the same theory `specs/composition-is-retrieval.md` already
+  cites) for a naive linear frequency blend to sharpen anything; it just
+  dilutes the local within-text contrast that was already doing real work.
+  A useful genre prior would need to be *discriminative* (what's distinctive
+  to this text relative to the tradition, not the tradition's raw
+  frequencies) — a bigger, different piece of engineering, not attempted
+  here, not claimed to work.
+- **The validated within-text mechanism, run as the actual trigger.**
+  `significanceSpine` over the whole real document, once, forward, in
+  reading order — cross-referenced against Athena's own fold range to find
+  her highest-surprise moments. It found a real one: Athena "devising
+  another plan," going through the city disguised as Telemachus to recruit
+  a crew (offset 36905) — narratively genuine, not noise, and not present
+  in the compressed L0 context, which is what correctly triggered drill-down
+  to the exact quoted line and its surrounding context. Checked honestly
+  afterward, *not* used to pick the target: this specific run's #1 peak
+  within Athena's range was not the Mentes line (which independently ranks
+  at the 92nd percentile document-wide, per the sibling probe, just not
+  #1 within this particular scoped-and-ranked subset). Reported as found,
+  not substituted — the mechanism is real and the result is real, and they
+  are not artificially made to coincide.
+
+Net: this reframes what "lossless compression with full provenance" can
+honestly mean for a fold — not information-theoretic losslessness (a
+compressed level necessarily omits most of the text; that is the point) but
+*zero fabrication in what is surfaced, at any altitude, verified
+independently down to the actual byte offset* — and reframes "surf" as
+"driven by a real, validated surprise signal, with drill-down triggered by
+what that signal finds missing from the compressed context, not by
+searching for a word." Both claims are now backed by numbers, not asserted;
+the external-prior attempt is recorded as a real, informative negative
+result rather than quietly dropped.
+
 ## Proposed constitutional-level takeaway
 
 State as a testable principle, the way LAWS.md states laws (a failure it
@@ -171,6 +262,8 @@ git submodule update --init --recursive
 node scripts/link-vendor-workspaces.mjs
 node scripts/probe-organs-real-deployment.mjs        # text/Greek — fetches + caches under memory/corpus-cache/
 node scripts/probe-organs-real-deployment-audio.mjs  # audio — uses frankenstein-overture.wav already in the repo
+node scripts/probe-surf-fold-odyssey.mjs             # surf/fold compression + provenance + spine-triggered drill-down
+node scripts/probe-surf-fold-odyssey-surprise.mjs    # external (Iliad) prior experiment — also fetches + caches
 ```
 
 Video (the third modality named alongside music) was scoped out of this
