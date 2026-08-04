@@ -8,14 +8,49 @@
 // eval'd as an ordinary script (dc-runtime's evalDcLogic — see support.js),
 // not a module, so it can only reach this through a global, not an import.
 //
-// Model choice: the 3B instruct tier of WebLLM's prebuilt catalog —
+// Default model: the 3B instruct tier of WebLLM's prebuilt catalog —
 // Llama-3.2-3B-Instruct-q4f16_1-MLC (~2.3GB VRAM, ~2GB download). Nothing
-// smaller survives a real reading question well, and of the prebuilt 3B
-// instruct builds this is the one that does not also demand the shader-f16
-// adapter feature, so it has the widest device reach of the 3B candidates.
-// On the static (GitHub Pages) build this download is the entire answer
-// path, so it starts automatically the moment the page mounts.
-const MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+// smaller survives a real reading question well. On the static (GitHub Pages)
+// build this download is the entire answer path, so it starts automatically
+// the moment the page mounts.
+const DEFAULT_MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+
+// The models a reader may install, smallest first. These are prebuilt WebLLM
+// ids; the catalog is intersected with the module's own prebuiltAppConfig at
+// runtime (see refreshCatalog), so an id that a future web-llm release drops
+// disappears from the picker instead of failing at download time.
+//
+// Only ONE of these is ever on disk at a time. Weights are gigabytes, and the
+// browser's storage quota is shared with everything else this origin keeps
+// (documents, chats); silently accumulating four models would evict that data
+// out from under the reader. selectModel() therefore purges every other
+// model's cache entries BEFORE the new download starts — the space has to be
+// free first, or the new fetch is what hits the quota wall.
+const MODEL_CATALOG = [
+  { id: "Llama-3.2-1B-Instruct-q4f16_1-MLC", label: "Llama 3.2 1B", size: "~0.9 GB", note: "Fastest, lightest. Fine for short questions; loses the thread on long sources." },
+  { id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC", label: "Qwen 2.5 1.5B", size: "~1.1 GB", note: "Small but stronger than 1B at following instructions." },
+  { id: "gemma-2-2b-it-q4f16_1-MLC", label: "Gemma 2 2B", size: "~1.6 GB", note: "Careful, quotes its sources closely." },
+  { id: "Llama-3.2-3B-Instruct-q4f16_1-MLC", label: "Llama 3.2 3B", size: "~2.3 GB", note: "The default. Best balance of reading quality and download size." },
+  { id: "Qwen2.5-3B-Instruct-q4f16_1-MLC", label: "Qwen 2.5 3B", size: "~2.5 GB", note: "Comparable to the default; better at structured answers." },
+  { id: "Phi-3.5-mini-instruct-q4f16_1-MLC", label: "Phi 3.5 mini", size: "~2.6 GB", note: "3.8B. Strong reasoning for its size, slower per token." },
+  { id: "Llama-3.1-8B-Instruct-q4f16_1-MLC", label: "Llama 3.1 8B", size: "~5.0 GB", note: "Best answers here, but needs a large-memory GPU (~6GB VRAM)." },
+];
+
+// Where the reader's choice survives a reload. Weights live in the browser's
+// Cache API; this is only the pointer to which one they picked.
+const MODEL_PREF_KEY = "eochat.webllm.modelId";
+
+function readStoredModelId() {
+  try {
+    const stored = localStorage.getItem(MODEL_PREF_KEY);
+    if (stored && MODEL_CATALOG.some((m) => m.id === stored)) return stored;
+  } catch { /* private mode / storage disabled — fall through to the default */ }
+  return DEFAULT_MODEL_ID;
+}
+
+function writeStoredModelId(id) {
+  try { localStorage.setItem(MODEL_PREF_KEY, id); } catch { /* not fatal: the choice just won't survive reload */ }
+}
 
 // esm.run (jsdelivr) serves an ESM build with no bundler required — the
 // WebLLM README's own documented no-build integration path.
@@ -55,8 +90,16 @@ function loadWebLLMModule() {
 
 class LocalModel {
   constructor() {
-    this.modelId = MODEL_ID;
+    this.modelId = readStoredModelId();
     this.engine = null;
+    // Catalog rows as the picker sees them: the static entries above plus
+    // whether each is already on disk. Filled by refreshCatalog(); until then
+    // `cached` is null, meaning "not looked yet", which the UI renders as
+    // silence rather than as "not installed".
+    this.catalog = MODEL_CATALOG.map((m) => ({ ...m, cached: null }));
+    // Bytes this origin is using / is allowed, from navigator.storage.estimate().
+    // Null when the browser does not expose it.
+    this.storage = null;
     // idle -> loading -> ready, or idle -> unsupported / error.
     // "error" is not terminal: init() may be called again (the UI's retry
     // button does exactly that) and re-attempts the full sequence.
@@ -80,7 +123,132 @@ class LocalModel {
   }
 
   snapshot() {
-    return { status: this.status, progress: this.progress, error: this.error, modelId: this.modelId };
+    return {
+      status: this.status,
+      progress: this.progress,
+      error: this.error,
+      modelId: this.modelId,
+      catalog: this.catalog.map((m) => ({ ...m, active: m.id === this.modelId })),
+      storage: this.storage,
+    };
+  }
+
+  modelLabel(id) {
+    const row = MODEL_CATALOG.find((m) => m.id === (id || this.modelId));
+    return row ? row.label : (id || this.modelId);
+  }
+
+  // Which models are actually on disk, and how much room this origin has left.
+  // Best-effort throughout: a browser that blocks the Cache API or does not
+  // implement StorageManager leaves the fields null rather than erroring, so
+  // the picker still works — it just cannot say "already downloaded".
+  async refreshCatalog() {
+    try {
+      const webllm = await loadWebLLMModule();
+      const known = webllm.prebuiltAppConfig && webllm.prebuiltAppConfig.model_list
+        ? new Set(webllm.prebuiltAppConfig.model_list.map((m) => m.model_id))
+        : null;
+      const rows = [];
+      for (const m of MODEL_CATALOG) {
+        // A build of web-llm that no longer ships this id would fail at
+        // download time; drop it from the picker instead.
+        if (known && !known.has(m.id)) continue;
+        let cached = null;
+        try {
+          if (typeof webllm.hasModelInCache === "function") cached = await webllm.hasModelInCache(m.id);
+        } catch { /* cache unreadable — leave unknown */ }
+        rows.push({ ...m, cached });
+      }
+      if (rows.length) this.catalog = rows;
+    } catch (e) {
+      console.warn("[webllm-client] could not read the model cache:", e);
+    }
+    await this._refreshStorage();
+    this._emit();
+    return this.snapshot();
+  }
+
+  async _refreshStorage() {
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        const est = await navigator.storage.estimate();
+        this.storage = { usage: est.usage || 0, quota: est.quota || 0 };
+      }
+    } catch { this.storage = null; }
+  }
+
+  // Delete every cached model except `keepId`. This is the "wipe the old one"
+  // half of installing a new model, and it runs BEFORE the new download so the
+  // freed space is what the download uses. Deleting a model that was never
+  // cached is a no-op, so this is safe to call unconditionally.
+  async purgeOthers(keepId) {
+    const keep = keepId || this.modelId;
+    let freed = 0;
+    try {
+      const webllm = await loadWebLLMModule();
+      if (typeof webllm.deleteModelAllInfoInCache !== "function") return freed;
+      for (const m of this.catalog) {
+        if (m.id === keep) continue;
+        if (m.cached === false) continue; // known-absent: nothing to delete
+        try {
+          await webllm.deleteModelAllInfoInCache(m.id);
+          if (m.cached) freed++;
+          m.cached = false;
+        } catch (e) {
+          console.warn(`[webllm-client] could not evict ${m.id}:`, e);
+        }
+      }
+    } catch (e) {
+      console.warn("[webllm-client] purge skipped — WebLLM module unavailable:", e);
+    }
+    await this._refreshStorage();
+    this._emit();
+    return freed;
+  }
+
+  // Delete every cached model, including the active one, and drop the engine.
+  // The reader's escape hatch when the browser is out of room.
+  async purgeAll() {
+    await this.unload();
+    try {
+      const webllm = await loadWebLLMModule();
+      if (typeof webllm.deleteModelAllInfoInCache === "function") {
+        for (const m of this.catalog) {
+          try { await webllm.deleteModelAllInfoInCache(m.id); m.cached = false; } catch { /* best effort */ }
+        }
+      }
+    } catch (e) {
+      console.warn("[webllm-client] purge-all skipped:", e);
+    }
+    await this._refreshStorage();
+    this._emit();
+    return this.snapshot();
+  }
+
+  // Install a different model: tear the running engine down, free the disk the
+  // other models were holding, then download and load the new one. Selecting
+  // the model that is already loaded is a no-op rather than a re-download.
+  async selectModel(id) {
+    const row = MODEL_CATALOG.find((m) => m.id === id);
+    if (!row) throw new Error(`Unknown local model: ${id}`);
+    if (id === this.modelId && this.status === "ready") return this.snapshot();
+
+    // Any in-flight load is for the old model; let it settle before swapping
+    // the id out from under it, so its callbacks cannot report progress
+    // against a model the reader has already moved off.
+    if (this._loading) {
+      try { await this._loading; } catch { /* its own failure is already recorded */ }
+    }
+
+    await this.unload();
+    this.modelId = id;
+    writeStoredModelId(id);
+    this.status = "loading";
+    this.progress = { text: `Clearing space (removing other models)…`, percent: 0 };
+    this._emit();
+
+    await this.purgeOthers(id);
+    return this.init();
   }
 
   async init() {
@@ -127,7 +295,7 @@ class LocalModel {
     for (let attempt = 0; attempt < MAX_LOAD_ATTEMPTS; attempt++) {
       try {
         const webllm = await loadWebLLMModule();
-        const engine = await webllm.CreateMLCEngine(MODEL_ID, {
+        const engine = await webllm.CreateMLCEngine(this.modelId, {
           initProgressCallback: (report) => {
             this.progress = {
               text: report && report.text ? report.text : "Downloading…",
@@ -140,7 +308,10 @@ class LocalModel {
         this.status = "ready";
         this.progress = { text: "Ready", percent: 100 };
         this.error = null;
+        const row = this.catalog.find((m) => m.id === this.modelId);
+        if (row) row.cached = true;
         this._emit();
+        this._refreshStorage().then(() => this._emit());
         return this.snapshot();
       } catch (err) {
         lastErr = err;
