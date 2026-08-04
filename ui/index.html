@@ -75,9 +75,14 @@
      the narrow-screen media query below. */
   .eo-mobile-only { display: none; }
   .eo-backdrop { display: none; }
+  /* Rendered markdown. The host is a <div>, not a <span>: marked emits
+     <p>/<ul>/<pre>, and a block-level host is what actually matches that
+     content. (The old <span> host rendered the same, because it was a flex
+     item and so blockified anyway — but only by accident of its container.) */
   .eo-md { line-height:1.72; text-wrap:pretty; word-break:break-word; }
   .eo-md p { margin:0 0 .6em; }
-  .eo-md p:last-child { margin-bottom:0; }
+  .eo-md > :first-child { margin-top:0; }
+  .eo-md > :last-child { margin-bottom:0; }
   .eo-md ul, .eo-md ol { margin:.3em 0; padding-left:1.5em; }
   .eo-md li { margin:.15em 0; }
   .eo-md code { font-family:'IBM Plex Mono', monospace; font-size:.85em; background:#F1EEE7; border-radius:4px; padding:.15em .4em; color:#26241F; }
@@ -598,7 +603,7 @@
               </sc-if>
               <sc-if value="{{ turn.a }}">
                 <div style="max-width:96%; display:flex; flex-direction:column; gap:8px; border-radius:8px; outline: {{ turn.surfOutline }}; outline-offset:2px;">
-                  <span class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ turn.answerHtml }}}</span>
+                  <div class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ turn.answerHtml }}}</div>
                   <sc-if value="{{ turn.wasInterrupted }}">
                     <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A3592B;">⊘ stopped — partial answer</span>
                   </sc-if>
@@ -710,7 +715,7 @@
           </sc-for>
           <sc-if value="{{ streamingAnswer }}">
             <div style="max-width:96%; display:flex; flex-direction:column; gap:8px;">
-              <span class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ streamingAnswerHtml }}}</span>
+              <div class="eo-md" style="font-size:14px; color:#1B1A17;">{{{ streamingAnswerHtml }}}</div>
               <sc-if value="{{ model }}">
                 <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">via {{ model }}</span>
               </sc-if>
@@ -748,7 +753,7 @@
             <input type="text" placeholder="Waiting for response…" value="" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#8C877C; padding:6px 0; cursor:default;" readonly />
           </sc-if>
           <sc-if value="{{ !inputDisabled }}">
-            <textarea class="eo-input-text" aria-label="Ask across your sources" placeholder="{{ composerPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" ref="{{ setComposerInput }}" rows="{{ 1 }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; line-height:1.5; color:#1B1A17; padding:6px 0; resize:none; overflow-y:auto; max-height:40vh;"></textarea>
+            <textarea class="eo-input-text" aria-label="Ask across your sources" placeholder="{{ composerPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" ref="{{ setComposerInput }}" rows="{{ 1 }}" style="flex:1; min-width:0; box-sizing:border-box; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; line-height:1.5; color:#1B1A17; padding:6px 0; resize:none; overflow-y:auto; max-height:40vh;"></textarea>
           </sc-if>
           <button type="button" aria-label="{{ webLabel }}" aria-pressed="{{ webSearch }}" title="{{ webLabel }}" onClick="{{ toggleWebSearch }}" style="flex:none; display:flex; align-items:center; gap:4px; border:1px solid {{ webBorder }}; border-radius:8px; background:{{ webBg }}; color:{{ webColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-globe" style="font-size:12px;"></i>Web</button>
           <sc-if value="{{ hasModels }}">
@@ -1074,7 +1079,7 @@
               <sc-for list="{{ composeResultSections }}" as="rs">
                 <div style="display:flex; flex-direction:column; gap:8px;">
                   <span style="font-size:13.5px; font-weight:500; color:#26241F;">{{ rs.label }}</span>
-                  <span class="eo-md" style="font-size:13.5px; color:#1B1A17;">{{{ rs.contentHtml }}}</span>
+                  <div class="eo-md" style="font-size:13.5px; color:#1B1A17;">{{{ rs.contentHtml }}}</div>
                   <sc-for list="{{ rs.citations }}" as="cit">
                     <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
                       <div style="display:flex; align-items:center; gap:8px;">
@@ -1724,6 +1729,34 @@
             <button type="button" aria-pressed="{{ localModel }}" onClick="{{ settingsToggleLocal }}" style="display:flex; align-items:center; gap:4px; border:1px solid {{ settingsLocalBorder }}; border-radius:8px; background:{{ settingsLocalBg }}; color:{{ settingsLocalColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ settingsLocalIcon }}" style="font-size:12px;"></i>Local</button>
             <span style="font-size:11px; color:#8C877C;">Answer in-browser via WebLLM (no proxy)</span>
           </div>
+          <sc-if value="{{ hasLocalCatalog }}">
+            <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
+              <div style="display:flex; flex-direction:column; gap:2px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">In-browser model</span>
+                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Weights download into this browser and stay cached. Only one is kept — installing another deletes the current one first to free the space.</span>
+              </div>
+              <sc-for list="{{ localCatalog }}" as="lm">
+                <button type="button" onClick="{{ lm.pick }}" style="display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left; border:1px solid {{ lm.border }}; border-radius:9px; background:{{ lm.bg }}; padding:9px 11px; cursor:pointer; font-family:inherit;">
+                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                      <span style="font-size:12.5px; font-weight:500; color:#26241F;">{{ lm.label }}</span>
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ lm.size }}</span>
+                      <sc-if value="{{ lm.state }}">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.04em; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 6px;">{{ lm.state }}</span>
+                      </sc-if>
+                    </div>
+                    <span style="font-size:11px; color:#8C877C; line-height:1.5;">{{ lm.note }}</span>
+                  </div>
+                </button>
+              </sc-for>
+              <sc-if value="{{ localStorageText }}">
+                <span style="font-size:11px; color:#A39D91;">{{ localStorageText }}</span>
+              </sc-if>
+              <sc-if value="{{ canPurgeLocal }}">
+                <button type="button" onClick="{{ purgeLocalModels }}" style="align-self:flex-start; display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; border-radius:8px; background:none; color:#C0392B; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 9px; cursor:pointer;"><i class="ph ph-trash" style="font-size:12px;"></i>Delete downloaded models</button>
+              </sc-if>
+            </div>
+          </sc-if>
         </div>
       </div>
 
@@ -1878,6 +1911,11 @@ class Component extends DCLogic {
     // for everyone else too once the first health check finds no engine at
     // all (see _defaultToLocalModelIfNoEngine).
     localModel: ON_GH_PAGES, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
+    // Mirrors of window.EOWebLLM's catalog: which in-browser models can be
+    // installed, which is active, which are already on disk, and how much
+    // storage this origin is using. Only one model is ever kept — installing
+    // another evicts the rest (see webllm-client.js selectModel).
+    localModelId: null, localCatalog: [], localStorageEstimate: null,
     spacesOpen: false, activeSpaceId: 'default', chatMode: 'chat', leftCollapsed: false, selectedEntity: null, activeTurnId: null,
     // Mobile off-canvas drawers for the Sources (left) and Entities (right)
     // panels below 900px. The desktop layout never reads these — the CSS only
@@ -2044,9 +2082,10 @@ class Component extends DCLogic {
     // runs, independent of React mount order — but guard anyway in case this
     // page is ever loaded without it.
     if (window.EOWebLLM) {
-      this.setState({ localModelStatus: window.EOWebLLM.status, localModelProgress: window.EOWebLLM.progress, localModelError: window.EOWebLLM.error });
+      const seed = window.EOWebLLM.snapshot();
+      this.setState({ localModelStatus: seed.status, localModelProgress: seed.progress, localModelError: seed.error, localModelId: seed.modelId, localCatalog: seed.catalog, localStorageEstimate: seed.storage });
       this._unsubLocalModel = window.EOWebLLM.subscribe((snap) => {
-        this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error });
+        this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error, localModelId: snap.modelId, localCatalog: snap.catalog, localStorageEstimate: snap.storage });
       });
       // localModel defaults on for ON_GH_PAGES (see state init above) — start
       // the download immediately rather than waiting for a manual toggle
@@ -2183,6 +2222,11 @@ class Component extends DCLogic {
   // (past which it scrolls). Height is reset to auto first so the box shrinks
   // again on delete — measuring scrollHeight against a previously grown box
   // only ever reports the old, larger height.
+  // Grow the composer to fit what is typed, up to 40vh. scrollHeight counts
+  // the textarea's padding, so the height assigned back to it has to be a
+  // border-box height (the element sets box-sizing:border-box for exactly
+  // this) — under content-box the padding is added a second time and every
+  // pass leaves the box taller than the text inside it needs.
   autoGrowComposer(el) {
     if (!el) return;
     el.style.height = 'auto';
@@ -2902,6 +2946,11 @@ class Component extends DCLogic {
       settingsOpen: !s.settingsOpen,
       settingsDraftKeys: { ...s._settingsApiKeys },
     }));
+    // Reading the model cache means loading the WebLLM module, so only do it
+    // when the panel that shows the answer is actually coming into view.
+    if (!this.state.settingsOpen && window.EOWebLLM) {
+      window.EOWebLLM.refreshCatalog().catch(() => {});
+    }
   }
   setDraftKey(provider, value) {
     this.setState(s => ({ settingsDraftKeys: { ...s.settingsDraftKeys, [provider]: value } }));
@@ -4160,6 +4209,42 @@ class Component extends DCLogic {
     if (window.EOWebLLM) window.EOWebLLM.init();
   }
 
+  // Install a different in-browser model. The old one's weights are deleted
+  // first — gigabytes each, and the browser's storage quota is shared with the
+  // reader's own documents and chats, so keeping two would put that data at
+  // risk of eviction. Confirm before starting: this both throws away a
+  // download the reader already paid for and begins a new one.
+  selectLocalModel(id) {
+    if (!window.EOWebLLM || !id || id === this.state.localModelId) return;
+    const next = (this.state.localCatalog || []).find(m => m.id === id);
+    const current = (this.state.localCatalog || []).find(m => m.id === this.state.localModelId);
+    // `cached === null` means the cache could not be read, not that nothing is
+    // there — the purge runs either way, so warn about it either way rather
+    // than promising a download that quietly deletes something.
+    const installed = (this.state.localCatalog || []).filter(m => m.cached !== false && m.id !== id);
+    const ok = window.confirm(
+      `Install ${next ? next.label : id}${next && next.size ? ' (' + next.size + ')' : ''}?\n\n`
+      + (installed.length
+        ? `This deletes the model you have now${current ? ' (' + current.label + ')' : ''} to free the space, then downloads the new one. Only one local model is kept at a time.`
+        : `It downloads now and stays cached for next time.`)
+    );
+    if (!ok) return;
+    // The model name shown in the composer follows the active model, so keep
+    // the picker's value in step when local mode is what's answering.
+    if (this.state.provider === 'local') this.setState({ model: id });
+    window.EOWebLLM.selectModel(id).catch((e) => {
+      console.error('[eochat] local model switch failed', e);
+    });
+  }
+
+  // Delete every cached model, active one included. The escape hatch when the
+  // browser is out of room and the reader would rather have the space back.
+  purgeLocalModels() {
+    if (!window.EOWebLLM) return;
+    if (!window.confirm('Delete all downloaded local models?\n\nThis frees the space immediately. Answering locally again will re-download the model.')) return;
+    window.EOWebLLM.purgeAll().catch((e) => console.error('[eochat] local model purge failed', e));
+  }
+
   // Render-time facts about the toggle: wanting local mode (`localModel`,
   // the reader's own choice) is a different fact from whether it can
   // currently be used (`localModelStatus`, mirrored from window.EOWebLLM) —
@@ -4202,9 +4287,47 @@ class Component extends DCLogic {
         : status === 'unsupported' ? S.localModelError
         : status === 'loading' ? `${S.localModelProgress.text} ${S.localModelProgress.percent}%`.trim()
         : status === 'error' ? `Local model: ${S.localModelError}`
-        : status === 'ready' ? `Local model ready — ${window.EOWebLLM ? window.EOWebLLM.modelId : ''} (answers stay in this tab, not saved)`
+        : status === 'ready' ? `Local model ready — ${window.EOWebLLM ? window.EOWebLLM.modelLabel() : ''} (answers stay in this tab, not saved)`
         : null,
       localStatusColor: (status === 'error' || status === 'unsupported') ? '#c0341a' : '#8C877C',
+    };
+  }
+
+  // The in-browser model catalog, as the Settings panel renders it. Each row
+  // carries its own state word — active / downloaded / not downloaded — so the
+  // reader can see before clicking which one costs a download and which is
+  // already paid for, and the section says out loud that installing one
+  // removes the others.
+  _localCatalogProps(S) {
+    const rows = (S.localCatalog || []).map((m) => {
+      const active = m.id === S.localModelId;
+      const busy = active && S.localModelStatus === 'loading';
+      return {
+        id: m.id,
+        label: m.label,
+        size: m.size,
+        note: m.note,
+        active,
+        state: busy ? `installing · ${S.localModelProgress.percent}%`
+          : active ? (S.localModelStatus === 'ready' ? 'active' : 'selected')
+          : m.cached === true ? 'downloaded'
+          : m.cached === false ? 'not downloaded'
+          : '',
+        border: active ? '#1F5A4C' : '#E4DFD5',
+        bg: active ? '#F1F5F3' : '#FFFDFA',
+        pick: () => this.selectLocalModel(m.id),
+      };
+    });
+    const est = S.localStorageEstimate;
+    const gb = (n) => (n / 1073741824).toFixed(1) + ' GB';
+    return {
+      localCatalog: rows,
+      hasLocalCatalog: rows.length > 0,
+      localStorageText: est && est.quota
+        ? `Browser storage: ${gb(est.usage)} used of about ${gb(est.quota)} available to this site.`
+        : '',
+      purgeLocalModels: () => this.purgeLocalModels(),
+      canPurgeLocal: rows.some(r => r.state === 'downloaded' || r.state === 'active'),
     };
   }
 
@@ -6596,6 +6719,7 @@ class Component extends DCLogic {
       settingsLocalBg: S.localModel ? '#1F5A4C' : 'none',
       settingsLocalColor: S.localModel ? '#FFFDFA' : '#8C877C',
       settingsLocalIcon: S.localModelStatus === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
+      ...this._localCatalogProps(S),
       proxyLive: live, proxyDead: engineUnavailable,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
       usingLocalModelBadge: !live && usingLocalModel,
