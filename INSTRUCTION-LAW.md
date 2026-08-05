@@ -125,8 +125,11 @@ deliberately kept out. An unlisted folded page is indistinguishable from a page
 that was never written, and that collapse is the L2e failure: absence mistaken
 for evidence of nothing.
 
-**Measurement.** Every fold declares a fingerprint (`R4b`), and the block's
-folded index names every out-of-force fold with the NOT-active marker (`R4c`).
+**Measurement.** The gate actually loads folds to begin with (`R4a`) — a gate
+that silently loaded zero folds would pass every later clause vacuously,
+which is why fold count is checked before fingerprints or markers are.
+Every fold declares a fingerprint (`R4b`), and the block's folded index
+names every out-of-force fold with the NOT-active marker (`R4c`).
 
 **Ground.** L2e, II.4 (named absence).
 
@@ -263,9 +266,11 @@ the previous turn, so the model knows what grounds to use.
 evidence; a flagged verdict is emitted as `review_report` and persisted on the
 answer, with `corrected` and iteration count. The check (`R9a`) proves the
 reviewer flags an ungrounded claim, a refusal-compiled request, and a mechanism
-leak, and passes a grounded compliant answer. Cross-turn correction is verified
-by the two-pass test: a flagged first pass produces a second pass that attempts
-to fix the violations.
+leak, and passes a grounded compliant answer, case by case; `R9b` requires
+every one of those cases to fire as specified, so a reviewer that passes most
+cases but silently misses one does not read as compliant. Cross-turn
+correction is verified by the two-pass test: a flagged first pass produces a
+second pass that attempts to fix the violations.
 
 **Ground.** III.3 (honesty is not optional and is a mechanism, not a mood), and
 the always-on honesty + refusal folds.
