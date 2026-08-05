@@ -115,6 +115,14 @@ const MEDIUM_MODEL = parseArg("medium-model", "phi4-mini:latest");
 // target.
 const LATENCY_BUDGET_MS = parseArg("latency-budget-ms", 8000, Number);
 
+// The model that rewrites a terse follow-up ("read it again") into a
+// self-contained cue for retrieval and the instruction gate (prosify-cue.js).
+// Defaults to the tiny talker model — the rewrite is a cheap, bounded task,
+// never the model that writes the answer. Pass --prosify-model "" to disable
+// the rewrite entirely; turn-controller.js treats a falsy value as a no-op.
+const PROSIFY_MODEL = parseArg("prosify-model", TINY_MODEL);
+const PROSIFY_TIMEOUT_MS = parseArg("prosify-timeout-ms", 4000, Number);
+
 // Context window handed to the talker. Must be large enough for the folded
 // passages plus the answer, and small enough that the model stays resident on
 // the GPU — see the num_ctx comment at the /api/chat call site.
@@ -257,6 +265,8 @@ const turnController = createTurnController({
   isWarming: () => corpusWarmup.started && !corpusWarmup.ready,
   webSearchFn: webSearchAndFetch,
   cabinetStore,
+  prosifyModel: PROSIFY_MODEL,
+  prosifyTimeoutMs: PROSIFY_TIMEOUT_MS,
 });
 
 // ── Retry helper ──
