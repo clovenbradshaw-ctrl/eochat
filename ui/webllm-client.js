@@ -52,6 +52,24 @@ function writeStoredModelId(id) {
   try { localStorage.setItem(MODEL_PREF_KEY, id); } catch { /* not fatal: the choice just won't survive reload */ }
 }
 
+// Reader-chosen display names, keyed by catalog model id — e.g. "my fast
+// model" instead of "Llama-3.2-1B-Instruct-q4f16_1-MLC". Cosmetic only: the
+// id used to fetch/select/purge is never touched, so a nickname can never
+// point at the wrong weights. Kept as a map (not one value) so a nickname
+// survives switching away from that model and back.
+const NICKNAME_KEY = "eochat.webllm.nicknames";
+
+function readStoredNicknames() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(NICKNAME_KEY) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch { return {}; }
+}
+
+function writeStoredNicknames(map) {
+  try { localStorage.setItem(NICKNAME_KEY, JSON.stringify(map)); } catch { /* not fatal */ }
+}
+
 // esm.run (jsdelivr) serves an ESM build with no bundler required — the
 // WebLLM README's own documented no-build integration path.
 const WEBLLM_MODULE_URL = "https://esm.run/@mlc-ai/web-llm";
@@ -91,6 +109,7 @@ function loadWebLLMModule() {
 class LocalModel {
   constructor() {
     this.modelId = readStoredModelId();
+    this.nicknames = readStoredNicknames();
     this.engine = null;
     // Catalog rows as the picker sees them: the static entries above plus
     // whether each is already on disk. Filled by refreshCatalog(); until then
@@ -128,14 +147,33 @@ class LocalModel {
       progress: this.progress,
       error: this.error,
       modelId: this.modelId,
-      catalog: this.catalog.map((m) => ({ ...m, active: m.id === this.modelId })),
+      nickname: this.nicknames[this.modelId] || null,
+      catalog: this.catalog.map((m) => ({ ...m, active: m.id === this.modelId, nickname: this.nicknames[m.id] || null })),
       storage: this.storage,
     };
   }
 
+  // The reader's own name for a model, when they've set one, else the
+  // catalog's stock label. Used everywhere a model is displayed — the
+  // Settings picker, the composer status line, the model chip — so renaming
+  // it once changes it everywhere at once.
   modelLabel(id) {
-    const row = MODEL_CATALOG.find((m) => m.id === (id || this.modelId));
-    return row ? row.label : (id || this.modelId);
+    const key = id || this.modelId;
+    const nick = this.nicknames[key];
+    if (nick) return nick;
+    const row = MODEL_CATALOG.find((m) => m.id === key);
+    return row ? row.label : key;
+  }
+
+  // Set or clear (empty/whitespace-only name) the reader's nickname for a
+  // catalog model. Purely cosmetic — does not touch the cache, the active
+  // model, or anything selectModel() cares about.
+  setNickname(id, name) {
+    const trimmed = (name || "").trim();
+    if (trimmed) this.nicknames[id] = trimmed;
+    else delete this.nicknames[id];
+    writeStoredNicknames(this.nicknames);
+    this._emit();
   }
 
   // Which models are actually on disk, and how much room this origin has left.
