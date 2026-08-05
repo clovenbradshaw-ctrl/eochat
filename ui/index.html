@@ -1822,41 +1822,95 @@
 
         <div style="display:flex; flex-direction:column; gap:8px;">
           <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">Model</span>
-          <div style="display:flex; flex-direction:column; gap:4px;">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Default provider</span>
-            <select value="{{ settingsProvider }}" onChange="{{ onSettingsProviderChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:inherit; font-size:12.5px; color:#26241F; outline:none;">
-              <sc-for list="{{ settingsModelOptions }}" as="opt">
-                <option value="{{ opt.id }}">{{ opt.label }}</option>
-              </sc-for>
-            </select>
-          </div>
-          <div style="display:flex; flex-direction:column; gap:4px;">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Model name</span>
-            <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ settingsModel }}" onChange="{{ onSettingsModelChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;" />
-          </div>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <button type="button" aria-pressed="{{ localModel }}" onClick="{{ settingsToggleLocal }}" style="display:flex; align-items:center; gap:4px; border:1px solid {{ settingsLocalBorder }}; border-radius:8px; background:{{ settingsLocalBg }}; color:{{ settingsLocalColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ settingsLocalIcon }}" style="font-size:12px;"></i>Local</button>
-            <span style="font-size:11px; color:#8C877C;">Answer in-browser via WebLLM (no proxy)</span>
-          </div>
+
+          <sc-if value="{{ isStaticBuild }}">
+            <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">This is the static build — there is no server here, so an answer comes either from a model running in this tab or from your own Anthropic key.</span>
+            <div style="display:flex; gap:6px;">
+              <button type="button" onClick="{{ staticSelectLocal }}" style="display:flex; align-items:center; gap:5px; border:1px solid {{ staticLocalBorder }}; background:{{ staticLocalBg }}; color:{{ staticLocalColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;"><i class="ph ph-cpu" style="font-size:12px;"></i>In-browser model</button>
+              <button type="button" onClick="{{ staticSelectAnthropic }}" style="border:1px solid {{ staticAnthropicBorder }}; background:{{ staticAnthropicBg }}; color:{{ staticAnthropicColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;">Anthropic API</button>
+            </div>
+            <sc-if value="{{ staticProviderIsAnthropic }}">
+              <div style="display:flex; flex-direction:column; gap:4px; padding-top:2px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Model</span>
+                <input type="text" placeholder="claude-sonnet-4-20250514" value="{{ settingsModel }}" onChange="{{ onSettingsModelChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;" />
+                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Add your key above under API Keys — it is sent straight from this tab to Anthropic, never through a server.</span>
+              </div>
+            </sc-if>
+          </sc-if>
+
+          <sc-if value="{{ showServerProviderFields }}">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Default provider</span>
+              <select value="{{ settingsProvider }}" onChange="{{ onSettingsProviderChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:inherit; font-size:12.5px; color:#26241F; outline:none;">
+                <sc-for list="{{ settingsModelOptions }}" as="opt">
+                  <option value="{{ opt.id }}">{{ opt.label }}</option>
+                </sc-for>
+              </select>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Model name</span>
+              <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ settingsModel }}" onChange="{{ onSettingsModelChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;" />
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ !isStaticBuild }}">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <button type="button" aria-pressed="{{ localModel }}" onClick="{{ settingsToggleLocal }}" style="display:flex; align-items:center; gap:4px; border:1px solid {{ settingsLocalBorder }}; border-radius:8px; background:{{ settingsLocalBg }}; color:{{ settingsLocalColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ settingsLocalIcon }}" style="font-size:12px;"></i>Local</button>
+              <span style="font-size:11px; color:#8C877C;">Answer in-browser via WebLLM (no proxy) — stays on across reloads once turned on</span>
+            </div>
+          </sc-if>
+
           <sc-if value="{{ hasLocalCatalog }}">
             <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
               <div style="display:flex; flex-direction:column; gap:2px;">
                 <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">In-browser model</span>
-                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Weights download into this browser and stay cached. Only one is kept — installing another deletes the current one first to free the space.</span>
+                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Weights download into this browser and stay cached — closing or reloading the tab does not lose them. Only one is kept at a time; installing another deletes the current one first to free the space.</span>
               </div>
-              <sc-for list="{{ localCatalog }}" as="lm">
-                <button type="button" onClick="{{ lm.pick }}" style="display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left; border:1px solid {{ lm.border }}; border-radius:9px; background:{{ lm.bg }}; padding:9px 11px; cursor:pointer; font-family:inherit;">
-                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
-                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                      <span style="font-size:12.5px; font-weight:500; color:#26241F;">{{ lm.label }}</span>
-                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ lm.size }}</span>
-                      <sc-if value="{{ lm.state }}">
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.04em; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 6px;">{{ lm.state }}</span>
-                      </sc-if>
-                    </div>
-                    <span style="font-size:11px; color:#8C877C; line-height:1.5;">{{ lm.note }}</span>
+
+              <div style="display:flex; flex-direction:column; gap:6px; border:1px solid {{ localCardBorder }}; border-radius:9px; background:{{ localCardBg }}; padding:9px 11px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <i class="{{ localCardIcon }}" style="font-size:13px; color:{{ localCardIconColor }}; flex:none;"></i>
+                  <span style="font-size:12.5px; font-weight:500; color:#26241F; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ localCardModelName }}</span>
+                  <sc-if value="{{ localCardCanRename }}">
+                    <button type="button" onClick="{{ renameLocalModel }}" style="border:0; background:none; font-family:inherit; font-size:10.5px; color:#8C877C; text-decoration:underline; cursor:pointer; flex:none; padding:0;">rename</button>
+                  </sc-if>
+                </div>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ localCardStatusColor }};">{{ localCardStatusText }}</span>
+                <sc-if value="{{ localCardShowProgress }}">
+                  <div style="height:4px; border-radius:2px; background:#EBE6DC; overflow:hidden;">
+                    <div style="height:100%; width:{{ localCardProgressWidth }}; background:#1F5A4C; transition:width .2s;"></div>
                   </div>
-                </button>
+                </sc-if>
+                <sc-if value="{{ localCardShowRetry }}">
+                  <button type="button" onClick="{{ retryLocalModel }}" style="align-self:flex-start; border:1px solid #A3592B; background:none; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:10.5px; color:#A3592B; cursor:pointer;">Retry download</button>
+                </sc-if>
+                <sc-if value="{{ localCardShowStart }}">
+                  <button type="button" onClick="{{ startLocalModel }}" style="align-self:flex-start; border:1px solid #1F5A4C; background:#1F5A4C; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:10.5px; color:#FFFDFA; cursor:pointer;">Download &amp; start</button>
+                </sc-if>
+              </div>
+
+              <sc-for list="{{ localCatalog }}" as="lm">
+                <div style="border:1px solid {{ lm.border }}; border-radius:9px; background:{{ lm.bg }}; overflow:hidden;">
+                  <button type="button" onClick="{{ lm.pick }}" style="display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left; border:0; background:none; padding:9px 11px; cursor:pointer; font-family:inherit;">
+                    <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
+                      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <span style="font-size:12.5px; font-weight:500; color:#26241F;">{{ lm.label }}</span>
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ lm.size }}</span>
+                        <sc-if value="{{ lm.state }}">
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.04em; color:{{ lm.stateColor }}; background:{{ lm.stateBg }}; border-radius:4px; padding:1px 6px;">{{ lm.state }}</span>
+                        </sc-if>
+                      </div>
+                      <span style="font-size:11px; color:#8C877C; line-height:1.5;">{{ lm.note }}</span>
+                    </div>
+                  </button>
+                  <sc-if value="{{ lm.busy }}">
+                    <div style="padding:0 11px 9px;">
+                      <div style="height:3px; border-radius:2px; background:#EBE6DC; overflow:hidden;">
+                        <div style="height:100%; width:{{ lm.progressWidth }}; background:#1F5A4C; transition:width .2s;"></div>
+                      </div>
+                    </div>
+                  </sc-if>
+                </div>
               </sc-for>
               <sc-if value="{{ localStorageText }}">
                 <span style="font-size:11px; color:#A39D91;">{{ localStorageText }}</span>
@@ -2119,6 +2173,25 @@ const PROJECTS_KEY = 'eochat.projects.v1';
 // see _defaultToLocalModelIfNoEngine below.
 const ON_GH_PAGES = typeof window !== 'undefined' && /(^|\.)github\.io$/.test(window.location.hostname);
 
+// On a deployment that DOES have a server, Local mode is the reader's own
+// choice rather than a forced default — but state.localModel is reset by
+// every component mount, so without this it silently reverted to off on
+// every refresh even after a model had already been downloaded and used.
+// Persisting the toggle's intent (not the model itself, which WebLLM's own
+// Cache API already keeps) is what makes "turn it on once" stick.
+const LOCAL_INTENT_KEY = 'eochat.localModel.intent';
+function readStoredLocalIntent() {
+  try {
+    const raw = localStorage.getItem(LOCAL_INTENT_KEY);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+  } catch { /* private mode / storage disabled */ }
+  return null; // no stored choice yet — let the existing defaults decide
+}
+function writeStoredLocalIntent(on) {
+  try { localStorage.setItem(LOCAL_INTENT_KEY, on ? '1' : '0'); } catch { /* not fatal */ }
+}
+
 class Component extends DCLogic {
   state = {
     view: 'projects', // 'projects' | 'chat'
@@ -2135,7 +2208,7 @@ class Component extends DCLogic {
     // for the GitHub Pages deployment (see ON_GH_PAGES above), and turns on
     // for everyone else too once the first health check finds no engine at
     // all (see _defaultToLocalModelIfNoEngine).
-    localModel: ON_GH_PAGES, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
+    localModel: ON_GH_PAGES || readStoredLocalIntent() === true, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
     // Mirrors of window.EOWebLLM's catalog: which in-browser models can be
     // installed, which is active, which are already on disk, and how much
     // storage this origin is using. Only one model is ever kept — installing
@@ -2330,9 +2403,18 @@ class Component extends DCLogic {
       this._unsubLocalModel = window.EOWebLLM.subscribe((snap) => {
         this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error, localModelId: snap.modelId, localCatalog: snap.catalog, localStorageEstimate: snap.storage });
       });
-      // localModel defaults on for ON_GH_PAGES (see state init above) — start
-      // the download immediately rather than waiting for a manual toggle
-      // click that a first-time visitor has no reason to know to make.
+      // Read the model cache right away, not only once Settings is opened —
+      // otherwise the Settings panel's first paint shows every row with no
+      // downloaded/not-downloaded state at all, and the reader has no way to
+      // tell "primed already" from "hasn't started" until they wait for it
+      // to redraw a moment later.
+      window.EOWebLLM.refreshCatalog().catch(() => {});
+      // localModel defaults on for ON_GH_PAGES, and otherwise carries
+      // forward whatever the reader last chose (see readStoredLocalIntent)
+      // — either way, start the download immediately on mount rather than
+      // waiting for a toggle click a returning visitor has no reason to
+      // make again. This is what "priming the pump" on every tab load means:
+      // a fresh tab picks up exactly where the last one left off.
       if (this.state.localModel && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
         window.EOWebLLM.init();
       }
@@ -4637,6 +4719,7 @@ class Component extends DCLogic {
     if (ON_GH_PAGES) return;
     this._localModelUserTouched = true;
     const turningOn = !this.state.localModel;
+    writeStoredLocalIntent(turningOn);
     this.setState({ localModel: turningOn });
     if (turningOn && window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
       window.EOWebLLM.init();
@@ -4739,25 +4822,38 @@ class Component extends DCLogic {
   }
 
   // The in-browser model catalog, as the Settings panel renders it. Each row
-  // carries its own state word — active / downloaded / not downloaded — so the
-  // reader can see before clicking which one costs a download and which is
-  // already paid for, and the section says out loud that installing one
-  // removes the others.
+  // carries its own state word — ready now / downloading (with a live
+  // progress bar, not just a percent in text) / on disk / not downloaded —
+  // so the reader can see before clicking which one costs a download and
+  // which is already paid for, and the section says out loud that installing
+  // one removes the others.
   _localCatalogProps(S) {
+    const status = S.localModelStatus;
     const rows = (S.localCatalog || []).map((m) => {
       const active = m.id === S.localModelId;
-      const busy = active && S.localModelStatus === 'loading';
+      const busy = active && status === 'loading';
       return {
         id: m.id,
         label: m.label,
         size: m.size,
         note: m.note,
         active,
-        state: busy ? `installing · ${S.localModelProgress.percent}%`
-          : active ? (S.localModelStatus === 'ready' ? 'active' : 'selected')
-          : m.cached === true ? 'downloaded'
+        busy,
+        progressWidth: `${Math.max(2, S.localModelProgress.percent || 0)}%`,
+        state: busy ? `downloading · ${S.localModelProgress.percent}%`
+          : active ? (status === 'ready' ? 'ready now' : status === 'error' ? 'failed' : 'selected')
+          : m.cached === true ? 'on disk'
           : m.cached === false ? 'not downloaded'
           : '',
+        stateColor: busy ? '#1F5A4C'
+          : active && status === 'ready' ? '#1F5A4C'
+          : active && status === 'error' ? '#A3592B'
+          : m.cached === true ? '#6E6A60'
+          : '#A39D91',
+        stateBg: busy || (active && status === 'ready') ? '#E5EDE9'
+          : active && status === 'error' ? '#FBEFE3'
+          : m.cached === true ? '#F2EFE8'
+          : 'transparent',
         border: active ? '#1F5A4C' : '#E4DFD5',
         bg: active ? '#F1F5F3' : '#FFFDFA',
         pick: () => this.selectLocalModel(m.id),
@@ -4765,6 +4861,13 @@ class Component extends DCLogic {
     });
     const est = S.localStorageEstimate;
     const gb = (n) => (n / 1073741824).toFixed(1) + ' GB';
+    const activeRow = rows.find(r => r.active);
+    const cardStatusText = !S.localModelId ? 'Not started yet'
+      : status === 'unsupported' ? (S.localModelError || 'Cannot run in this browser')
+      : status === 'error' ? (S.localModelError || 'Download failed')
+      : status === 'loading' ? `${S.localModelProgress.text || 'Downloading…'} ${S.localModelProgress.percent}%`.trim()
+      : status === 'ready' ? 'Ready — running in this tab, weights stay cached for next time'
+      : 'Not started yet';
     return {
       localCatalog: rows,
       hasLocalCatalog: rows.length > 0,
@@ -4772,7 +4875,40 @@ class Component extends DCLogic {
         ? `Browser storage: ${gb(est.usage)} used of about ${gb(est.quota)} available to this site.`
         : '',
       purgeLocalModels: () => this.purgeLocalModels(),
-      canPurgeLocal: rows.some(r => r.state === 'downloaded' || r.state === 'active'),
+      canPurgeLocal: rows.some(r => r.state === 'on disk' || r.state === 'ready now'),
+      // A single always-visible status card above the picker list — the
+      // question a reader actually has ("is it ready yet, and which one is
+      // it") answered in one place, instead of having to match the active
+      // row's border color against the rest of the list.
+      localCardModelName: window.EOWebLLM ? window.EOWebLLM.modelLabel() : (activeRow ? activeRow.label : ''),
+      localCardCanRename: status !== 'unsupported' && !!S.localModelId,
+      localCardStatusText: cardStatusText,
+      localCardStatusColor: (status === 'error' || status === 'unsupported') ? '#A3592B' : (status === 'ready' ? '#1F5A4C' : '#6E6A60'),
+      localCardIcon: status === 'loading' ? 'ph ph-spinner eo-spin'
+        : status === 'ready' ? 'ph ph-check-circle'
+        : status === 'error' ? 'ph ph-warning-circle'
+        : status === 'unsupported' ? 'ph ph-x-circle'
+        : 'ph ph-cpu',
+      localCardIconColor: status === 'ready' ? '#1F5A4C' : (status === 'error' || status === 'unsupported') ? '#A3592B' : '#8C877C',
+      localCardBorder: status === 'ready' ? '#CFE0D8' : (status === 'error' || status === 'unsupported') ? '#E7C9AE' : '#E4DFD5',
+      localCardBg: status === 'ready' ? '#F1F5F3' : '#FFFDFA',
+      localCardShowProgress: status === 'loading',
+      localCardProgressWidth: `${Math.max(2, S.localModelProgress.percent || 0)}%`,
+      localCardShowRetry: status === 'error',
+      localCardShowStart: status === 'idle' && !!S.localModelId,
+      startLocalModel: () => { if (window.EOWebLLM) window.EOWebLLM.init(); },
+      // Cosmetic only — see webllm-client.js setNickname/modelLabel. Renaming
+      // never touches which weights are cached or active.
+      renameLocalModel: () => this.openModal({
+        title: 'Rename local model',
+        label: 'Nickname (this browser only)',
+        placeholder: activeRow ? activeRow.label : 'e.g. My fast model',
+        initialValue: (window.EOWebLLM && window.EOWebLLM.snapshot().nickname) || '',
+        submitLabel: 'Save',
+        hint: 'Shown here and in the composer instead of the technical model id. Leave blank to go back to the default name.',
+        allowEmpty: true,
+        onSubmit: (v) => { if (window.EOWebLLM) window.EOWebLLM.setNickname(S.localModelId, v); },
+      }),
     };
   }
 
@@ -7371,7 +7507,9 @@ class Component extends DCLogic {
       toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch })),
       provider: S.provider,
       model: S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : ''),
-      modelPickerLabel: `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`,
+      modelPickerLabel: (S.provider === 'local' && window.EOWebLLM)
+        ? `local · ${window.EOWebLLM.modelLabel()}`
+        : `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`,
       onProviderChange: (e) => {
         const p = S._availableModels.find(m => m.id === e.target.value);
         this.setState({ provider: e.target.value, model: p ? p.defaultModel : S.model });
@@ -7408,6 +7546,33 @@ class Component extends DCLogic {
       settingsLocalBg: S.localModel ? '#1F5A4C' : 'none',
       settingsLocalColor: S.localModel ? '#FFFDFA' : '#8C877C',
       settingsLocalIcon: S.localModelStatus === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
+      // On a server-backed deployment, Ollama's free-text provider/model
+      // fields only mean something when Local is off — showing them
+      // alongside the in-browser catalog is exactly the "which box controls
+      // what" confusion the static build's own picker exists to avoid, so
+      // they're hidden the moment Local is on there too, not just on GH
+      // Pages.
+      showServerProviderFields: !ON_GH_PAGES && !S.localModel,
+      // The static build has no server at all, so "Default provider" /
+      // "Model name" — built for typing an arbitrary Ollama tag — never
+      // applied there in the first place. It gets its own, much smaller
+      // choice instead: this tab's own model, or the reader's Anthropic key.
+      isStaticBuild: ON_GH_PAGES,
+      staticProviderIsAnthropic: S.provider === 'anthropic',
+      staticSelectLocal: () => {
+        const row = S._availableModels.find(m => m.id === 'local');
+        this.setState({ provider: 'local', model: row ? row.defaultModel : S.model });
+      },
+      staticSelectAnthropic: () => {
+        const row = S._availableModels.find(m => m.id === 'anthropic');
+        this.setState({ provider: 'anthropic', model: row ? row.defaultModel : S.model });
+      },
+      staticLocalBorder: S.provider !== 'anthropic' ? '#1F5A4C' : '#E0DACE',
+      staticLocalBg: S.provider !== 'anthropic' ? '#E4EEE9' : '#FFFDFA',
+      staticLocalColor: S.provider !== 'anthropic' ? '#1F5A4C' : '#8C877C',
+      staticAnthropicBorder: S.provider === 'anthropic' ? '#1F5A4C' : '#E0DACE',
+      staticAnthropicBg: S.provider === 'anthropic' ? '#E4EEE9' : '#FFFDFA',
+      staticAnthropicColor: S.provider === 'anthropic' ? '#1F5A4C' : '#8C877C',
 
       // ── Settings → Senses. Hugging Face models installed into this browser
       // (window.EOSenses / senses-runtime.js). Every fact shown here about a
