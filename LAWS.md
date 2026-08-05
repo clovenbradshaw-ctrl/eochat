@@ -526,6 +526,91 @@ for how those two extra call sites were actually found.
 
 ---
 
+## L8 — Selection over a navigation index is mechanical, never model-steered
+
+**A generative model may read what a deterministic process selected. It must
+never be the process that does the selecting.**
+
+Free-form selection by a generative model over a list of candidates is not a
+navigation mechanism — it produces a plausible-sounding answer regardless of
+whether it looked in the right place, and nothing distinguishes "the model
+chose correctly" from "the model guessed and the prose covered for it"
+without an independent check. This is the same failure L2f names for
+citations (a quote unfalsifiable back to its bytes) one step earlier in the
+pipeline: an unfalsifiable *choice of where to look* is strictly worse,
+because everything downstream — the passage shown, the quote extracted, the
+review that passed it — inherits a wrong location and has no way to know.
+
+Measured directly, not assumed: three real local models (qwen2.5 0.5b, 1.5b,
+3b — CPU-only, via ollama) were each asked to pick the single most relevant
+entry from a 57-item byte-verified navigation index (eoreader6's tiered
+belief-graph fold over War and Peace) to answer "How does the book compare
+Napoleon and Kutuzov as commanders?" **All three picked the wrong entry** —
+even though the exactly correct one ("russian military kutuzov · napoleon
+defeats kutuzov") appeared three separate times in the list every one of
+them was shown. The smallest model additionally fabricated a supporting
+quote ("monstrous") that does not appear anywhere in the real passage it was
+given, and misattributed a real word ("vanquished") from a sentence about an
+unrelated character to a claimed Napoleon-versus-Kutuzov comparison. A
+larger model in the same run did not fabricate, but still picked the wrong
+passage and then, to its credit, said the passage didn't answer the
+question — which is the honest failure mode, but still a failure of
+*selection*, not of honesty, and honesty about a wrong passage does not
+recover the right one.
+
+Replacing free-form selection with deterministic keyword-overlap scoring
+against the same 57-item index — no model call in the selection step at
+all — picked the correct entry on the first try, reproducibly, at every
+model size including the smallest.
+
+### Clauses
+
+- **L8a — Selection is deterministic.** Given the same question and the same
+  index, the same candidate is chosen every time, regardless of which model
+  (if any) later reads it. A selection step whose output can change between
+  identical runs without the underlying data changing is not a selection
+  mechanism; it is a guess wearing a mechanism's clothes.
+- **L8b — A model generates only over what selection already produced.**
+  Once a mechanical process has chosen the material, a model's role is to
+  read it and answer — never to have chosen it, and never to be re-asked
+  afterward to justify a choice it made, because a post-hoc justification is
+  not a check on the choice.
+- **L8c — Every apparent quotation in a model's answer is checked against
+  the real source bytes before being shown to the reader.** A phrase that
+  reads like a citation is treated as a potential fabrication, not as
+  evidence, until it is confirmed to be a literal substring of the material
+  the model was actually given — regardless of how confident or specific it
+  reads. This holds even when L8a and L8b are both satisfied: a model can
+  still fabricate while reading real, correctly-selected material, and did,
+  measured above.
+
+### Measurement
+
+`scripts/probe-navigate-with-small-model.mjs` is the check, and it is meant
+to be re-run, not taken on faith: it prints the mechanical selection's
+reasoning (which keywords matched, against which candidates), the real bytes
+independently re-fetched at the selected offset, the model's answer, and an
+automated pass that extracts every quoted phrase from the answer and
+verifies it is a literal substring of the passage the model was shown. This
+is a real, reproducible script-level measurement rather than a live-proxy
+check like `check-laws.mjs`'s others — the failure mode lives in a model's
+free-form choice under a prompt, not in the proxy's own routing, and the fix
+is to remove that choice from the model's hands entirely rather than to
+audit it after the fact.
+
+### Fixed under this law
+
+The navigation demo this law was extracted from (`probe-navigate-with-
+small-model.mjs`) was itself the violation on its first version: it asked
+the model which of 57 index entries to read. Rewritten so the SURF step is
+pure keyword-overlap scoring (no model call) and the model's only job is
+reading the mechanically-selected, independently-byte-verified passage.
+Every model size tested went from wrong-and-sometimes-fabricating to
+correct-and-verified under the same question, with no change to the model
+itself — the fix was entirely in what was and wasn't asked of it.
+
+---
+
 ## Candidate laws
 
 Observed as consistent practice but not yet enforced by a check. Promote by
