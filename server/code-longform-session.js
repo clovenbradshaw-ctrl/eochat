@@ -288,6 +288,9 @@ ${content}
 
 It contains a syntax error: ${syntax.reason}
 
+SHARED VOCABULARY — canonical identifiers, use these EXACT names, never a different one:
+${vocab}
+
 Rewrite the ENTIRE file correctly, keeping the intended change and everything else identical. Raw file content only, no commentary.`;
     content = stripFences(await callModel(model, [{ role: "system", content: system }, { role: "user", content: fixPrompt }], FILE_TOKENS, { seed: seed + 200 + path.length }));
     const resyntax = verifySyntax(file.language, content);

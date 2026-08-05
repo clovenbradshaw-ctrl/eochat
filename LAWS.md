@@ -97,25 +97,74 @@ them nothing either time.
 
 ### Known violations (open)
 
-- **L1c — ingest reports no progress.** `POST /api/ingest`
-  ([proxy.js](server/proxy.js)) is a single blocking request/response. Under
-  contention that is a 39-second void. Fix: stream ingest the way chat already
-  streams SSE — the transport exists in this file.
-- **L1d — under load the app cannot even acknowledge.** Idle, a chat turn's
-  first SSE event arrives in 244 ms. Immediately after a run of large ingests,
-  both chat probes emitted *nothing* for 120 s and hit the check's timeout —
-  while Ollama answered `/api/tags` in 0.12 s with its models resident, so the
-  upstream was healthy throughout.
+- **L1a — under load, ungrounded chat still misses budget, narrowly.**
+  Profiled 2026-08-04 with real timers at each candidate stage (JSON.parse,
+  `mergeIngestResult`, the worker round trip), not guessed. The two probes
+  take the same code path — `chatProbes()` fires them sequentially, grounded
+  first, so ungrounded's request always lands later in wall-clock time,
+  closer to whatever the concurrent ingests are doing by then. That ruled out
+  "the ungrounded path is structurally slower" as the explanation; both were
+  measured identical up to `tools_available`.
 
-  The acknowledgement is not late, it is *unreachable*: synchronous engine work
-  holds the event loop, so the server cannot flush an SSE header until the
-  ingest finishes. This is the deepest form of L1 violation, because no amount
-  of care at the call site fixes it — the process has no moment in which to
-  speak. Fix: move engine work off the request path, or yield often enough that
-  the acknowledgement can be written before the work begins (L1a exists to make
-  this ordering explicit).
+  What the timers found instead: `JSON.parse` of a 3.3MB ingest body and
+  `mergeIngestResult`'s per-span merge loop were both directly measured
+  under 15ms in every run, including under load — neither is the cost. An
+  `setInterval`-based event-loop-lag probe (fires every 50ms, logs when the
+  gap exceeds 30ms) found real blocking of 300ms–1.7s specifically during
+  the 3-concurrent-ingest window, with **zero** such blocking during a solo
+  ingest of the same document — confirming the worker-thread isolation
+  itself works (a lone 3.3MB admission never once stalled the main thread's
+  ability to accept a fresh request), and narrowing the remaining cost to
+  the WORKER'S RESULT TRANSFER: `ingest-worker.js` returned each admission's
+  spans, document, and provenance as one `postMessage`, and Node's
+  structured-clone deserialization of that payload on the receiving side is
+  synchronous work that happens *before* the `message` event's callback
+  runs — invisible to a timer placed inside that callback, on either side.
+
+  Fixed by batching: the worker now sends spans and provenance in ~200-entry
+  chunks, each its own `postMessage`, reassembled by the client
+  (`ingest-worker-client.js`) before resolving — the event loop gets a tick
+  between transfers instead of absorbing one large one. Measured effect
+  across three runs, same probe, same load, only the transfer shape changed:
+  **1399ms → 1612ms → 1740ms (worsening across runs, pre-fix) → 1027ms
+  (post-fix)** — roughly halved from the worst pre-fix run, and within 3% of
+  the 1000ms budget rather than 74% over it. Still a real, open violation:
+  27ms over budget is not zero, and this class of adversarial load (three
+  full-book concurrent admissions racing two chat probes) is harder than
+  anything an ordinary reader produces, but the law does not grade on the
+  curve of how the failure was found. Left for a future pass: yielding
+  *inside* a single admission's own transfer earlier (smaller batches, or a
+  batch size scaled to document size rather than a flat 200), or reducing
+  what crosses the worker boundary at all rather than chunking it.
 
 ### Fixed under this law
+
+- **L1c — ingest now reports progress.** `POST /api/ingest` streams SSE
+  (`started` → `progress` × N → `done`) instead of one blocking
+  request/response. Measured 2026-08-04: a 3.3MB ingest emitted 18 events
+  over 5.1s. Confirmed by `scripts/check-laws.mjs`'s L1c check, which was
+  itself failing before this shipped.
+- **L1d — the acknowledgement is reachable again.** The prior measurement
+  found the acknowledgement was not late, it was *unreachable*: synchronous
+  engine work held the event loop, so no SSE header could flush until an
+  ingest finished — both chat probes went silent for 120s under load and hit
+  the checker's timeout, the deepest form of an L1 violation, because no care
+  at the call site could fix it. `server/ingest-worker.js` moved the real
+  admission call (`admitChunked`) off the main thread into a worker; its own
+  header cites the root cause measured here by name — profiling `pg2600.txt`
+  (3.3MB) showed 9–17s with no yield points on the thread that also answers
+  HTTP. `proxy.js`'s ingest handler now writes the SSE header and a `started`
+  event before calling `performIngest` at all (L1a), and streams a heartbeat
+  tied to the outstanding promise while the worker runs (L1c, above).
+
+  Re-measured 2026-08-04 under the same concurrent-load shape: the grounded
+  chat probe's first signal now arrives in 528ms, not 120s of nothing. This
+  is not a full close of L1d — see the L1a violation above, newly visible
+  now that the total-silence failure is gone — but the specific failure
+  recorded here, an unreachable acknowledgement, is fixed and reproducibly
+  so.
+
+- `/api/verbatim/context` accepted only `id` while the docs published
 
 - `/api/verbatim/context` accepted only `id` while the docs published
   `span_id`, so the second hop of every documented audit path returned 400.

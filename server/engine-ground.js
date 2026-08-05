@@ -36,6 +36,7 @@ import {
 // This way a v1 host still links and the fold path reports a typed gap.
 import * as corpusFacade from "@eoreader/host/corpus";
 import { INDIVIDUATION_TYPES } from "@eoreader/engine/referents";
+import { classify, classifyAmplitudes } from "@eoreader/engine/cube";
 import { loadCorefPrior, surfaceMatcher, activatePriors } from "./priors-bridge.js";
 import { runIngestInWorker } from "./ingest-worker-client.js";
 import { contentTerms } from "./conversation-memory.js";
@@ -536,6 +537,69 @@ export function engineGroundQuery(query, { budget = 2400, maxUnits = 16, limit =
     budget: foldResult.budget,
     dropped: foldResult.dropped,
     gaps,
+  };
+}
+
+// Folds a conversation's older turns down to a small, budgeted recap. Same
+// model foldSpans uses for the document side (the mechanism this bridge
+// measured against a real ~3MB corpus — War and Peace; see MIN_RELEVANCE_SCORE
+// above) — score desc, cost-aware, greedy-fill-the-budget — not the
+// heading-based instruction-gate fold, which selects by relevance SIGNAL
+// matching over a rules document and has no notion of "prefer the cheap one"
+// at all.
+//
+// Deliberately NOT a call to foldSpans itself, for one reason: foldSpans
+// BREAKS at the first unit that doesn't fit (units.js:339), which is correct
+// there — spans arrive pre-sorted by relevance, so once one is too big to
+// keep, everything after it is even less relevant anyway. Turns here are
+// sorted by pure recency, not relevance, so that same break would let one
+// long turn sitting between two short ones evict the short ones too, just
+// for being scored lower — measured: a 2000-word turn between two one-line
+// turns dropped both of them, even with budget to spare after skipping the
+// long one. The loop below is the same shape with `continue` in place of
+// `break`, so an oversized turn is folded away on its own and does not take
+// cheaper, lower-scored turns down with it.
+//
+// No engine session needed — this only ever reads the turns themselves, and
+// they are never persisted for local-mode chats (see server/proxy.js's
+// /api/conversations/fold-history, the only caller).
+//
+// Scored by pure recency: turn i+1 outranks turn i regardless of content, so
+// budget pressure drops the OLDEST turns first, never an arbitrary
+// content-relevance judgment call on a plain hello.
+const AVG_TOKEN_LEN = 4; // same estimate foldSpans uses, kept in step on purpose
+
+// Returns the SELECTED TURNS THEMSELVES — q/a pairs, unchanged — not a
+// generated recap. A model reads real conversation turns better than a
+// paraphrase of them, and there is nothing to say ABOUT the mechanism: no
+// "budget", no "folded", no "kept only if it fit" in anything the model
+// sees. The caller places these turns as ordinary user/assistant messages
+// ahead of the verbatim window — from the model's side, older-but-included
+// and just-asked are the same kind of thing, not two different registers.
+export function foldConversationTurns(turns, { budget = 900, maxUnits = 40 } = {}) {
+  if (!turns || !turns.length) return { selected: [], tokens: 0, selectedCount: 0, dropped: 0 };
+  const units = turns.map((t, i) => ({
+    q: String(t.q ?? ""), a: String(t.a ?? ""), turnIndex: i, // later index = more recent
+  }));
+  const byRecencyDesc = [...units].sort((a, b) => b.turnIndex - a.turnIndex);
+
+  const selected = [];
+  let tokens = 0;
+  for (const u of byRecencyDesc) {
+    if (selected.length >= maxUnits) break; // count ceiling, not a budget miss — stop for real
+    const cost = Math.ceil((u.q.length + u.a.length) / AVG_TOKEN_LEN);
+    if (tokens + cost > budget) continue; // this one doesn't fit; a cheaper, older one still might
+    selected.push(u);
+    tokens += cost;
+  }
+  selected.sort((a, b) => a.turnIndex - b.turnIndex); // chronological, for a coherent thread
+
+  return {
+    selected,
+    tokens,
+    budget,
+    selectedCount: selected.length,
+    dropped: units.length - selected.length,
   };
 }
 

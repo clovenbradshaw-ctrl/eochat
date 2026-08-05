@@ -46,10 +46,11 @@ import path from "path";
 // home-directory absolutes, no walking up out of the source tree.
 import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies, PERCEIVER_DISPATCH, perceiverDispatchUrl } from "./paths.js";
 import { createModelRouter } from "./model-router.js";
-import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
+import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt, foldConversationTurns } from "./engine-ground.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
 import { compileInstructionFolds } from "./project-instructions.js";
 import { createInstructionGate, countTokens as gateCountTokens, DEFAULT_INSTRUCTION_BUDGET } from "./instruction-gate.js";
+import { DELIBERATE_FOLD_IDS, runDeliberateAnswer } from "./longform-orchestrator.js";
 import { loadCorefPrior, activatePriors } from "./priors-bridge.js";
 // Static, not dynamic: the request handler is synchronous, and the module only
 // catalogs on import — ingest stays lazy behind ensurePriorsIngested().
@@ -59,12 +60,14 @@ import { sensesCatalog, SENSE_CATEGORIES } from "./senses-catalog.js";
 import * as sensesState from "./senses-state.js";
 import { refreshHfCatalog, discoverCacheStatus } from "./senses-hf.js";
 import { ConversationStore, ConversationNotFoundError } from "./conversation-store.js";
+import { submissionStore } from "./submission-store.js";
 import { createTurnController, buildWebSystemMessage } from "./turn-controller.js";
 import { cabinetStore } from "./cabinet-store.js";
 import { cabinetStats } from "./project-memory.js";
 import { buildMemoryMessage, emptyMemory } from "./conversation-memory.js";
 import { webSearchAndFetch, flattenDdgTopics } from "./web-search.js";
 import { runSessionMessage } from "./code-longform-session.js";
+import { loadMorphologyPrior, discoverNarratorContext } from "./longform-node-context.js";
 
 // ── CLI args with validation ──
 
@@ -86,6 +89,27 @@ const TOKEN_LIMIT = parseArg("limit", 3000, Number);
 const MAX_BODY = parseArg("max-body", 5_242_880, Number);
 const STORE_TTL = parseArg("store-ttl", 3_600_000, Number);
 const STORE_MAX = parseArg("store-max", 10_000, Number);
+
+// A second instance of the same cheap, stateless gate turn-controller.js
+// builds one of internally (server/turn-controller.js:instructionGate) — for
+// deciding, in /api/ground, whether the browser-local WebLLM path should run
+// the deliberate long-form pipeline too. Not threaded through as a shared
+// dependency because the gate is designed to be cheap and re-creatable
+// (module-level constant, loaded once), exactly like gateInstructionBlock's
+// own per-project gate already does.
+const groundInstructionGate = createInstructionGate();
+
+// See the /shared/ route below for why this exists and why it is an
+// explicit list rather than a directory-wide passthrough.
+const SHARED_FILE_ALLOWLIST = new Set([
+  "server/longform.js",
+  "server/longform-orchestrator.js",
+  "server/task-log.js",
+  "vendor/eoreader5/packages/def/attribution.js",
+  "vendor/eoreader5/packages/def/svo.js",
+  "vendor/eoreader5/packages/def/morphology.js",
+  "vendor/eoPriors/priors/morphology-eng.json",
+]);
 
 // Tracks a background corpus ingest so "still loading" stays distinguishable
 // from "your sources genuinely do not say this" — a query landing mid-ingest
@@ -2251,6 +2275,7 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
         "",
         "**How to use results:**",
         "- Synthesize information from multiple sources — don't rely on a single result",
+        "- Before stating something as fact, look for confirmation the way a careful person would: does a second, independent source agree? If a claim rests on only one source, or sources conflict, say so plainly instead of presenting it as settled",
         "- Cite sources when presenting facts",
         "- If search returns nothing useful, try reformulating the query before giving up",
       ].join("\n"),
@@ -3009,6 +3034,51 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Serves a small, explicit allowlist of files byte-identical to the
+  // browser, so the exact same deliberate-long-form verification code
+  // (longform.js, longform-orchestrator.js, task-log.js, and the vendored
+  // attribution/svo/morphology trio it depends on) runs in Node
+  // (turn-controller.js, against Ollama) and in the browser
+  // (ui/webllm-longform.js, against WebLLM) with zero forked logic. URLs
+  // mirror real repo-relative paths on purpose: longform.js's existing
+  // relative import of ../vendor/eoreader5/packages/def/attribution.js
+  // (which itself imports ./svo.js and ./morphology.js) then resolves
+  // correctly with NO modification — same bytes, same import specifiers,
+  // both runtimes.
+  //
+  // An explicit allowlist, not a wildcard — server/ also holds
+  // conversations/memory that must never become network-reachable this way.
+  if (req.method === "GET" && req.url.startsWith("/shared/")) {
+    const rel = decodeURIComponent(req.url.slice("/shared/".length).split("?")[0]);
+    if (!SHARED_FILE_ALLOWLIST.has(rel)) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: `not on the shared-file allowlist: ${rel}` }));
+      return;
+    }
+    const abs = path.resolve(REPO_ROOT, rel);
+    // Belt-and-suspenders traversal guard — the allowlist above already
+    // makes this unreachable, but a resolved-path check is cheap insurance
+    // against it ever becoming reachable by accident.
+    if (!abs.startsWith(REPO_ROOT + path.sep)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "path escapes repo root" }));
+      return;
+    }
+    fs.readFile(abs, (err, data) => {
+      if (err) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": rel.endsWith(".json") ? "application/json" : "text/javascript",
+        "Cache-Control": "no-cache",
+      });
+      res.end(data);
+    });
+    return;
+  }
+
   // Stats
   if (req.method === "GET" && req.url === "/stats") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -3334,7 +3404,7 @@ const server = http.createServer((req, res) => {
         return;
       }
       try {
-        const groundResult = engineGroundQuery(query, {
+        let groundResult = engineGroundQuery(query, {
           budget: data.groundBudget ?? 2400,
           maxUnits: data.groundMaxUnits ?? 5,
           limit: data.groundLimit ?? 30,
@@ -3347,6 +3417,7 @@ const server = http.createServer((req, res) => {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({
             grounded: false,
+            deliberate: false,
             warming,
             systemPrompt: buildUngroundedSystemPrompt({ warming }),
             // Same L2e treatment as the server-model path above — a client
@@ -3361,9 +3432,35 @@ const server = http.createServer((req, res) => {
           return;
         }
 
+        // Same deterministic trigger turn-controller.js's server path checks
+        // (see runAnswer there) — this is what lets the browser-local WebLLM
+        // path run the SAME deliberate long-form pipeline, since it has no
+        // way to run instruction-gate.js itself (Node-only, reads
+        // instruction-set/*.md from disk).
+        const gateInfo = groundInstructionGate.folds.length
+          ? groundInstructionGate.gate({
+              question: query,
+              history: Array.isArray(data.history) ? data.history : [],
+              evidence: groundResult.citations.map((c) => c.text),
+            })
+          : null;
+        const deliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id));
+
+        // Widen retrieval once, using write-longform.mjs's own already-tuned
+        // values — the default width above leaves almost nothing for the
+        // client's outline step to partition. Only for turns that actually
+        // need it; ordinary questions keep the caller's original width.
+        if (deliberate) {
+          groundResult = engineGroundQuery(query, {
+            budget: 4000, maxUnits: 12, limit: 24,
+            source: data.groundSource, pool: data.pool,
+          });
+        }
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           grounded: true,
+          deliberate,
           systemPrompt: buildGroundedSystemPrompt(groundResult, { toolsAvailable: false }),
           total: groundResult.total,
           folded: groundResult.folded,
@@ -3444,6 +3541,61 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Fold a conversation's older turns down to a small, budgeted recap, using
+  // foldConversationTurns (engine-ground.js) — the same foldSpans mechanism
+  // measured against a real ~3MB corpus for the document-grounding side, not
+  // the heading-based instruction-gate fold: that one selects by relevance
+  // SIGNAL matching over a rules document, this needs recency-scored,
+  // cost-aware selection over plain turns (a long recent turn should lose to
+  // several cheap older ones, which signal-matching has no notion of at all).
+  //
+  // Exists for the eochat UI's browser-local WebLLM path (localAskConversation):
+  // that path has no server-held conversation to fold server-side (local-mode
+  // turns are never persisted — "answers stay in this tab"), so the client
+  // sends the turns it already has, once, per call, rather than this route
+  // ever owning conversation state itself.
+  //
+  // The caller keeps a small window of recent turns verbatim on its own
+  // side and only sends turns OLDER than that window here — this route
+  // folds, it does not decide what counts as "recent".
+  if (req.method === "POST" && req.url === "/api/conversations/fold-history") {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+      const turns = Array.isArray(data.turns) ? data.turns : [];
+      if (!turns.length) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ turns: [], dropped: 0 }));
+        return;
+      }
+      try {
+        const budgetTokens = Number.isFinite(data.budgetTokens) ? data.budgetTokens : 900;
+        const foldResult = foldConversationTurns(turns, { budget: budgetTokens });
+        // The turns themselves, q/a pairs, nothing said ABOUT them — the
+        // caller places these as ordinary user/assistant messages, same as
+        // the verbatim window. No prose recap, no mechanism explained: a
+        // model reads real turns better than a description of turns.
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          turns: foldResult.selected.map((u) => ({ q: u.q, a: u.a })),
+          dropped: foldResult.dropped,
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
   // Engine session stats
   if (req.method === "GET" && req.url === "/api/grounded/stats") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -3476,6 +3628,214 @@ const server = http.createServer((req, res) => {
     const status = result.error ? 404 : 200;
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify(result));
+    return;
+  }
+
+  // Admin summary endpoint
+  if (req.method === "GET" && req.url === "/api/admin/summary") {
+    (async () => {
+      try {
+        const submissionStats = await submissionStore.stats();
+        let recycleList = [];
+        try { recycleList = engineListRecycleBin(); } catch { /* empty */ }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          submissionStats,
+          recycleBinCount: recycleList.length,
+          uptime: process.uptime().toFixed(1),
+          memoryUsage: process.memoryUsage().rss ? `${(process.memoryUsage().rss / 1024 / 1024).toFixed(0)} MB` : '—',
+        }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    })();
+    return;
+  }
+
+  // ── Admin submission review endpoints ──
+
+  // Submit new content for admin review
+  if (req.method === "POST" && req.url === "/api/admin/submissions") {
+    let body = "";
+    req.on("data", (chunk) => body += chunk);
+    req.on("end", async () => {
+      try {
+        const params = JSON.parse(body || "{}");
+        const submission = await submissionStore.submit({
+          originalText: params.text || "",
+          mediaType: params.mediaType || "text",
+          audioModel: params.audioModel || null,
+          heardText: params.heardText || null,
+          metadata: params.metadata || {},
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(submission));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // List pending submissions (review queue)
+  if (req.method === "GET" && req.url === "/api/admin/submissions/pending") {
+    (async () => {
+      try {
+        const pending = await submissionStore.listPending();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(pending));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    })();
+    return;
+  }
+
+  // List resolved submissions
+  if (req.method === "GET" && req.url === "/api/admin/submissions/resolved") {
+    (async () => {
+      try {
+        const resolved = await submissionStore.listResolved();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(resolved));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    })();
+    return;
+  }
+
+  // Submission stats
+  if (req.method === "GET" && req.url === "/api/admin/submissions/stats") {
+    (async () => {
+      try {
+        const stats = await submissionStore.stats();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(stats));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    })();
+    return;
+  }
+
+  // Get full submission by id
+  if (req.method === "GET" && req.url.startsWith("/api/admin/submissions/") && !req.url.includes("/pending") && !req.url.includes("/resolved") && !req.url.includes("/stats") && !req.url.includes("/edit") && !req.url.includes("/approve") && !req.url.includes("/reject") && !req.url.includes("/reopen") && !req.url.includes("/archive")) {
+    const id = req.url.split("/api/admin/submissions/")[1].split("?")[0];
+    (async () => {
+      try {
+        const rec = await submissionStore.get(decodeURIComponent(id));
+        if (!rec) { res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: "not found" })); return; }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(rec));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    })();
+    return;
+  }
+
+  // Edit a submission (admin correction)
+  if (req.method === "POST" && req.url === "/api/admin/submissions/edit") {
+    let body = "";
+    req.on("data", (chunk) => body += chunk);
+    req.on("end", async () => {
+      try {
+        const params = JSON.parse(body || "{}");
+        const updated = await submissionStore.edit(params.id, {
+          editedText: params.text || "",
+          editor: params.editor || "admin",
+          reason: params.reason || "",
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(updated));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Approve a submission
+  if (req.method === "POST" && req.url === "/api/admin/submissions/approve") {
+    let body = "";
+    req.on("data", (chunk) => body += chunk);
+    req.on("end", async () => {
+      try {
+        const params = JSON.parse(body || "{}");
+        const approved = await submissionStore.approve(params.id, {
+          templateSpec: params.templateSpec || null,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(approved));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Reject a submission
+  if (req.method === "POST" && req.url === "/api/admin/submissions/reject") {
+    let body = "";
+    req.on("data", (chunk) => body += chunk);
+    req.on("end", async () => {
+      try {
+        const params = JSON.parse(body || "{}");
+        const rejected = await submissionStore.reject(params.id, {
+          reason: params.reason || "",
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(rejected));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Reopen a submission
+  if (req.method === "POST" && req.url === "/api/admin/submissions/reopen") {
+    let body = "";
+    req.on("data", (chunk) => body += chunk);
+    req.on("end", async () => {
+      try {
+        const params = JSON.parse(body || "{}");
+        const reopened = await submissionStore.reopen(params.id);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(reopened));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Archive a submission
+  if (req.method === "POST" && req.url === "/api/admin/submissions/archive") {
+    let body = "";
+    req.on("data", (chunk) => body += chunk);
+    req.on("end", async () => {
+      try {
+        const params = JSON.parse(body || "{}");
+        const archived = await submissionStore.archive(params.id);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(archived));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
     return;
   }
 
@@ -4848,9 +5208,7 @@ const server = http.createServer((req, res) => {
             }],
           }));
         } else if (data.stream) {
-          // Streaming passthrough with model routing
           const targetUrl = req.url === "/api/chat" ? `${TARGET}/api/chat` : `${TARGET}/v1/chat/completions`;
-          // Remove use_tools before forwarding, route model
           const { use_tools, session: _sess, ...forwardData } = data;
           forwardData.model = selectModel(forwardData.messages || []);
 
@@ -4859,6 +5217,88 @@ const server = http.createServer((req, res) => {
             if (m.content?.length > 5 && m.role === "user") {
               await discourse.addMessage(sessionId, m.role, m.content);
             }
+          }
+
+          // Check if this question warrants deliberate long-form treatment.
+          const question = (forwardData.messages || []).filter(m => m.role === "user").pop()?.content || "";
+          let deliberate = false;
+          let groundResult = null;
+          if (question && groundInstructionGate.folds.length) {
+            groundResult = engineGroundQuery(question, { budget: 4000, maxUnits: 12, limit: 24 });
+            if (groundResult.context && (groundResult.citations || []).length > 0) {
+              const gateInfo = groundInstructionGate.gate({
+                question, history: [],
+                evidence: groundResult.citations.map(c => c.text),
+              });
+              deliberate = !!gateInfo?.activeIds?.some(id => DELIBERATE_FOLD_IDS.has(id));
+            }
+          }
+
+          if (deliberate && groundResult) {
+            const model = forwardData.model;
+            const citations = (groundResult.citations || []).map((c, i) => ({
+              index: i + 1, span_id: c.span_id, source_id: c.source_id,
+              byte_start: c.byte_start, byte_end: c.byte_end,
+              score: Math.round((c.score || 0) * 100) / 100, text: c.text,
+            }));
+
+            const generate = async (system, user, maxTokens) => {
+              const resp = await safeFetch(`${TARGET}/api/chat`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model, messages: [{ role: "system", content: system }, { role: "user", content: user }],
+                  stream: false, options: { temperature: 0.7, num_predict: maxTokens },
+                }),
+              });
+              if (!resp.ok) throw new Error(`Ollama ${resp.status}`);
+              const j = await resp.json();
+              return j.message?.content || "";
+            };
+
+            const { narratorSpans, cast } = discoverNarratorContext(
+              groundResult.citations.map(c => ({ source_id: c.source_id }))
+            );
+            const morphology = loadMorphologyPrior();
+
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+              "X-Accel-Buffering": "no",
+            });
+            let fullResponse = "";
+            try {
+              const result = await runDeliberateAnswer({
+                question, citations, generate, narratorSpans, cast, morphology,
+                onProgress: (e) => {
+                  if (e.phase === "section_closed") {
+                    const chunk = (fullResponse ? "\n\n" : "") + `## ${e.title}\n\n${e.text}`;
+                    fullResponse += chunk;
+                    res.write(`data: ${JSON.stringify({
+                      object: "chat.completion.chunk", model,
+                      choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }],
+                    })}\n\n`);
+                  }
+                },
+              });
+              res.write(`data: ${JSON.stringify({
+                object: "chat.completion.chunk", model,
+                choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop" }],
+              })}\n\n`);
+              if (fullResponse.length > 5) {
+                await discourse.addMessage(sessionId, "assistant", fullResponse);
+                store.ingest(fullResponse, "assistant", { session: sessionId });
+              }
+            } catch (err) {
+              console.error(`[proxy] Deliberate answer error: ${err.message}`);
+              res.write(`data: ${JSON.stringify({
+                object: "chat.completion.chunk", model,
+                choices: [{ index: 0, delta: { content: "\n\n[An error occurred while writing this answer.]" }, finish_reason: "stop" }],
+              })}\n\n`);
+            }
+            res.end();
+            return;
           }
 
           const upstreamResp = await withRetry(() => safeFetch(targetUrl, {

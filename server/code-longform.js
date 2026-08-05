@@ -60,7 +60,7 @@ export const MAX_CONTINUITY_REVISIONS = 2;
 // MEASURED: a real run left 12 of 13 CSS class references unresolved after
 // 2 correction attempts — not a typo, a genuinely different page structure
 // than the HTML delivered (.container/.header/.services/.form/.nav vs. an
-// HTML that only ever declared 3 ids). More than this many DISTINCT
+// HTML that only ever declared 3 ids). This many or more DISTINCT
 // references surviving correction is the declared, quantifiable signal
 // that the mismatch is structural rather than a stray wrong name — the
 // line between "ask the later file to adapt" and "the earlier file was
@@ -500,7 +500,7 @@ export async function writeFileStable({ file, request, files, contents, sharedVo
     // already verified against the HTML is put at risk.
     let escalated = false;
     const distinctRefs = new Set(flags.map((f) => f.ref));
-    if (distinctRefs.size > STRUCTURAL_MISMATCH_THRESHOLD) {
+    if (distinctRefs.size >= STRUCTURAL_MISMATCH_THRESHOLD) {
       const htmlDeps = (file.requires ?? []).filter((r) => files.find((ff) => ff.path === r)?.language === "html" && contents[r]);
       for (let esc = 0; esc < MAX_STRUCTURAL_ESCALATIONS && htmlDeps.length > 0 && flags.length > 0; esc++) {
         const htmlPath = htmlDeps[0];

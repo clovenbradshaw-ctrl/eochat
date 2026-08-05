@@ -17,11 +17,13 @@
 
 import {
   validateCitations, verifyQuotedFidelity, parseCitationRefs,
-  checkGrounding, groundingGaps, annotateVoids,
+  checkGrounding, groundingGaps, annotateVoids, autoAttachCitations,
 } from "./citation-check.js";
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
 import { createInstructionGate, countTokens as gateCountTokens } from "./instruction-gate.js";
+import { runDeliberateAnswer, DELIBERATE_FOLD_IDS } from "./longform-orchestrator.js";
+import { loadMorphologyPrior, discoverNarratorContext } from "./longform-node-context.js";
 import { reviewOutput, buildCorrectionSystemContent } from "./output-review.js";
 import {
   applyTurn, buildMemoryMessage, checkRecallDenial, emptyMemory,
@@ -173,6 +175,11 @@ export function buildWebSystemMessage(webResults) {
     `Answer the reader's question using the web search results below. When you draw on specific information, ` +
     `cite the source number like [1], [2], etc. Do NOT invent facts beyond what the material contains. ` +
     `If it does not contain the answer, say so plainly.\n\n` +
+    `Before asserting a fact, look for confirmation the way a careful person would: does more than one ` +
+    `source here agree? If a claim rests on a single source, or the sources conflict, say so instead of ` +
+    `stating it as settled — name the disagreement or the thinness rather than picking one source silently. ` +
+    `A claim two or more independent sources agree on can be stated with more confidence than one only a ` +
+    `single source makes.\n\n` +
     `--- Web Search Results (${webResults.length} sources) ---\n\n` +
     parts.join("\n\n");
   return { message: { role: "system", content }, maxCitation: webResults.length, warming: false };
@@ -384,13 +391,13 @@ export function createTurnController(deps) {
     });
   }
 
-  async function callOllamaStreaming(model, messages, { signal, onDelta }) {
+  async function callOllamaStreaming(model, messages, { signal, onDelta, maxTokens = 4096 }) {
     const resp = await fetch(`${target}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model, messages, stream: true,
-        options: { temperature: 0.7, num_predict: 4096, num_ctx: numCtx },
+        options: { temperature: 0.7, num_predict: maxTokens, num_ctx: numCtx },
       }),
       signal,
     });
@@ -420,12 +427,12 @@ export function createTurnController(deps) {
     return { text, model };
   }
 
-  async function callAnthropicStreaming(model, messages, { signal, onDelta }) {
+  async function callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens = 4096 }) {
     const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
     const nonSystem = messages.filter(m => m.role !== "system");
     const body = {
       model,
-      max_tokens: 4096,
+      max_tokens: maxTokens,
       messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
       stream: true,
     };
@@ -469,31 +476,39 @@ export function createTurnController(deps) {
     return { text, model };
   }
 
-  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride, draftModel }) {
-    let model, routerCtx;
+  // Pulled out of callModelStreaming so a caller that needs to make SEVERAL
+  // calls within one turn (the deliberate long-form pipeline: a title call
+  // plus a draft call per section plus revisions) can resolve the model
+  // ONCE and reuse it — calling this per section would risk one essay's
+  // sections silently drafting from different routed models, and would make
+  // the single draft_info event's draftModel report the wrong thing.
+  function resolveModel({ provider, modelOverride, draftModel }, messages) {
     const key = _getAnthropicKey();
     const useAnthropic = provider === "anthropic" && key;
     if (useAnthropic) {
-      model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
-      routerCtx = null;
+      return { model: modelOverride || anthropicModel || "claude-sonnet-4-20250514", routerCtx: null, useAnthropic: true };
     } else if (draftModel) {
       // Draft model: use the fastest model that's still good enough. The
       // correction loop will fix violations with a better model if needed.
-      model = draftModel;
-      routerCtx = null;
+      return { model: draftModel, routerCtx: null, useAnthropic: false };
     } else if (modelOverride) {
-      model = modelOverride;
-      routerCtx = null;
+      return { model: modelOverride, routerCtx: null, useAnthropic: false };
     } else if (modelRouter) {
-      ({ model, ctx: routerCtx } = modelRouter.pick(messages));
+      const { model, ctx: routerCtx } = modelRouter.pick(messages);
+      return { model, routerCtx, useAnthropic: false };
     } else {
-      model = heuristicModel(messages);
-      routerCtx = null;
+      return { model: heuristicModel(messages), routerCtx: null, useAnthropic: false };
     }
+  }
+
+  // `fixedModel` (a resolveModel() result) skips re-resolution entirely —
+  // the deliberate pipeline's repeated small calls all pass the same one.
+  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride, draftModel, maxTokens, fixedModel }) {
+    const { model, routerCtx, useAnthropic } = fixedModel || resolveModel({ provider, modelOverride, draftModel }, messages);
     const startedAt = Date.now();
     const result = useAnthropic
-      ? await callAnthropicStreaming(model, messages, { signal, onDelta })
-      : await callOllamaStreaming(model, messages, { signal, onDelta });
+      ? await callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens })
+      : await callOllamaStreaming(model, messages, { signal, onDelta, maxTokens });
     const elapsedMs = Date.now() - startedAt;
     if (routerCtx) {
       const outcome = elapsedMs > latencyBudgetMs ? "failure" : "success";
@@ -558,7 +573,14 @@ export function createTurnController(deps) {
   // Order matters: citations/brackets/fidelity are resolved on the final text,
   // whether that text is the original or a correction.
   async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel }) {
-    let text = rawText;
+    // Mechanical pass before anything else touches the text: any sentence the
+    // model left uncited gets a bracket (plus a verbatim clause as proof) when
+    // — and only when — its own vocabulary is concentrated enough in one
+    // source to name it without guessing. Everything below (bracket
+    // resolution, fidelity, the void-checker) runs against this text exactly
+    // as it would against citations the model wrote itself; the mechanical
+    // pass never gets a separate, weaker check.
+    let text = maxCitation > 0 ? autoAttachCitations(rawText, lastCitations) : rawText;
     let display = formatOutput(text);
     let brackets = resolveCitationBrackets(text, lastCitations).citations;
     let finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
@@ -623,7 +645,7 @@ export function createTurnController(deps) {
           break; // keep the flagged text; the report will show correction was not achieved
         }
         if (!next) break;
-        text = next;
+        text = maxCitation > 0 ? autoAttachCitations(next, lastCitations) : next;
         corrected = true;
         iterations++;
         display = formatOutput(text);
@@ -873,7 +895,7 @@ export function createTurnController(deps) {
       if (webSearch && webSearchFn) {
         // ── Web search path: retrieved carries web results, no engine grounding ──
         const webResults = await webSearchFn(question, { numResults: 5, maxFetchChars: 5000 });
-        const { message: systemMsg, maxCitation } = buildWebSystemMessage(webResults);
+        let { message: systemMsg, maxCitation } = buildWebSystemMessage(webResults);
 
         const retrieved = webResults.map((r) => ({
           rank: r.rank,
@@ -889,7 +911,7 @@ export function createTurnController(deps) {
         // ingested one — a bracket the model writes against a web result has
         // to resolve against SOMETHING, or every web citation reports as
         // fabricated regardless of whether the page actually backs it.
-        const lastCitations = webResults.map((r, i) => ({
+        let lastCitations = webResults.map((r, i) => ({
           index: i + 1, source_id: r.url, title: r.title, url: r.url,
           text: r.text || r.snippet || "",
         }));
@@ -930,17 +952,62 @@ export function createTurnController(deps) {
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
-        messages.push(...history, { role: "user", content: question });
+        const webDeliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id))
+          && webResults.length > 0;
 
+        let rawText, model, webDeliberateGaps = null;
         let sawStart = false;
-        const { text: rawText, model } = await callModelStreaming(messages, {
-          signal: controller.signal, provider, modelOverride, draftModel,
-          onDelta: (delta, text) => {
-            if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length }); }
-            controller._partialText = formatOutput(text);
-            sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
-          },
-        });
+
+        if (webDeliberate) {
+          const fixedModel = resolveModel({ provider, modelOverride, draftModel }, messages);
+          model = fixedModel.model;
+          sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length });
+
+          const generate = async (system, user, maxTokens) => {
+            const r = await callModelStreaming(
+              [{ role: "system", content: system }, { role: "user", content: user }],
+              { signal: controller.signal, onDelta: () => {}, maxTokens, fixedModel }
+            );
+            return r.text;
+          };
+
+          const webCitations = webResults.map((r, i) => ({
+            span_id: `web-${i}`,
+            source_id: r.url,
+            byte_start: 0,
+            byte_end: (r.text || r.snippet || "").length,
+            score: 1.0,
+            text: (r.text || r.snippet || "").trim(),
+          }));
+
+          let cumulativeText = "";
+          const result = await runDeliberateAnswer({
+            question, citations: webCitations, generate,
+            signal: controller.signal,
+            onProgress: (e) => {
+              if (e.phase === "section_closed") {
+                const chunk = (cumulativeText ? "\n\n" : "") + `## ${e.title}\n\n${e.text}`;
+                cumulativeText += chunk;
+                controller._partialText = formatOutput(cumulativeText);
+                sendEvent("answer_delta", { turnId: turn.id, answerId, delta: chunk, text: controller._partialText });
+              }
+            },
+          });
+
+          rawText = result.text;
+          lastCitations = result.citations;
+          maxCitation = result.citations.length;
+          webDeliberateGaps = result.gaps;
+        } else {
+          ({ text: rawText, model } = await callModelStreaming(messages, {
+            signal: controller.signal, provider, modelOverride, draftModel,
+            onDelta: (delta, text) => {
+              if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length }); }
+              controller._partialText = formatOutput(text);
+              sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
+            },
+          }));
+        }
 
         // Draft info: which model produced this draft. When draftModel is set,
         // the reader sees both the draft model and the correction model (if any).
@@ -984,6 +1051,7 @@ export function createTurnController(deps) {
         if (webResults.length === 0) {
           gaps.push({ type: "no_web_results", reason: "No web search results matched this question — answered from general knowledge, uncited." });
         }
+        if (webDeliberateGaps?.length) gaps.push(...webDeliberateGaps);
         for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
@@ -1077,15 +1145,104 @@ export function createTurnController(deps) {
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
         messages.push(...history, { role: "user", content: question });
 
+        // Deliberate long-form: a section-by-section, citation-verified
+        // answer (longform-orchestrator.js) instead of one single-shot
+        // completion — triggered by the SAME instruction-gate signal that
+        // already describes this behaviour in prose
+        // (instruction-set/150-longform-essay.md), so the description is
+        // mechanically true rather than a hope that the model reads and
+        // follows it. Same mechanism the WebLLM/local-mode path uses (see
+        // /api/ground in proxy.js) — one implementation, both backends.
+        const deliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id))
+          && (groundResult.citations || []).length > 0;
+
+        let effectiveGround = groundResult;
+        let effectiveLastCitations = lastCitations;
+        let effectiveMaxCitation = maxCitation;
+        let rawText, model;
         let sawStart = false;
-        const { text: rawText, model } = await callModelStreaming(messages, {
-          signal: controller.signal, provider, modelOverride, draftModel,
-          onDelta: (delta, text) => {
-            if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
-            controller._partialText = formatOutput(text);
-            sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
-          },
-        });
+
+        if (deliberate) {
+          // The default retrieval width above (budget:3000, maxUnits:5,
+          // limit:16) leaves almost nothing for the outline step to
+          // partition — widen once, using write-longform.mjs's own
+          // already-tuned values, only for turns that actually need it.
+          effectiveGround = groundQuery(question, {
+            budget: 4000, maxUnits: 12, limit: 24,
+            source: sourceScope, pool: pool || "corpus",
+            discourse: discourse.state.hot?.length
+              ? discourse.state.hot.slice(0, 4).map((t) => t.term).join(" ")
+              : undefined,
+          });
+          effectiveLastCitations = (effectiveGround.citations || []).map((c, i) => ({
+            index: i + 1, source_id: c.source_id, span_id: c.span_id,
+            byte_start: c.byte_start, byte_end: c.byte_end, score: c.score, text: c.text,
+          }));
+
+          // Re-report grounding against what the essay is ACTUALLY built
+          // from — the passages panel must match the wider retrieval, not
+          // the narrower one the turn started with.
+          sendEvent("witnesses_selected", {
+            turnId: turn.id, answerId,
+            empty: !effectiveGround.context, warming,
+            sourceCount: effectiveGround.total || 0, foldedCount: effectiveGround.folded || 0,
+            tokens: effectiveGround.tokens, budget: effectiveGround.budget, dropped: effectiveGround.dropped,
+            retrieved: [], citations: effectiveLastCitations, gaps: effectiveGround.gaps || [],
+            priorWidening: effectiveGround.priorWidening || null, discourse: effectiveGround.discourse || null,
+          });
+          await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+            grounding: {
+              sourceCount: effectiveGround.total || 0, foldedCount: effectiveGround.folded || 0,
+              tokens: effectiveGround.tokens, budget: effectiveGround.budget, dropped: effectiveGround.dropped,
+              empty: !effectiveGround.context, warming,
+              priorWidening: effectiveGround.priorWidening || null, discourse: effectiveGround.discourse || null,
+            },
+          });
+
+          const fixedModel = resolveModel({ provider, modelOverride, draftModel }, messages);
+          model = fixedModel.model;
+          sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: effectiveGround.folded || 0 });
+
+          const generate = async (system, user, maxTokens) => {
+            const r = await callModelStreaming(
+              [{ role: "system", content: system }, { role: "user", content: user }],
+              { signal: controller.signal, onDelta: () => {}, maxTokens, fixedModel }
+            );
+            return r.text;
+          };
+          const { narratorSpans, cast } = discoverNarratorContext(effectiveLastCitations);
+          const morphology = loadMorphologyPrior();
+
+          let cumulativeText = "";
+          const result = await runDeliberateAnswer({
+            question, citations: effectiveLastCitations, generate, narratorSpans, cast, morphology,
+            signal: controller.signal,
+            onProgress: (e) => {
+              if (e.phase === "section_closed") {
+                const chunk = (cumulativeText ? "\n\n" : "") + `## ${e.title}\n\n${e.text}`;
+                cumulativeText += chunk;
+                controller._partialText = formatOutput(cumulativeText);
+                sendEvent("answer_delta", { turnId: turn.id, answerId, delta: chunk, text: controller._partialText });
+              }
+            },
+          });
+
+          rawText = result.text;
+          effectiveLastCitations = result.citations; // already renumbered to match the brackets in rawText
+          effectiveMaxCitation = result.citations.length;
+          effectiveGround = { ...effectiveGround, gaps: [...(effectiveGround.gaps || []), ...result.gaps] };
+        } else {
+          const r = await callModelStreaming(messages, {
+            signal: controller.signal, provider, modelOverride, draftModel,
+            onDelta: (delta, text) => {
+              if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
+              controller._partialText = formatOutput(text);
+              sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
+            },
+          });
+          rawText = r.text;
+          model = r.model;
+        }
 
         // Draft info: which model produced this draft.
         sendEvent("draft_info", {
@@ -1095,9 +1252,9 @@ export function createTurnController(deps) {
           corrected: false,
         });
 
-        const groundText = (groundResult.citations || []).map((c) => c.text).join("\n\n");
+        const groundText = effectiveLastCitations.map((c) => c.text).join("\n\n");
         const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
-          rawText, lastCitations, maxCitation, question,
+          rawText, lastCitations: effectiveLastCitations, maxCitation: effectiveMaxCitation, question,
           gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride, draftModel,
         });
 
@@ -1123,8 +1280,8 @@ export function createTurnController(deps) {
         for (const u of fidelity.unverified) {
           gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited passage." });
         }
-        for (const g of groundResult.gaps || []) gaps.push(g);
-        if (!groundResult.context) {
+        for (const g of effectiveGround.gaps || []) gaps.push(g);
+        if (!effectiveGround.context) {
           gaps.push({
             type: warming ? "corpus_warming" : "no_evidence_matched",
             reason: warming
@@ -1150,7 +1307,7 @@ export function createTurnController(deps) {
           turnId: turn.id, answerId, status: "completed", text: finalText,
           annotatedText, groundingCheck,
           citations: brackets, gaps, snippets, model, review,
-          summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
+          summary: `${effectiveGround.folded || 0} passages · ${new Set((effectiveGround.citations || []).map((c) => c.source_id)).size} sources`,
         });
         await persistTurnMemory({
           conv, turn, question, answerText: finalText, denial,
@@ -1179,7 +1336,7 @@ export function createTurnController(deps) {
     const conv = await conversationStore.require(conversationId);
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
     const effectiveMode = mode || conv.mode || "chat";
-    const effectiveWebSearch = webSearch !== undefined ? webSearch : (conv.webSearch || false);
+    const effectiveWebSearch = webSearch !== undefined ? webSearch : (conv.webSearch !== undefined ? conv.webSearch : true);
 
     // Cross-turn correction: if the previous turn's active answer was flagged,
     // inject the flags as correction context into this turn's question. The
@@ -1187,6 +1344,7 @@ export function createTurnController(deps) {
     // violations. This extends the within-turn correction loop (finalizeAndReview)
     // across turns when the model can't fix everything in one pass.
     let effectiveQuestion = question;
+    let correction = null;
     const turns = conv.turns || [];
     if (turns.length > 0) {
       const prevTurn = turns[turns.length - 1];
@@ -1194,16 +1352,16 @@ export function createTurnController(deps) {
       if (prevAnswer?.review?.verdict === "FLAGGED" && prevAnswer.review.flags?.length) {
         const correctionContext = buildCorrectionSystemContent(prevAnswer.review.flags, prevAnswer.instructionGate?.activeIds || []);
         effectiveQuestion = `${question}\n\n${correctionContext}`;
-        sendEvent("cross_turn_correction", {
-          turnId: turn?.id, previousTurnId: prevTurn.id,
-          flags: prevAnswer.review.flags.map((f) => f.type),
-        });
+        correction = { previousTurnId: prevTurn.id, flags: prevAnswer.review.flags.map((f) => f.type) };
       }
     }
 
     const { turn } = await conversationStore.appendTurn(conversationId, {
       question: effectiveQuestion, sourceScope: effectiveScope, attachments,
     });
+    if (correction) {
+      sendEvent("cross_turn_correction", { turnId: turn.id, ...correction });
+    }
     const answer = await conversationStore.addAnswer(conversationId, turn.id, {});
     sendEvent("accepted", {
       turnId: turn.id, answerId: answer.id, question: effectiveQuestion,
@@ -1228,13 +1386,13 @@ export function createTurnController(deps) {
     sendEvent("accepted", {
       turnId, answerId: answer.id, question: turn.question,
       sourceScope: turn.sourceScope, pool: conv.pool || "corpus",
-      mode: conv.mode || "chat", webSearch: conv.webSearch || false,
+      mode: conv.mode || "chat", webSearch: conv.webSearch !== undefined ? conv.webSearch : true,
       regenerate: true,
     });
     const run = runAnswer({
       conv: { ...conv, id: conversationId }, turn, answerId: answer.id,
       question: turn.question, sourceScope: turn.sourceScope, pool: conv.pool,
-      mode: conv.mode || "chat", webSearch: conv.webSearch || false,
+      mode: conv.mode || "chat", webSearch: conv.webSearch !== undefined ? conv.webSearch : true,
     }, sendEvent);
     return { turnId, answerId: answer.id, done: run };
   }

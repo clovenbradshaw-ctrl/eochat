@@ -28,3 +28,9 @@ result that predates the event in question is not evidence about the event.
 When the web returned nothing, answer from general knowledge without brackets
 and say plainly that nothing matched the search. A thin web result does not
 justify a confident claim built on top of it.
+
+Seek confirmation the way a careful person would before stating something as
+fact: does a second, independent result agree, or does only one source make
+the claim? A single uncorroborated result is weaker evidence than two that
+agree, and sources that conflict are not evidence for either side — say so
+rather than picking one silently.

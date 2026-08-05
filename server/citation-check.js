@@ -625,3 +625,113 @@ export function groundingGaps(report) {
   }
   return gaps;
 }
+
+// ── Mechanical citation attachment ──────────────────────────────────────────
+//
+// A citation the model chooses to write is still the model's choice — it can
+// simply forget, especially a small model, and the reader has no way to tell
+// "this came from a source" from "this came from parametric memory" apart.
+// This runs after generation, blind to what the model intended, and decides
+// two things purely by string matching: whether an uncited sentence's own
+// vocabulary is concentrated enough in ONE source to name it, and if so,
+// which few words of that source's own text to splice in as proof — a literal
+// verbatim clause, not a paraphrase, so the reader is looking at the source's
+// own bytes rather than trusting the match that found them.
+//
+// Conservative on purpose: most uncited sentences get nothing, because most
+// don't concentrate enough shared vocabulary in a single source to name one
+// without guessing. Silence is the correct output there — better an
+// unattributed sentence than a confidently wrong attribution.
+
+const AUTO_CITE_MIN_SIGNIFICANT_WORDS = 4;
+const AUTO_CITE_MIN_SCORE = 0.6;
+const AUTO_CITE_MIN_HITS = 3;
+const AUTO_CITE_QUOTE_MAX_CHARS = 110;
+const AUTO_CITE_MIN_SOURCE_CHARS = 40;
+
+function significantWords(s) {
+  const set = new Set();
+  for (const w of String(s || "").toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    if (w.length >= 4 && !CLAIM_STOPWORDS.has(w)) set.add(w);
+  }
+  return set;
+}
+
+// The clause of `sourceText` (split on sentence-ish boundaries) whose own
+// vocabulary overlaps `wordsWanted` the most — the actual bytes shown as
+// proof, not a description of them. Trimmed to a word boundary, never
+// mid-word, when it runs past the display budget.
+function bestClause(sourceText, wordsWanted) {
+  const clauses = String(sourceText || "").split(/(?<=[.!?;])\s+/).map((c) => c.trim()).filter(Boolean);
+  let best = null, bestHits = 0;
+  for (const c of clauses) {
+    if (c.length < 20) continue;
+    const cWords = significantWords(c);
+    if (!cWords.size) continue;
+    let hits = 0;
+    for (const w of wordsWanted) if (cWords.has(w)) hits++;
+    if (hits > bestHits) { bestHits = hits; best = c; }
+  }
+  if (!best) return null;
+  if (best.length <= AUTO_CITE_QUOTE_MAX_CHARS) return best;
+  const cut = best.slice(0, AUTO_CITE_QUOTE_MAX_CHARS);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 40 ? cut.slice(0, lastSpace) : cut) + "…";
+}
+
+// Where, within one sentence's own text, a splice belongs: right before the
+// sentence's closing punctuation, not after it — "...ends here (\"quote\"
+// [2])." reads as one sentence; appending after the period reads as a stray
+// fragment tacked onto the next one.
+function insertionPointWithinSentence(sentenceText) {
+  const m = sentenceText.match(/[.!?]+["'”’)\]]*\s*$/);
+  return m ? sentenceText.length - m[0].length : sentenceText.length;
+}
+
+/**
+ * Attach a citation — bracket plus a short verbatim clause as proof — to any
+ * sentence the model left uncited, when that sentence's vocabulary is
+ * concentrated enough in one source's text to name it without guessing.
+ * Nothing here is invented: the clause is a literal substring of the citation
+ * table entry the bracket points to, and the same downstream mechanical
+ * checks (verifyQuotedFidelity, checkGrounding) run against it exactly as
+ * they would against a quote the model wrote itself.
+ */
+export function autoAttachCitations(text, citations) {
+  if (!text || !citations || !citations.length) return text;
+  const sentences = splitSentences(text);
+  if (!sentences.length) return text;
+
+  const sources = citations
+    .map((c) => ({ index: c.index, text: String(c.text || ""), words: significantWords(c.text) }))
+    .filter((s) => s.text.length >= AUTO_CITE_MIN_SOURCE_CHARS && s.words.size >= AUTO_CITE_MIN_SIGNIFICANT_WORDS);
+  if (!sources.length) return text;
+
+  const inserts = [];
+  for (const s of sentences) {
+    if (parseCitationRefs(s.text).length) continue; // the model already cited this one
+    const words = significantWords(s.text);
+    if (words.size < AUTO_CITE_MIN_SIGNIFICANT_WORDS) continue;
+
+    let best = null, bestScore = 0, bestHits = 0;
+    for (const src of sources) {
+      let hits = 0;
+      for (const w of words) if (src.words.has(w)) hits++;
+      const score = hits / words.size;
+      if (score > bestScore) { bestScore = score; bestHits = hits; best = src; }
+    }
+    if (!best || bestScore < AUTO_CITE_MIN_SCORE || bestHits < AUTO_CITE_MIN_HITS) continue;
+
+    const clause = bestClause(best.text, words);
+    const at = s.start + insertionPointWithinSentence(s.text);
+    inserts.push({ at, num: best.index, clause });
+  }
+  if (!inserts.length) return text;
+
+  let out = text;
+  for (const ins of [...inserts].sort((a, b) => b.at - a.at)) {
+    const addition = ins.clause ? ` ("${ins.clause}" [${ins.num}])` : ` [${ins.num}]`;
+    out = out.slice(0, ins.at) + addition + out.slice(ins.at);
+  }
+  return out;
+}

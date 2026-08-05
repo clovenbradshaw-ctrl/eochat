@@ -19,6 +19,21 @@
 // entries) is handed back over postMessage. The caller (engine-ground.js's
 // mergeIngestResult) splices that into the real, persistent pool session —
 // mechanical Map insertion, not a re-derivation of what belongs there.
+//
+// THE RESULT IS SENT IN BATCHES, not one message. A ~1650-chunk book's spans
+// alone structured-clone to a multi-megabyte object graph, and Node's
+// structured-clone deserialization on the RECEIVING side is itself
+// synchronous main-thread work that happens before the `message` event's
+// callback even runs — invisible to any timer in that callback, and
+// measured (LAWS.md L1a, 2026-08-04) as the residual cause of occasional
+// sub-2-second event-loop stalls under concurrent ingest load, after
+// JSON.parse and mergeIngestResult were both directly measured at under
+// 15ms and ruled out. Splitting one large transfer into many small ones
+// does not reduce the total bytes moved; it gives the event loop a tick
+// between batches to run whatever else is waiting — the same fix in spirit
+// as the worker itself, one level down.
+const SPAN_BATCH = 200;
+
 import { parentPort } from "node:worker_threads";
 import { createSession, admitChunked, ingestFile } from "@eoreader/host/corpus";
 
@@ -38,19 +53,29 @@ parentPort.on("message", (msg) => {
     // naming convention here, so this file never has to track that format.
     const docId = kind === "file" ? [...session.documents.keys()][0] : sourceId;
     const doc = session.documents.get(docId) || null;
+    const spans = [...session.spans.entries()];
+    const provenance = [...session.provenance.entries()];
+
+    for (let i = 0; i < spans.length; i += SPAN_BATCH) {
+      parentPort.postMessage({ id, batch: "spans", chunk: spans.slice(i, i + SPAN_BATCH) });
+    }
+    for (let i = 0; i < provenance.length; i += SPAN_BATCH) {
+      parentPort.postMessage({ id, batch: "provenance", chunk: provenance.slice(i, i + SPAN_BATCH) });
+    }
 
     parentPort.postMessage({
       id,
       ok: true,
+      done: true,
       chunks: result.chunks,
       admitted: result.admitted,
       docId,
       doc,
-      spans: [...session.spans.entries()],
-      provenance: [...session.provenance.entries()],
+      spanCount: spans.length,
+      provenanceCount: provenance.length,
       provenanceTick: session.provenance.tick,
     });
   } catch (err) {
-    parentPort.postMessage({ id, ok: false, error: err.message });
+    parentPort.postMessage({ id, ok: false, done: true, error: err.message });
   }
 });

@@ -39,21 +39,8 @@
 // structure was discovered rather than imposed, and the passages that did not
 // survive are visible rather than quietly dropped.
 
-import fs from "node:fs";
-import path from "node:path";
 import { createTaskLog, append, projectTasks, deriveLevels, foldToWorkingSet, produce, ENTRY_KINDS, OPERATOR_BASIS } from "./task-log.js";
 import { checkAttribution } from "../vendor/eoreader5/packages/def/attribution.js";
-import { PRIORS_ROOT } from "./paths.js";
-
-// The morphology prior, loaded once. Absent => checkAttribution reports a gap
-// and degrades to suffix stemming, which provably misses every irregular.
-let _morph;
-function morphologyPrior() {
-  if (_morph !== undefined) return _morph;
-  const p = path.join(PRIORS_ROOT, "priors", "morphology-eng.json");
-  _morph = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null;
-  return _morph;
-}
 
 /**
  * Check a draft the way the ENGINE checks it: who did what to whom.
@@ -70,7 +57,7 @@ function morphologyPrior() {
  * surface fixed by scope, not by the token. Without it every "I" in the
  * creature's tale is silently Victor.
  */
-export async function attributionResidual(draft, citedPassages, { narratorSpans = [], aliases = [], cast = null } = {}) {
+export async function attributionResidual(draft, citedPassages, { narratorSpans = [], aliases = [], cast = null, morphology = null } = {}) {
   const evidence = citedPassages.map((p) => String(p.text ?? "")).join("\n\n");
   if (!evidence.trim()) return { residual: null, gap: "no evidence text to check against", vetoes: [] };
 
@@ -78,7 +65,7 @@ export async function attributionResidual(draft, citedPassages, { narratorSpans 
     narratorSpans,
     aliases,
     cast,
-    morphology: morphologyPrior(),
+    morphology,
   });
 
   const hard = r.vetoes.filter((v) => v.severity === "hard");

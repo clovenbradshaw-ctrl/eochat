@@ -24,8 +24,17 @@ function spawn() {
   w.on("message", (msg) => {
     const p = pending.get(msg.id);
     if (!p) return;
+
+    // A batch message — accumulate and wait for the final one. Each batch is
+    // its own message-port delivery, so the event loop gets a tick between
+    // them instead of one giant structured-clone transfer (ingest-worker.js
+    // header: this is the fix for the residual L1a stalls JSON.parse and
+    // mergeIngestResult were both measured innocent of).
+    if (msg.batch === "spans") { p.spans.push(...msg.chunk); return; }
+    if (msg.batch === "provenance") { p.provenance.push(...msg.chunk); return; }
+
     pending.delete(msg.id);
-    if (msg.ok) p.resolve(msg);
+    if (msg.ok) p.resolve({ ...msg, spans: p.spans, provenance: p.provenance });
     else p.reject(new Error(msg.error || "ingest worker reported an error"));
   });
   const failAll = (err) => {
@@ -51,13 +60,15 @@ function ensureWorker() {
  * msg is one of:
  *   { kind: "text", text, sourceId }
  *   { kind: "file", filePath }
- * Resolves with { chunks, admitted, docId, doc, spans, provenance, provenanceTick }.
+ * Resolves with { chunks, admitted, docId, doc, spans, provenance, provenanceTick } —
+ * spans/provenance arrive as a series of batched messages (see spawn() above)
+ * and are reassembled here before resolving, same shape as before batching.
  */
 export function runIngestInWorker(msg) {
   const w = ensureWorker();
   const id = nextId++;
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    pending.set(id, { resolve, reject, spans: [], provenance: [] });
     w.postMessage({ id, ...msg });
   });
 }
