@@ -22,6 +22,13 @@
 // anchored at line start — verified by hand against the real match list
 // before writing this file, not assumed to be complete.
 //
+// Second pass adds a third level: Book -> Chapter -> PARAGRAPH, using the
+// blank-line boundary (text-organ.js's own PARAGRAPH_BREAK = /\n\s*\n+/g,
+// same literal, not a fork) — the first level below "chapter" the book
+// itself actually asserts (a blank line IS a real authorial break), one
+// step short of sentence grain. Chapter-level alone ("just the chapters")
+// was too coarse to jump INTO a chapter, only to its start.
+//
 // Usage: node scripts/probe-war-and-peace-structure-spans.mjs
 
 import fs from "node:fs";
@@ -45,6 +52,23 @@ function verifyByteSpan(byteStart, byteLength, expectedStartsWith) {
   const buf = Buffer.alloc(Math.min(byteLength, 200));
   const n = fs.readSync(fd, buf, 0, buf.length, byteStart);
   return buf.subarray(0, n).toString("utf8").startsWith(expectedStartsWith);
+}
+
+// Same literal as text-organ.js's PARAGRAPH_BREAK — reused, not reinvented.
+const PARAGRAPH_BREAK = /\n\s*\n+/g;
+function splitParagraphs(chunk, chunkCharStart) {
+  const paras = [];
+  let last = 0;
+  let pm;
+  PARAGRAPH_BREAK.lastIndex = 0;
+  while ((pm = PARAGRAPH_BREAK.exec(chunk))) {
+    const raw = chunk.slice(last, pm.index);
+    if (raw.trim().length > 0) paras.push({ charStart: chunkCharStart + last, charEnd: chunkCharStart + pm.index });
+    last = pm.index + pm[0].length;
+  }
+  const tail = chunk.slice(last);
+  if (tail.trim().length > 0) paras.push({ charStart: chunkCharStart + last, charEnd: chunkCharStart + chunk.length });
+  return paras;
 }
 
 // ── 1. Top-level divisions: 15 Books + 2 Epilogues, the book's own real headings ──
@@ -81,7 +105,27 @@ for (let bi = 0; bi < books.length; bi++) {
     const chByte = byteSpanFor(ch.charOffset, chCharEnd);
     const ok = verifyByteSpan(chByte.byteStart, chByte.byteLength, ch.title);
     checked++; if (ok) verified++;
-    return { title: ch.title, byteOffset: chByte.byteStart, byteLength: chByte.byteLength, verified: ok };
+
+    // Paragraph level, inside this chapter's own char range. Every Nth one
+    // gets a real fs.readSync verification (all of them would be several
+    // thousand extra seeks across the whole book — a random-sampled check
+    // plus the independent Python cross-check below is the same discipline
+    // as the earlier waypoint work, scaled to volume rather than skipped).
+    const chunk = text.slice(ch.charOffset, chCharEnd);
+    const paraRanges = splitParagraphs(chunk, ch.charOffset);
+    const paragraphs = paraRanges.map((p, pi) => {
+      const pByte = byteSpanFor(p.charStart, p.charEnd);
+      const sampleThis = pi % 7 === 0; // ~1 in 7, spread across the chapter
+      let ok2 = null;
+      if (sampleThis) {
+        const expected = text.slice(p.charStart, Math.min(p.charStart + 30, p.charEnd));
+        ok2 = verifyByteSpan(pByte.byteStart, pByte.byteLength, expected);
+        checked++; if (ok2) verified++;
+      }
+      return { byteOffset: pByte.byteStart, byteLength: pByte.byteLength, sampledVerified: ok2 };
+    });
+
+    return { title: ch.title, byteOffset: chByte.byteStart, byteLength: chByte.byteLength, verified: ok, paragraphCount: paragraphs.length, paragraphs };
   });
 
   structure.books.push({
@@ -96,13 +140,15 @@ for (let bi = 0; bi < books.length; bi++) {
 
 fs.closeSync(fd);
 
-console.log(`Byte-verified ${verified}/${checked} spans (every book + every chapter) with a real fs.readSync seek.\n`);
+const totalParagraphs = structure.books.reduce((s, b) => s + b.chapters.reduce((s2, c) => s2 + c.paragraphCount, 0), 0);
+console.log(`Byte-verified ${verified}/${checked} spans (every book + every chapter, ~1-in-7 paragraphs sampled) with a real fs.readSync seek.\n`);
 for (const b of structure.books) {
-  console.log(`${b.title.padEnd(24)} byteOffset=${b.byteOffset.toString().padEnd(9)} byteLength=${b.byteLength.toString().padEnd(8)} chapters=${b.chapterCount} verified=${b.verified}`);
+  const bPara = b.chapters.reduce((s, c) => s + c.paragraphCount, 0);
+  console.log(`${b.title.padEnd(24)} byteOffset=${b.byteOffset.toString().padEnd(9)} byteLength=${b.byteLength.toString().padEnd(8)} chapters=${b.chapterCount.toString().padEnd(3)} paragraphs=${bPara} verified=${b.verified}`);
 }
 
 const totalChapterBytes = structure.books.reduce((s, b) => s + b.chapters.reduce((s2, c) => s2 + c.byteLength, 0), 0);
-console.log(`\n${structure.books.length} books/epilogues, ${allChapters.length} chapters total.`);
+console.log(`\n${structure.books.length} books/epilogues, ${allChapters.length} chapters, ${totalParagraphs.toLocaleString()} paragraphs total.`);
 console.log(`Sum of chapter byte-spans: ${totalChapterBytes.toLocaleString()} bytes vs. whole-file ${structure.totalBytes.toLocaleString()} bytes`);
 console.log(`(${(100 * totalChapterBytes / structure.totalBytes).toFixed(1)}% — the gap is front matter, book-title pages, and inter-chapter whitespace, not lost content).`);
 
