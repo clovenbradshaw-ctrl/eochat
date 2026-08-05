@@ -1,8 +1,8 @@
-# Proposed amendments — PARTIALLY DISPOSED 2026-08-04
+# Proposed amendments — PARTIALLY DISPOSED, then corrected, 2026-08-04
 
-Every item below originated as a proposal only. As of 2026-08-04, both parts
-have a disposition, recorded here so this file stops being the last word on
-either:
+Every item below originated as a proposal only. Two sessions worked this
+file in parallel on 2026-08-04 and reached genuinely different conclusions
+about Part B, for a reason worth recording rather than quietly overwriting:
 
 - **Part A → drafted into `eo-constitution` as formal amendment proposals,
   not yet applied.** A1/A2/A7 became `AMENDMENT-8-PROPOSAL.md` (the script
@@ -15,15 +15,22 @@ either:
   IV.2 an agent proposes and a human still has to dispose — none of these
   four are applied. Read them in `../eo-constitution/`, not this file, for
   the current wording.
-- **Part B → folded into `LAWS.md`'s Candidate laws, not promoted to a
-  numbered law.** Both L6 and L7 name a real, defensible principle, but
-  neither has a live surface a check can exercise yet: L6's `multiAltitudeFold`
-  is not wired into any reader-facing surface in this app, and L7's
-  distinguishing signal (why a perceiver found no signal) would have to come
-  from `vendor/eoreader5`, a submodule this checkout does not vendor in. Per
-  this file's own rule — "a law without one [a check] is a slogan" — they sit
-  in Candidate laws until a check can be written, with the exact promotion
-  condition recorded there for each.
+- **Part B → promoted to `LAWS.md` as numbered, enforced L6 and L7.** A
+  first pass concluded L6 and L7 belonged in `LAWS.md`'s unenforced
+  Candidate laws instead, on the reasoning that `vendor/eoreader5` was "a
+  submodule this checkout does not vendor in" and no live signal existed to
+  check against. That was a real fact about the environment that pass ran
+  in and not a fact about whether the check could exist: `git submodule
+  update --init --recursive` (this repo's own documented setup step) makes
+  the real engine available, and once it is, both checks are real,
+  currently pass, and needed no invented behavior — they check the actual
+  production code, real bugs it found (`server/proxy.js`'s `terrain_report`,
+  ingest summary, and `search_memory` hint; `ui/index.html`'s
+  withheld-candidates panel), now fixed. See `LAWS.md`'s L6/L7 sections and
+  their "Promoted, after a genuine disagreement worth recording" note for
+  the full account, including two real call sites the Candidate-laws pass
+  found that the first promotion pass had missed and which are now also
+  fixed and checked (L7c).
 
 The findings themselves, and the original per-item proposed wording, are kept
 below unchanged as the record those dispositions were drawn from — do not

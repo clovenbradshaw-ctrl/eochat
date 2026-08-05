@@ -502,6 +502,10 @@ apart from an identically-shaped empty result.
   signal — an always-on caveat is as dishonest in the other direction as a
   silent one, because a reader who sees it on every result stops reading it
   at all.
+- **L7c — One fixed call site is not the law.** The same organ's output
+  often renders in more than one place (a full report, an ingest summary, a
+  search hint), and the conflation this law forbids has to be checked at
+  every rendering, not just the first one found.
 
 ### Measurement
 
@@ -513,7 +517,12 @@ text with genuine terrain signal, through `server/terrain-report-format.js`'s
 calls, extracted to its own module so it is unit-testable without a live
 proxy or a model round-trip. Confirms the scope-ambiguity disclosure is
 present on the Greek case (L7a) and absent on the clean-signal English case
-(L7b).
+(L7b). L7c is a static check of `server/proxy.js`'s own source, needing no
+live engine at all — it directly verifies the two other real call sites
+(`ingest_file`'s terrain summary, `search_memory`'s terrain hint) carry the
+same fix `terrain_report` does, rather than assuming they were covered by
+analogy. See "Promoted, after a genuine disagreement worth recording" below
+for how those two extra call sites were actually found.
 
 ---
 
@@ -539,41 +548,30 @@ writing the check first; a law without one is a slogan.
   and now partially enforced here: L2e's check requires a no-match search to
   report *which* silence it was, so an empty corpus and a silent one can no
   longer render identically.
-- **No implied completeness.** Between showing a reader a compressed or folded
-  view of a source and showing them the source itself, the interface never
-  implies the compressed view is everything. A fold, summary, or altitude view
-  necessarily omits most of the source — that is its function, not a defect —
-  but a reader who cannot tell "this is a deliberate, navigable compression"
-  from "this is the whole story" will eventually be burned by the first case
-  while trusting it like the second. Every compressed view must carry a
-  visible, honest signal of its own incompleteness and a real path to the
-  fuller material underneath it — not a footnote, an affordance. Not promoted
-  to a numbered law yet: `multiAltitudeFold` output is not currently rendered
-  by any surface in this app (`server/content-index.js` only indexes the term
-  for search; nothing wires altitude-tagged content into `ui/index.html`), so
-  there is no live surface a check could exercise. Promote when a fold/summary
-  view actually ships to a reader, with a check proving the drill-down
-  affordance renders in the same view, not a separate settings toggle.
-- **No silent degradation across language or medium.** When an organ produces
-  no signal because the content is outside what it can read (wrong script,
-  wrong medium, wrong register), the interface says so — it never presents an
-  empty or zero result as if it were a considered finding. The live example is
-  real: `server/proxy.js`'s `terrain_report` and the ingest terrain summary
-  both collapse two different facts into the same string. `Void` is one of the
-  nine legitimate terrains (a real reading) *and* the fallback label when
-  `gate.signalDetected` is false for any reason, including a perceiver that
-  cannot read the content at all (`proxy.js:1722-1725`, `:1736-1738`,
-  `:1814`) — so "this document is genuinely about nothing" and "this
-  perceiver's English lexicon cannot read this document" render identically
-  as `Terrain: Void`. Not promoted to a numbered law yet: the distinguishing
-  signal (why `signalDetected` is false — a real Void reading vs. an
-  out-of-scope input) would have to come from the perceiver itself
-  (`vendor/eoreader5`, a separate repository this checkout does not vendor in
-  — the submodule is present but not initialized), and a check that asserts a
-  distinction the engine cannot yet report would be checking a fiction.
-  Promote once the perceiver exposes *why* no signal was found, with a check
-  proving a genuine Void reading and an out-of-scope input render as visibly
-  different states from the same organ.
+### Promoted, after a genuine disagreement worth recording
+
+L6 ("no implied completeness") and L7 ("no silent degradation across
+language or medium") sat here briefly as unenforced candidates, on the
+reasoning that `vendor/eoreader5` was "a submodule this checkout does not
+vendor in" and no live signal existed to check against. That was true in
+the environment that wrote it and false in this one: `git submodule update
+--init --recursive` (the repo's own documented, standard setup step —
+see `package.json`'s `postinstall`) makes the real engine available, and
+against it both checks are real and currently pass — see L6 and L7 above,
+`scripts/check-laws.mjs::checkNoImpliedCompleteness` and
+`::checkNoSilentDegradation`. Promoted rather than left in two contradictory
+states in the same document.
+
+The analysis that arrived at "not yet promotable" was not wasted, though —
+it named two real call sites (`proxy.js`'s ingest terrain summary and
+`search_memory`'s terrain hint) carrying the identical unqualified "Void"
+conflation that the first fix (`terrain_report` alone) had missed. Both are
+now fixed too, and L7c checks them directly. Environment-dependent
+availability of a live engine is itself worth a note for whoever reads this
+next: a check that skips cleanly when its dependency is missing (as both do
+here, `SKIP` not `VIOLATION`, when the submodule isn't initialized) is
+correct; concluding from one uninitialized checkout that no check could
+ever exist was the actual mistake, not the missing submodule.
 
 ### Promoted
 
