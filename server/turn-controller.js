@@ -22,6 +22,7 @@ import {
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
 import { createInstructionGate, countTokens as gateCountTokens } from "./instruction-gate.js";
+import { needsProsify, buildProsifyMessages, applyProsifyResult } from "./prosify-cue.js";
 import { reviewOutput, buildCorrectionSystemContent } from "./output-review.js";
 import {
   applyTurn, buildMemoryMessage, checkRecallDenial, emptyMemory,
@@ -114,6 +115,11 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
  * @param {number} deps.latencyBudgetMs
  * @param {() => boolean} deps.isWarming - true while the corpus is still ingesting at boot
  * @param {(query: string, opts?: object) => Promise<Array<{rank:number,title:string,url:string,snippet:string,text:string}>>} deps.webSearchFn - performs web search + fetch, returns structured results
+ * @param {string} [deps.prosifyModel] - Ollama model id used to rewrite a terse follow-up
+ *   ("read it again") into a self-contained retrieval/gate cue (prosify-cue.js). Omitted or
+ *   falsy disables the rewrite entirely — the raw question is used everywhere, unchanged,
+ *   which is the same behavior as before this dependency existed.
+ * @param {number} [deps.prosifyTimeoutMs] - abort budget for the rewrite call (default 4000)
  * @param {object|null} deps.cabinetStore - project file-cabinet store (has .get(pool) and .set(pool, cabinet)); null disables cabinet memory
  */
 // The grounding instruction the talker actually receives.
@@ -183,7 +189,7 @@ export function createTurnController(deps) {
     conversationStore, groundQuery, target, anthropicKey, anthropicModel,
     numCtx,
     modelRouter, heuristicModel, latencyBudgetMs, isWarming, webSearchFn,
-    cabinetStore,
+    cabinetStore, prosifyModel, prosifyTimeoutMs,
   } = deps;
 
   const _getAnthropicKey = () => typeof anthropicKey === 'function' ? anthropicKey() : anthropicKey;
@@ -284,6 +290,46 @@ export function createTurnController(deps) {
       deskTokens: gateCountTokens(nextMsg || ""),
     });
     return next;
+  }
+
+  const DEFAULT_PROSIFY_TIMEOUT_MS = 4000;
+
+  // Rewrite a terse follow-up into a self-contained cue, using ONLY this
+  // conversation's own recorded state (the desk's hot terms/facts and recent
+  // raw history) — never the model's general knowledge. The raw `question`
+  // is what the model is told the reader said and what the desk extracts
+  // facts from (both unchanged by this); `cue` is used ONLY to decide what
+  // gets retrieved and which instruction folds surface. See prosify-cue.js.
+  //
+  // Disabled by default (no deps.prosifyModel): returns the raw question
+  // unchanged, at zero cost, so a deployment that never configures this
+  // dependency behaves exactly as it did before it existed.
+  async function prosifyCue({ question, history, hot, facts }) {
+    if (!prosifyModel || !needsProsify(question)) {
+      return {
+        cue: question, raw: question, changed: false,
+        reason: prosifyModel ? "self-contained" : "disabled",
+      };
+    }
+    try {
+      const messages = buildProsifyMessages({ question, history, hot, facts });
+      const resp = await fetch(`${target}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: prosifyModel, messages, stream: false,
+          options: { temperature: 0.2, num_predict: 128 },
+        }),
+        signal: AbortSignal.timeout(prosifyTimeoutMs || DEFAULT_PROSIFY_TIMEOUT_MS),
+      });
+      if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
+      const data = await resp.json();
+      return applyProsifyResult({ question, modelText: data.message?.content });
+    } catch (err) {
+      // A failed or slow rewrite degrades to the raw question — the same
+      // behavior as a self-contained message, not a broken turn.
+      return { cue: question, raw: question, changed: false, reason: "error", error: err.message };
+    }
   }
 
   // Gate one turn's instruction context. Returns null when there is no corpus
@@ -919,13 +965,20 @@ export function createTurnController(deps) {
 
         const history = buildHistoryMessages(conv, turn.id);
         const discourse = await loadDiscourseBlocks({ question, conv, pool });
+        // webSearchFn already ran on the raw question above, before the desk
+        // loaded — the cue cannot widen the search itself on this path. It
+        // still sharpens which instruction folds this turn surfaces.
+        const cueResult = await prosifyCue({
+          question, history: recentUserQuestions(conv, turn.id),
+          hot: discourse.state.hot, facts: discourse.state.facts,
+        });
         const messages = [];
         if (discourse.cabinetBlock) messages.push({ role: "system", content: discourse.cabinetBlock });
         if (discourse.memoryMsg) messages.push({ role: "system", content: discourse.memoryMsg });
         messages.push(systemMsg);
 
         const gateInfo = gateInstructionBlock({
-          question, conv, turnId: turn.id,
+          question: cueResult.cue, conv, turnId: turn.id,
           evidence: webResults.map((r) => [r.title, r.text || r.snippet || ""].join("\n")),
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
@@ -998,6 +1051,7 @@ export function createTurnController(deps) {
             gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
             corpora: gateInfo.corpora,
           } : null,
+          prosify: { raw: cueResult.raw, cue: cueResult.cue, changed: cueResult.changed, reason: cueResult.reason },
         });
         sendEvent("completed", {
           turnId: turn.id, answerId, status: "completed", text: finalText,
@@ -1014,7 +1068,11 @@ export function createTurnController(deps) {
         // The desk loads BEFORE retrieval so the conversation's topic trace can
         // condition the ground query (engineGroundQuery's `discourse` widening).
         const discourse = await loadDiscourseBlocks({ question, conv, pool });
-        const groundResult = groundQuery(question, {
+        const cueResult = await prosifyCue({
+          question, history: recentUserQuestions(conv, turn.id),
+          hot: discourse.state.hot, facts: discourse.state.facts,
+        });
+        const groundResult = groundQuery(cueResult.cue, {
           budget: 3000, maxUnits: 5, limit: 16,
           source: sourceScope, pool: pool || "corpus",
           discourse: discourse.state.hot?.length
@@ -1070,7 +1128,7 @@ export function createTurnController(deps) {
         messages.push(systemMsg);
 
         const gateInfo = gateInstructionBlock({
-          question, conv, turnId: turn.id,
+          question: cueResult.cue, conv, turnId: turn.id,
           evidence: (groundResult.citations || []).map((c) => c.text),
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
@@ -1145,6 +1203,7 @@ export function createTurnController(deps) {
             gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
             corpora: gateInfo.corpora,
           } : null,
+          prosify: { raw: cueResult.raw, cue: cueResult.cue, changed: cueResult.changed, reason: cueResult.reason },
         });
         sendEvent("completed", {
           turnId: turn.id, answerId, status: "completed", text: finalText,
@@ -1187,6 +1246,7 @@ export function createTurnController(deps) {
     // violations. This extends the within-turn correction loop (finalizeAndReview)
     // across turns when the model can't fix everything in one pass.
     let effectiveQuestion = question;
+    let crossTurnCorrection = null;
     const turns = conv.turns || [];
     if (turns.length > 0) {
       const prevTurn = turns[turns.length - 1];
@@ -1194,16 +1254,16 @@ export function createTurnController(deps) {
       if (prevAnswer?.review?.verdict === "FLAGGED" && prevAnswer.review.flags?.length) {
         const correctionContext = buildCorrectionSystemContent(prevAnswer.review.flags, prevAnswer.instructionGate?.activeIds || []);
         effectiveQuestion = `${question}\n\n${correctionContext}`;
-        sendEvent("cross_turn_correction", {
-          turnId: turn?.id, previousTurnId: prevTurn.id,
-          flags: prevAnswer.review.flags.map((f) => f.type),
-        });
+        crossTurnCorrection = { previousTurnId: prevTurn.id, flags: prevAnswer.review.flags.map((f) => f.type) };
       }
     }
 
     const { turn } = await conversationStore.appendTurn(conversationId, {
       question: effectiveQuestion, sourceScope: effectiveScope, attachments,
     });
+    // Emitted only once `turn` exists — the event names THIS turn, so it
+    // cannot fire before this turn has an id.
+    if (crossTurnCorrection) sendEvent("cross_turn_correction", { turnId: turn.id, ...crossTurnCorrection });
     const answer = await conversationStore.addAnswer(conversationId, turn.id, {});
     sendEvent("accepted", {
       turnId: turn.id, answerId: answer.id, question: effectiveQuestion,
