@@ -220,6 +220,13 @@
         <span onClick="{{ goToApp }}" style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C; cursor:pointer;">eochat</span>
         <button type="button" onClick="{{ goToProjects }}" style="display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:4px 9px; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C;"><i class="ph ph-arrow-left" style="font-size:11px;"></i>Back</button>
         <span style="font-size:13px; color:#26241F; font-weight:500;">{{ activeProjectName }}</span>
+        <span style="width:1px; height:16px; background:#E0DACE; flex:none;"></span>
+        <button type="button" aria-label="Switch chat" aria-expanded="{{ spacesOpen }}" onClick="{{ toggleSpaces }}" style="display:flex; align-items:center; gap:6px; max-width:220px; border:0; background:none; border-radius:7px; padding:5px 6px; cursor:pointer; font-family:inherit;">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; flex:none;">○</span>
+          <span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:#26241F;">{{ activeSpaceName }}</span>
+          <i class="ph ph-caret-down" style="font-size:10px; color:#A39D91; flex:none;"></i>
+        </button>
+        <button type="button" aria-label="New chat" title="Start a new chat" onClick="{{ addSpace }}" style="display:flex; align-items:center; gap:5px; border:1px solid #1F5A4C; background:#FFFDFA; border-radius:7px; padding:4px 9px 4px 7px; cursor:pointer; font-family:inherit; font-size:12px; color:#1F5A4C; flex:none;"><i class="ph ph-plus" style="font-size:12px;"></i>New chat</button>
       </sc-if>
       <sc-if value="{{ spacesOpen }}">
       <div class="eo-space-dropdown eo-scrollbar" style="position:absolute; top:36px; left:76px; width:260px; max-height:60vh; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:6px; z-index:60; display:flex; flex-direction:column; gap:1px;">
@@ -542,8 +549,8 @@
       <sc-if value="{{ notShowingProjects }}">
       <sc-if value="{{ showTabs }}">
       <div class="eo-tabs" style="display:flex; flex-wrap:wrap; gap:2px; padding:12px 20px 0; border-bottom:1px solid #EBE6DC;">
-        <button type="button" onClick="{{ tabDocuments }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabDocumentsColor }}; box-shadow: {{ tabDocumentsUnderline }}; cursor:pointer;">Documents</button>
         <button type="button" onClick="{{ tabChat }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabChatColor }}; box-shadow: {{ tabChatUnderline }}; cursor:pointer;">Chat</button>
+        <button type="button" onClick="{{ tabDocuments }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabDocumentsColor }}; box-shadow: {{ tabDocumentsUnderline }}; cursor:pointer;">Documents</button>
         <button type="button" onClick="{{ tabOutline }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOutlineColor }}; box-shadow: {{ tabOutlineUnderline }}; cursor:pointer;">Outline</button>
         <button type="button" onClick="{{ tabOrbit }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOrbitColor }}; box-shadow: {{ tabOrbitUnderline }}; cursor:pointer;">Orbit</button>
         <button type="button" onClick="{{ tabPriors }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabPriorsColor }}; box-shadow: {{ tabPriorsUnderline }}; cursor:pointer;">Priors</button>
@@ -593,7 +600,7 @@
                 <sc-if value="{{ turn.hasAttachments }}">
                   <div style="display:flex; flex-wrap:wrap; gap:5px; justify-content:flex-end;">
                     <sc-for list="{{ turn.attachments }}" as="att">
-                      <span style="font-size:10px; color:#8C877C;">{{ att.displayName }}</span>
+                      <button type="button" onClick="{{ att.open }}" aria-label="Open in reader" title="Open in reader" style="display:flex; align-items:center; gap:4px; border:1px solid #E7E2D8; background:#FFFDFA; border-radius:6px; padding:3px 7px; font-family:inherit; font-size:10px; color:#8C877C; cursor:pointer;"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C;">{{ att.glyph }}</span>{{ att.displayName }}</button>
                     </sc-for>
                   </div>
                 </sc-if>
@@ -752,7 +759,7 @@
                 <input type="text" value="{{ att.editValue }}" onChange="{{ att.onEditChange }}" onBlur="{{ att.commitEdit }}" onKeyDown="{{ att.commitEditKey }}" ref="{{ att.setInputRef }}" style="width:120px; font-size:10.5px; color:#4A463E; border:1px solid #1F5A4C; background:#FFFDFA; border-radius:6px; padding:2px 6px; outline:none;" />
               </sc-if>
               <sc-if value="{{ att.notEditing }}">
-                <span style="display:flex; align-items:center; gap:3px; font-size:10.5px; color:#8C877C;">{{ att.title }}<button type="button" onClick="{{ att.startEdit }}" aria-label="Rename" style="border:0; background:none; color:#A39D91; font-size:9px; cursor:pointer; padding:0; line-height:1;"><i class="ph ph-pencil-simple"></i></button><button type="button" onClick="{{ att.remove }}" aria-label="Remove" style="border:0; background:none; color:#A39D91; font-size:14px; cursor:pointer; padding:0; line-height:1;">×</button></span>
+                <span style="display:flex; align-items:center; gap:5px; font-size:10.5px; color:#8C877C;"><button type="button" onClick="{{ att.open }}" aria-label="Open in reader" title="Open in reader" style="display:flex; align-items:center; gap:4px; border:0; background:none; font-family:inherit; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C;">{{ att.glyph }}</span>{{ att.title }}</button><button type="button" onClick="{{ att.startEdit }}" aria-label="Rename" style="border:0; background:none; color:#A39D91; font-size:9px; cursor:pointer; padding:0; line-height:1;"><i class="ph ph-pencil-simple"></i></button><button type="button" onClick="{{ att.remove }}" aria-label="Remove" style="border:0; background:none; color:#A39D91; font-size:14px; cursor:pointer; padding:0; line-height:1;">×</button></span>
               </sc-if>
             </sc-for>
           </div>
@@ -4191,7 +4198,21 @@ class Component extends DCLogic {
       this.setState(s => ({ spaces: s.spaces.concat([space]), activeSpaceId: conv.id, tab: 'chat', selectedEntity: null }));
       if (!opts.silent) this.logAdd('●', `Conversation "${conv.title}" created`, 'chat');
     } catch (err) {
-      this.logAdd('⊘', `Could not create conversation — ${err.message}`, 'chat');
+      // No engine reachable — loadConversations() already falls back to a
+      // client-only "Reading Room" space for this exact case, but that
+      // fallback only ever runs once, at load. Without a matching fallback
+      // here, "+ New chat" pressed anytime after that point had nothing to
+      // create against and silently did nothing (see createProject's own
+      // fallback for the same reasoning, applied to projects instead).
+      const space = {
+        id: 'local-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+        name: opts.title || 'New conversation',
+        parentId: opts.parentId || null, path: opts.path || null,
+        mode: opts.mode || 'chat', childIds: [],
+        turns: [], retrievals: [], sources: [], sourcesOff: {}, _loaded: true,
+      };
+      this.setSpaces(spaces => spaces.concat([space]), { activeSpaceId: space.id, tab: 'chat', selectedEntity: null });
+      if (!opts.silent) this.logAdd('◱', `No proxy reachable — "${space.name}" created locally (this tab only)`, 'chat');
     }
   }
 
@@ -4255,13 +4276,13 @@ class Component extends DCLogic {
     return null;
   }
 
-  async askConversation(question, mode) {
+  async askConversation(question, mode, attachments) {
     const conversationId = this.state.activeSpaceId;
     mode = mode || this.state.chatMode || 'chat';
     const localId = 'pending-' + Date.now();
     this.updateActiveSpace(sp => ({
       ...sp,
-      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: null, citations: null, snippets: [], streaming: false }]),
+      turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: null, citations: null, snippets: [], streaming: false }]),
     }));
     let liveId = localId;
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
@@ -4552,11 +4573,22 @@ class Component extends DCLogic {
     }
   }
 
+  // draftAttachments carries a File object (needed for the upload) that a
+  // turn — which lives in conversation state, exported and copied around —
+  // has no business holding onto. This is the shape a turn actually keeps.
+  _turnAttachments(attachments) {
+    return (attachments || []).map(a => ({ id: a.id, name: a.name, title: a.title }));
+  }
+
   async send() {
     if (this.state.streamingLoading) return;
     const q = this.state.draft.trim();
     if (!q && !this.state.draftAttachments.length) return;
     const mode = this.state.chatMode || 'chat';
+    // Captured before the clear below — the reader panel needs to know which
+    // files rode along with THIS question after it scrolls into history, and
+    // the state field they live in is about to become the next question's.
+    const attachments = this.state.draftAttachments.slice();
     this.setState({ draft: '', draftAttachments: [], streamingLoading: true, thinkingPhase: 'surfing...', thinkingMeta: null, thinkingLog: [] });
     // The box grew to fit the question; with the draft cleared it has to
     // shrink back, or the next prompt starts inside a tall empty field.
@@ -4568,20 +4600,20 @@ class Component extends DCLogic {
       // Static build, Anthropic selected: generation happens in this tab via a
       // direct browser call to the Anthropic API with the reader's own key.
       if (this._anthropicApiKey()) {
-        await this.localAskConversation(q);
+        await this.localAskConversation(q, attachments);
       } else {
-        await this.localUnavailableTurn(q, mode, 'no-anthropic-key');
+        await this.localUnavailableTurn(q, mode, 'no-anthropic-key', attachments);
       }
     } else if (localReady) {
-      await this.localAskConversation(q);
+      await this.localAskConversation(q, attachments);
     } else if (ON_GH_PAGES) {
       // Static build: the in-browser WebLLM model is the ONLY other answer
       // path — there is no proxy or Ollama to fall back to, and firing
       // askConversation at a localhost URL the visitor does not own can only
       // fail confusingly. Say why instead.
-      await this.localUnavailableTurn(q, mode);
+      await this.localUnavailableTurn(q, mode, null, attachments);
     } else {
-      await this.askConversation(q, mode);
+      await this.askConversation(q, mode, attachments);
     }
   }
 
@@ -4590,11 +4622,11 @@ class Component extends DCLogic {
   // so when the chosen one is not available there is nothing to fall back to.
   // Put the actual reason in the conversation itself rather than quietly
   // attempting the Ollama path, which cannot answer on this build.
-  async localUnavailableTurn(question, mode, reasonKey) {
+  async localUnavailableTurn(question, mode, reasonKey, attachments) {
     const localId = 'local-' + Date.now();
     this.updateActiveSpace(sp => ({
       ...sp,
-      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
+      turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
     }));
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
@@ -4842,13 +4874,13 @@ class Component extends DCLogic {
   // itself happens entirely in this tab: via window.EOWebLLM on the server
   // path, or via a direct browser call to the Anthropic API on the static
   // build when the reader has selected the Anthropic provider and set a key.
-  async localAskConversation(question) {
+  async localAskConversation(question, attachments) {
     const localId = 'local-' + Date.now();
     const useWeb = !!this.state.webSearch;
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
     this.updateActiveSpace(sp => ({
       ...sp,
-      turns: sp.turns.concat([{ id: localId, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
+      turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
     }));
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
@@ -6437,7 +6469,16 @@ class Component extends DCLogic {
 
     return {
       ...turn,
-      attachments: (turn.attachments || []).map(a => ({ ...a, displayName: a.title || a.name })),
+      // The bytes an attachment carried in are kept in this tab's own upload
+      // stores (readerFileInfo / readerContent / the blob-URL map) for as
+      // long as the tab lives, keyed by name — same as any Source. openReader
+      // reads from those stores regardless of who called it, so a sent
+      // attachment opens exactly like the source list's "Read" button does.
+      attachments: (turn.attachments || []).map(a => ({
+        ...a, displayName: a.title || a.name,
+        glyph: TYPE_GLYPH[this.inferType(a.name)] || '◱',
+        open: () => this.openReader(a.name),
+      })),
       copy: () => navigator.clipboard.writeText(`Q: ${turn.q}${turn.a ? `\n\nA: ${turn.a}` : ''}${resolved.length ? '\n\n' + resolved.map(c => `[${c.num}] ${c.source}${c.byteStart !== undefined ? ` bytes ${c.byteStart}–${c.byteEnd}` : ''}\n"${c.quote}"`).join('\n\n') : ''}`),
       copyJson: () => navigator.clipboard.writeText(JSON.stringify({ question: turn.q, answer: turn.a, model: turn.model, citations: cits, grounding: turn.grounding, trace: turn.trace, prompt: turn.prompt }, null, 2)),
       fork: () => this.forkSpace(i),
@@ -6564,9 +6605,14 @@ class Component extends DCLogic {
     const draftAttachments = S.draftAttachments.map(att => ({
       name: att.name,
       title: att.title || att.name,
+      glyph: TYPE_GLYPH[this.inferType(att.name)] || '◱',
       editing: S.editingTitleId === att.id,
       notEditing: S.editingTitleId !== att.id,
       editValue: S.editTitleValue,
+      // A draft attachment has already been through uploadFiles() by the time
+      // it renders here, so the reader's image/video/audio/PDF/etc. panels
+      // already have its bytes — open it the same way a Source row does.
+      open: () => this.openReader(att.name),
       startEdit: () => this.setState({ editingTitleId: att.id, editTitleValue: att.title || att.name }),
       setInputRef: (el) => { if (el) requestAnimationFrame(() => el.focus()); },
       onEditChange: (e) => this.setState({ editTitleValue: e.target.value }),
