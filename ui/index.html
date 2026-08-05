@@ -597,9 +597,7 @@
                     </sc-for>
                   </div>
                 </sc-if>
-                <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:12px 12px 4px 12px; padding:9px 13px; white-space:pre-wrap;">
-                  <span style="font-size:13.5px; line-height:1.5; color:#26241F;">{{ turn.q }}</span>
-                </div>
+                <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:12px 12px 4px 12px; padding:9px 13px; white-space:pre-wrap;"><span style="font-size:13.5px; line-height:1.5; color:#26241F;">{{ turn.q }}</span></div>
                 <button type="button" aria-label="Edit and ask again" title="Put this question back in the composer to edit and ask again" onClick="{{ turn.editAndReask }}" style="align-self:flex-end; display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; cursor:pointer; padding:2px 0 0;"><i class="ph ph-pencil-simple"></i>edit &amp; ask again</button>
               </div>
               <sc-if value="{{ turn.retrieval }}">
@@ -2123,7 +2121,7 @@ class Component extends DCLogic {
   state = {
     view: 'projects', // 'projects' | 'chat'
     projects: [], activeProjectId: null,
-    tab: 'documents', draft: '',
+    tab: 'chat', draft: '',
     webSearch: false,
     provider: ON_GH_PAGES ? 'local' : 'ollama', model: null, _availableModels: [], modelMenuOpen: false,
     // Local mode: answer entirely in this tab via WebLLM (see
@@ -2733,7 +2731,7 @@ class Component extends DCLogic {
   }
 
   async switchProject(id) {
-    this.setState({ activeProjectId: id, view: 'chat', tab: 'documents' });
+    this.setState({ activeProjectId: id, view: 'chat', tab: 'chat' });
     const project = this.state.projects.find(p => p.id === id);
     if (project) {
       this.logAdd('●', `Switched to project "${project.name}"`, 'chat');
