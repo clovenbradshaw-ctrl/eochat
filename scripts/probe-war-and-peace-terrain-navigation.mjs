@@ -278,13 +278,30 @@ const mmBackground = meanAmpByTerrain(mmSentences.map((s) => s.text));
 const crossNovelBackground = new Map(TERRAIN_LADDER.map((t) => [t, (akBackground.get(t) + mmBackground.get(t)) / 2]));
 const crossNovelSpread = new Map(TERRAIN_LADDER.map((t) => [t, Math.abs(akBackground.get(t) - mmBackground.get(t))]));
 
-const CAST = [
-  { id: "pierre", display: "Pierre Bezúkhov", names: ["Pierre"] },
-  { id: "andrew", display: "Prince Andrew Bolkónski", names: ["Andrew", "Prince Andrew"] },
-  { id: "natasha", display: "Natásha Rostóva", names: ["Natásha"] },
-  { id: "napoleon", display: "Napoleon Bonaparte", names: ["Napoleon"] },
-  { id: "kutuzov", display: "Field Marshal Kutúzov", names: ["Kutúzov"] },
-];
+// Previous run covered 5 of the coref prior's 46 referents and produced 18
+// waypoints total — "pretty small for W&P", fairly. Two separate causes,
+// fixed two separate ways below: (1) 5 characters was an arbitrary sample,
+// not a real limit — the full cast is right here in priors/coref/war-and-
+// peace.json, so use all of it; (2) the shuffle-survival gate was being
+// used to EXCLUDE hits instead of to LABEL their confidence, which threw
+// away real, distinctive, but order-invariant signal (a genuine cluster of
+// grief/fear/tears words around a character is real content worth pointing
+// a reader at, even though shuffling those same words doesn't change the
+// classification — that fact is about the classifier's syntax-blindness,
+// not about whether the content is real). Fixed below: the cross-novel
+// distinctiveness check stays a hard requirement (a waypoint must still be
+// unusual for THIS character, not generic novel filler); the shuffle test
+// becomes a "structural" vs. "vocabulary-level" confidence tag on every
+// surfaced waypoint instead of a second gate that silently drops half of
+// them.
+const corefPath = path.join(LEGACY_ENGINE_ROOT, "priors", "coref", "war-and-peace.json");
+const corefCast = JSON.parse(fs.readFileSync(corefPath, "utf8")).referents;
+const CAST = corefCast.map((r) => ({
+  id: r.id,
+  display: r.display,
+  names: [r.name, ...(r.surfaces ?? [])].filter(Boolean),
+})).filter((c) => c.names.length > 0); // 1 emanon (old_prince_bolkonsky) has surfaces only, still usable
+console.log(`\nLoaded ${CAST.length} referents verbatim from ${path.relative(REPO_ROOT, corefPath)} (was 5, hand-picked, last run).`);
 
 console.log(`\nPRESENCE-DETECTION GAP, disclosed rather than hidden: "present" below still means the character's`);
 console.log(`own name literally appears IN the sentence. This engine has a real coref organ for exactly this`);
@@ -298,6 +315,7 @@ console.log(`already does — the gap is real and unresolved, not a shortcut thi
 console.log(`scene carried entirely by "he" without Pierre's name on the page will NOT appear in this index.`);
 
 let totalPresentSentences = 0, totalSurfaced = 0, totalVerified = 0, totalWaypoints = 0;
+let structuralSlots = 0, vocabularySlots = 0, charactersWithHits = 0;
 const navigationIndex = { canonicalSource: path.relative(REPO_ROOT, wp.canonicalPath), generatedFrom: "probe-war-and-peace-terrain-navigation.mjs", characters: {} };
 
 for (const c of CAST) {
@@ -332,25 +350,29 @@ for (const c of CAST) {
     const charMean = withSignal.reduce((s, sent) => s + terrainAmp(sent.text, t), 0) / withSignal.length;
     const bg = crossNovelBackground.get(t);
     const spread = crossNovelSpread.get(t);
-    const distinctive = charMean > bg + spread; // must clear the natural AK/Middlemarch gap, not just beat the average
+    const distinctive = charMean > bg + spread; // must clear the natural AK/Middlemarch gap, not just beat the average — the one HARD gate
 
-    let verdict;
-    if (survivesOwnShuffle && distinctive) verdict = "SURFACED";
-    else if (!survivesOwnShuffle) verdict = "VOCABULARY-ONLY (fails own shuffle test)";
-    else verdict = "COMMON (real, but not above generic-novel background)";
+    // Confidence label, not a second gate: STRUCTURAL hits survive the
+    // classifier's own order-shuffle test (real syntax-level signal, the
+    // strongest claim this probe can make); VOCABULARY hits are real,
+    // distinctive word-choice clusters that don't happen to depend on word
+    // order — still a legitimate place to point a reader, just a narrower
+    // claim about WHY it's there. Neither is silently dropped.
+    const confidence = survivesOwnShuffle ? "structural" : "vocabulary";
+    const verdict = distinctive ? `SURFACED (${confidence})` : "NOT DISTINCTIVE (no better than generic-novel background)";
 
     console.log(`  ${t.padEnd(10)} n=${withSignal.length.toString().padEnd(5)} char-mean=${charMean.toFixed(4)} shuffle-gap=${gapPct.toFixed(0)}% win-rate=${winRate.toFixed(0)}% bg=${bg.toFixed(4)}(+/-${spread.toFixed(4)}) -> ${verdict}`);
 
-    if (verdict === "SURFACED") {
-      // A ROUTE, not a single peak: up to 3 waypoints per surfaced terrain,
+    if (distinctive) {
+      // A ROUTE, not a single peak: up to 5 waypoints per surfaced terrain,
       // spread across the book rather than clustered (a scrubbable list, the
       // thing a cursor/UI control actually needs), each independently
       // byte-verified against the canonical normalized file.
       const ranked = [...withSignal].sort((a, b) => terrainAmp(b.text, t) - terrainAmp(a.text, t));
       const waypoints = [];
-      const MIN_SEPARATION = 5000; // chars — avoid 3 waypoints from the same scene
+      const MIN_SEPARATION = 3000; // chars — avoid waypoints piling into the same scene
       for (const cand of ranked) {
-        if (waypoints.length >= 3) break;
+        if (waypoints.length >= 5) break;
         if (waypoints.some((w) => Math.abs(w.offset - cand.offset) < MIN_SEPARATION)) continue;
         const collapsed = collapsedText(cand.text);
         const located = locateRawSpan(warAndPeace, cand.offset, collapsed);
@@ -376,19 +398,21 @@ for (const c of CAST) {
         });
       }
       totalSurfaced++;
-      entries.push({ terrain: t, charMean, waypoints });
+      if (confidence === "structural") structuralSlots++; else vocabularySlots++;
+      entries.push({ terrain: t, charMean, confidence, waypoints });
     }
   }
+  if (entries.length > 0) charactersWithHits++;
   navigationIndex.characters[c.id] = { display: c.display, presentSentences: present.length, entries };
 
   if (entries.length === 0) {
-    console.log(`\n  No terrain cleared BOTH gates for ${c.display}. Nothing surfaced for navigation — reported as a`);
-    console.log(`  real gap, not papered over with the best available (but ungated) number.`);
+    console.log(`\n  Nothing distinctive for ${c.display} at any terrain — reported as a real gap, not papered`);
+    console.log(`  over with the best available (but generic) number.`);
   } else {
     console.log(`\n  SURFACED navigation routes for ${c.display} (Paradigm -> Void), each waypoint independently`);
     console.log(`  re-verified against ${path.relative(REPO_ROOT, wp.canonicalPath)}:`);
     for (const e of entries) {
-      console.log(`\n  [${e.terrain}] ${e.waypoints.length} waypoint(s):`);
+      console.log(`\n  [${e.terrain}] confidence=${e.confidence} — ${e.waypoints.length} waypoint(s):`);
       for (const w of e.waypoints) {
         const excerpt = w.text.slice(0, 160);
         console.log(`    byteOffset=${w.byteOffset} byteLength=${w.byteLength} amplitude=${w.amplitude.toFixed(3)} byteVerified=${w.byteVerified} (charOffset=${w.charOffset})`);
