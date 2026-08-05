@@ -193,9 +193,10 @@
     }
   }
 
+  .eo-topbar { flex-wrap: wrap; row-gap: 6px; }
+
   @media (max-width: 620px) {
     .eo-page { padding: 8px !important; }
-    .eo-topbar { flex-wrap: wrap; row-gap: 6px; }
     /* Touch targets: a 24px icon button is below every platform's minimum and
        is the difference between a control and a coin toss on a phone. */
     .eo-shell button { min-height: 32px; }
@@ -254,13 +255,13 @@
       </div>
       </sc-if>
     </div>
-    <div style="display:flex; align-items:center; gap:12px;">
-      <div class="eo-strap" style="display:flex; align-items:center; gap:12px;">
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; row-gap:6px; justify-content:flex-end;">
+      <div class="eo-strap" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; row-gap:4px; min-width:0; justify-content:flex-end;">
       <sc-if value="{{ proxyLive }}">
-        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91; letter-spacing:.04em;">{{ proxyStatusText }}</span>
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A39D91; letter-spacing:.04em; white-space:nowrap;">{{ proxyStatusText }}</span>
       </sc-if>
       <sc-if value="{{ usingLocalModelBadge }}">
-        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; letter-spacing:.04em;">{{ localModelBadgeText }}</span>
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; letter-spacing:.04em; white-space:nowrap;">{{ localModelBadgeText }}</span>
       </sc-if>
       <sc-if value="{{ proxyDead }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#c0341a; letter-spacing:.04em;">proxy off</span>
