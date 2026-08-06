@@ -567,6 +567,7 @@
         <button type="button" onClick="{{ tabPriors }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabPriorsColor }}; box-shadow: {{ tabPriorsUnderline }}; cursor:pointer;">Priors</button>
         <button type="button" onClick="{{ tabGlassBox }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabGlassBoxColor }}; box-shadow: {{ tabGlassBoxUnderline }}; cursor:pointer;">Glass box</button>
         <button type="button" onClick="{{ tabSenses }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabSensesColor }}; box-shadow: {{ tabSensesUnderline }}; cursor:pointer;">Senses</button>
+        <button type="button" onClick="{{ tabInsights }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabInsightsColor }}; box-shadow: {{ tabInsightsUnderline }}; cursor:pointer;">Insights</button>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
           <sc-if value="{{ proxyDead }}">
             <button type="button" onClick="{{ retryProxy }}" style="border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
@@ -1117,6 +1118,120 @@
             </sc-if>
           </div>
         </div>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isInsights }}">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Community Insights</span>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <sc-if value="{{ insightLoading }}">
+              <span style="font-size:11px; color:#A39D91;">Loading…</span>
+            </sc-if>
+            <button type="button" onClick="{{ refreshInsights }}" style="border:1px solid #E4DFD5; border-radius:7px; background:none; padding:5px 10px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">Refresh</button>
+          </div>
+        </div>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">Ingest a plan's goals, its current-state reporting, intervention metrics and definitions. Facts are merged onto standardized keys across every document — when a key can't be confidently merged it's flagged for review below rather than guessed, and when two documents disagree on the same key/point-in-time, both values are shown rather than one being silently picked.</span>
+
+        <sc-if value="{{ insightNoProject }}">
+          <div style="text-align:center; padding:30px 20px; background:#FAF8F4; border:1px dashed #E4DFD5; border-radius:12px;">
+            <span style="font-size:13px; color:#A39D91;">Open a project to use Community Insights — the ledger is scoped per project, the same as its documents.</span>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ insightHasProject }}">
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:16px; min-width:0;" class="eo-scrollbar">
+
+          <sc-if value="{{ insightError }}">
+            <span style="font-size:12px; color:#C0341A;">{{ insightError }}</span>
+          </sc-if>
+
+          <!-- ── Ingest ── -->
+          <div style="border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4; padding:14px; display:flex; flex-direction:column; gap:9px;">
+            <span style="font-size:12.5px; font-weight:600; color:#26241F;">Ingest a document</span>
+            <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">Paste the document's extracted text (from Documents → Open, or pasted straight from the source). "By 2030: X = Y", "Key: Value" lines and tables are read automatically; section headers like GOALS or CURRENT STATE set the default kind for the lines under them.</span>
+            <textarea value="{{ insightIngestText }}" onChange="{{ onInsightIngestTextChange }}" placeholder="Affordable housing units: 500 by 2030&#10;Youth graduation rate: 74% (baseline)" style="min-height:90px; resize:vertical; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:9px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"></textarea>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <input type="text" value="{{ insightIngestName }}" onChange="{{ onInsightIngestNameChange }}" placeholder="Document name (optional)" style="flex:1; min-width:160px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:inherit; font-size:12px; color:#26241F;"/>
+              <select value="{{ insightIngestKind }}" onChange="{{ onInsightIngestKindChange }}" style="border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:inherit; font-size:12px; color:#26241F;">
+                <option value="goal">Goal / target</option>
+                <option value="current_state">Current state</option>
+                <option value="intervention_metric">Intervention metric</option>
+                <option value="definition">Definition</option>
+              </select>
+              <input type="text" value="{{ insightIngestAsOf }}" onChange="{{ onInsightIngestAsOfChange }}" placeholder="As of (e.g. 2030)" style="width:150px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:inherit; font-size:12px; color:#26241F;"/>
+              <button type="button" onClick="{{ submitInsightIngest }}" disabled="{{ insightIngestSubmitDisabled }}" style="border:0; border-radius:7px; background:#1F5A4C; color:#FFFDFA; padding:7px 14px; font-family:inherit; font-size:12.5px; cursor:pointer;">{{ insightIngestButtonLabel }}</button>
+            </div>
+            <sc-if value="{{ hasInsightIngestResult }}">
+              <span style="font-size:12px; color:#1F5A4C;">{{ insightIngestResultText }}</span>
+            </sc-if>
+            <sc-if value="{{ hasInsightIngestError }}">
+              <span style="font-size:12px; color:#C0341A;">{{ insightIngestError }}</span>
+            </sc-if>
+          </div>
+
+          <!-- ── Unclear keys ── -->
+          <sc-if value="{{ hasInsightUnclear }}">
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <span style="font-size:12.5px; font-weight:600; color:#26241F;">Needs review — {{ insightUnclearCount }} key(s) not yet merged</span>
+            <sc-for list="{{ insightUnclearRows }}" as="row">
+              <div style="border:1px solid #F0DDBF; border-radius:8px; background:#FBF3E6; padding:10px 12px; display:flex; flex-direction:column; gap:7px;">
+                <span style="font-size:12.5px; color:#26241F;"><span style="font-family:'IBM Plex Mono', monospace; color:#8A5A22;">{{ row.rawKey }}</span> — seen in {{ row.count }} fact(s)</span>
+                <sc-if value="{{ row.hasCandidates }}">
+                  <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <sc-for list="{{ row.candidateRows }}" as="cand">
+                      <button type="button" onClick="{{ cand.pick }}" style="border:1px solid #1F5A4C; background:none; border-radius:6px; padding:4px 9px; font-family:inherit; font-size:11.5px; color:#1F5A4C; cursor:pointer;">merge into "{{ cand.label }}" ({{ cand.scorePct }})</button>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <div style="display:flex; gap:6px;">
+                  <input type="text" value="{{ row.draftValue }}" onChange="{{ row.onDraftChange }}" placeholder="or type a new standard key name" style="flex:1; border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:5px 8px; font-family:inherit; font-size:11.5px; color:#26241F;"/>
+                  <button type="button" onClick="{{ row.createNew }}" disabled="{{ row.createDisabled }}" style="border:1px solid #E4DFD5; background:#FFFDFA; border-radius:6px; padding:5px 10px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">Create key</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+
+          <!-- ── Conflicts ── -->
+          <sc-if value="{{ hasInsightConflicts }}">
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <span style="font-size:12.5px; font-weight:600; color:#C0341A;">Conflicting signals — {{ insightConflictCount }}</span>
+            <sc-for list="{{ insightConflictRows }}" as="row">
+              <div style="border:1px solid #F3C9BE; border-radius:8px; background:#FCEFEA; padding:10px 12px; display:flex; flex-direction:column; gap:6px;">
+                <span style="font-size:12.5px; color:#26241F;">{{ row.label }} · {{ row.kindLabel }}{{ row.asOfSuffix }}</span>
+                <sc-for list="{{ row.valueRows }}" as="v">
+                  <span style="font-size:11.5px; color:#4A463E;">{{ v.value }} — <span style="color:#8C877C;">{{ v.sourceLabel }}</span></span>
+                </sc-for>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+
+          <!-- ── Standardized keys / delta table ── -->
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <span style="font-size:12.5px; font-weight:600; color:#26241F;">Standardized keys</span>
+            <sc-if value="{{ noInsightState }}">
+              <span style="font-size:12px; color:#A39D91;">No standardized keys yet — ingest a plan above, or define one from Unclear keys once you have a fact for it.</span>
+            </sc-if>
+            <sc-for list="{{ insightStateRows }}" as="row">
+              <div style="border:1px solid #E4DFD5; border-radius:8px; background:#FFFDFA; padding:10px 12px; display:flex; flex-direction:column; gap:5px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                  <span style="font-size:13px; font-weight:500; color:#26241F;">{{ row.label }}</span>
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color: {{ row.statusColor }}; background: {{ row.statusBg }}; border-radius:5px; padding:2px 8px;">{{ row.statusLabel }}</span>
+                </div>
+                <div style="display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:#4A463E;">
+                  <span>Goal: <span style="color:#26241F;">{{ row.goalText }}</span></span>
+                  <span>Current: <span style="color:#26241F;">{{ row.currentText }}</span></span>
+                  <span>Delta: <span style="color:#26241F;">{{ row.deltaText }}</span></span>
+                  <span style="color:#A39D91;">{{ row.signalCount }} signal(s)</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
       </div>
       </sc-if>
 
@@ -2311,6 +2426,15 @@ class Component extends DCLogic {
     // subscribable-in-place, it has to be "added" first (which is what turns
     // it into an ordinary entry in _senses). null = never checked.
     _sensesDiscover: null, _sensesDiscoverError: null, sensesDiscoverLoading: false,
+    // Community Insights — the standardized-key ledger from
+    // /api/projects/:id/insights/* (see server/insight-store.js). Per-project,
+    // fetched lazily when the Insights tab is opened rather than eagerly at
+    // startup like Priors/Senses, since it's meaningless without an active
+    // project. null = not fetched yet for the current project.
+    _insightRows: null, _insightUnclear: null, _insightConflicts: null, _insightError: null, _insightLoading: false,
+    _insightIngestText: '', _insightIngestName: '', _insightIngestKind: 'goal', _insightIngestAsOf: '',
+    _insightIngestLoading: false, _insightIngestResult: null, _insightIngestError: null,
+    _insightResolveDrafts: {}, _insightForProjectId: null,
     // The other family of senses: Hugging Face models installed into THIS
     // browser and run here (senses-runtime.js / window.EOSenses), no endpoint
     // and no proxy. Mirrored from that module's snapshot rather than owned
@@ -2838,6 +2962,96 @@ class Component extends DCLogic {
       this.logAdd('○', `Priors catalog: ${data.priors.length} priors`, 'sources');
     } catch (err) {
       this.setState({ _priorsError: `could not reach the proxy: ${err.message}` });
+    }
+  }
+
+  // ── Community Insights — standardized-key ledger (server/insight-store.js) ──
+  //
+  // Loads the merged goal/current/delta table, the raw keys still awaiting a
+  // human merge decision, and any conflicting signals, all scoped to whichever
+  // project is active. Called when the Insights tab opens and after every
+  // mutation (ingest/resolve/add/delete), so the table shown is always the
+  // one the last action actually produced — never a stale optimistic guess.
+  async fetchInsights() {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) { this.setState({ _insightError: 'Open a project to use Community Insights.' }); return; }
+    this.setState({ _insightLoading: true, _insightError: null, _insightForProjectId: projectId });
+    try {
+      const base = this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/';
+      const [stateRes, unclearRes, conflictsRes] = await Promise.all([
+        fetch(base + 'state', { signal: AbortSignal.timeout(10000) }),
+        fetch(base + 'unclear', { signal: AbortSignal.timeout(10000) }),
+        fetch(base + 'conflicts', { signal: AbortSignal.timeout(10000) }),
+      ]);
+      if (!stateRes.ok) throw new Error(`proxy returned ${stateRes.status} for insights/state`);
+      const { rows } = await stateRes.json();
+      const { unclear } = unclearRes.ok ? await unclearRes.json() : { unclear: [] };
+      const { conflicts } = conflictsRes.ok ? await conflictsRes.json() : { conflicts: [] };
+      this.setState({ _insightRows: rows || [], _insightUnclear: unclear || [], _insightConflicts: conflicts || [], _insightError: null, _insightLoading: false });
+    } catch (err) {
+      this.setState({ _insightError: `could not reach the proxy: ${err.message}`, _insightLoading: false });
+    }
+  }
+
+  async submitInsightIngest() {
+    const projectId = this.state.activeProjectId;
+    const text = this.state._insightIngestText.trim();
+    if (!projectId || !text) return;
+    this.setState({ _insightIngestLoading: true, _insightIngestError: null, _insightIngestResult: null });
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/ingest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: text,
+          name: this.state._insightIngestName.trim() || null,
+          kind: this.state._insightIngestKind,
+          asOf: this.state._insightIngestAsOf.trim() || null,
+        }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `proxy returned ${res.status}`);
+      this.setState({ _insightIngestLoading: false, _insightIngestResult: data, _insightIngestText: '' });
+      this.fetchInsights();
+    } catch (err) {
+      this.setState({ _insightIngestLoading: false, _insightIngestError: err.message });
+    }
+  }
+
+  // `canonicalKey` maps to an existing key (a candidate the extractor already
+  // suggested); `createLabel` mints a brand-new one from the raw text as-is —
+  // the two paths resolveKey() on the server supports, offered here as one
+  // call so the UI never has to know which case it's in beforehand.
+  async resolveInsightKey(rawKey, { canonicalKey = null, createLabel = null } = {}) {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) return;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/resolve-key', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rawKey, canonicalKey, createLabel }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `proxy returned ${res.status}`);
+      }
+      this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [rawKey]: '' } }));
+      this.fetchInsights();
+    } catch (err) {
+      this.setState({ _insightError: err.message });
+    }
+  }
+
+  async deleteInsightObservation(observationId) {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) return;
+    try {
+      await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/observations/' + encodeURIComponent(observationId), {
+        method: 'DELETE', signal: AbortSignal.timeout(10000),
+      });
+      this.fetchInsights();
+    } catch (err) {
+      this.setState({ _insightError: err.message });
     }
   }
 
@@ -7127,7 +7341,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses');
+    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses'), ins = tabStyle('insights');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // The proxy being unreachable only means "no engine" if the in-browser
@@ -7961,7 +8175,7 @@ class Component extends DCLogic {
 
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses',
+      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses', isInsights: t === 'insights',
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
       webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
@@ -8250,6 +8464,7 @@ class Component extends DCLogic {
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
       tabPriors: () => this.setState({ tab: 'priors' }),
       tabSenses: () => this.setState({ tab: 'senses' }),
+      tabInsights: () => { this.setState({ tab: 'insights' }); this.fetchInsights(); },
       tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
       tabChatColor: c.color, tabChatUnderline: c.underline,
       tabOutlineColor: o.color, tabOutlineUnderline: o.underline,
@@ -8257,6 +8472,7 @@ class Component extends DCLogic {
       tabGlassBoxColor: g.color, tabGlassBoxUnderline: g.underline,
       tabPriorsColor: pr.color, tabPriorsUnderline: pr.underline,
       tabSensesColor: se.color, tabSensesUnderline: se.underline,
+      tabInsightsColor: ins.color, tabInsightsUnderline: ins.underline,
       draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
       inputDisabled: S.streamingLoading,
       stopButtonAnim: S.streamingLoading ? 'animation: eoPulse 1.8s ease-in-out infinite;' : '',
@@ -9050,6 +9266,99 @@ class Component extends DCLogic {
         select: () => this.switchProject(p.id),
         delete: (e) => { e.stopPropagation(); this.deleteProject(p.id); },
       })),
+
+      // ── Community Insights ──
+      insightNoProject: !S.activeProjectId,
+      insightHasProject: !!S.activeProjectId,
+      insightLoading: S._insightLoading,
+      insightError: S._insightError,
+      refreshInsights: () => this.fetchInsights(),
+
+      insightIngestText: S._insightIngestText,
+      onInsightIngestTextChange: (e) => this.setState({ _insightIngestText: e.target.value }),
+      insightIngestName: S._insightIngestName,
+      onInsightIngestNameChange: (e) => this.setState({ _insightIngestName: e.target.value }),
+      insightIngestKind: S._insightIngestKind,
+      onInsightIngestKindChange: (e) => this.setState({ _insightIngestKind: e.target.value }),
+      insightIngestAsOf: S._insightIngestAsOf,
+      onInsightIngestAsOfChange: (e) => this.setState({ _insightIngestAsOf: e.target.value }),
+      submitInsightIngest: () => this.submitInsightIngest(),
+      insightIngestSubmitDisabled: S._insightIngestLoading || !S._insightIngestText.trim(),
+      insightIngestButtonLabel: S._insightIngestLoading ? 'Ingesting…' : 'Ingest',
+      hasInsightIngestResult: !!S._insightIngestResult,
+      insightIngestResultText: S._insightIngestResult
+        ? `${S._insightIngestResult.added} fact(s) recorded — ${S._insightIngestResult.resolved} merged onto standardized keys, ${S._insightIngestResult.unclear} need review below.`
+        : '',
+      hasInsightIngestError: !!S._insightIngestError,
+      insightIngestError: S._insightIngestError,
+
+      hasInsightUnclear: !!(S._insightUnclear && S._insightUnclear.length),
+      insightUnclearCount: (S._insightUnclear || []).length,
+      insightUnclearRows: (S._insightUnclear || []).map(g => {
+        const draftValue = S._insightResolveDrafts[g.rawKey] || '';
+        return {
+          rawKey: g.rawKey,
+          count: g.count,
+          hasCandidates: (g.candidates || []).length > 0,
+          candidateRows: (g.candidates || []).map(c => ({
+            label: c.label, scorePct: `${Math.round(c.score * 100)}%`,
+            pick: () => this.resolveInsightKey(g.rawKey, { canonicalKey: c.key }),
+          })),
+          draftValue,
+          onDraftChange: (e) => this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [g.rawKey]: e.target.value } })),
+          createDisabled: !draftValue.trim(),
+          createNew: () => {
+            const label = (this.state._insightResolveDrafts[g.rawKey] || '').trim();
+            if (label) this.resolveInsightKey(g.rawKey, { createLabel: label });
+          },
+        };
+      }),
+
+      hasInsightConflicts: !!(S._insightConflicts && S._insightConflicts.length),
+      insightConflictCount: (S._insightConflicts || []).length,
+      insightConflictRows: (S._insightConflicts || []).map(cf => {
+        const KIND_LABEL = { goal: 'Goal', current_state: 'Current state', intervention_metric: 'Intervention metric', definition: 'Definition' };
+        const stateRow = (S._insightRows || []).find(r => r.key === cf.key);
+        return {
+          label: stateRow ? stateRow.label : cf.key,
+          kindLabel: KIND_LABEL[cf.kind] || cf.kind,
+          asOfSuffix: cf.asOf ? ` · as of ${cf.asOf}` : '',
+          valueRows: cf.values.map(v => ({ value: v.value, sourceLabel: v.sourceName || v.sourceId || 'unknown source' })),
+        };
+      }),
+
+      noInsightState: !(S._insightRows && S._insightRows.length),
+      insightStateRows: (S._insightRows || []).map(row => {
+        const STATUS = {
+          'computed': { label: 'delta', color: '#1F5A4C', bg: '#E4EEE9' },
+          'met': { label: 'met', color: '#1F5A4C', bg: '#E4EEE9' },
+          'differs': { label: 'differs', color: '#8A5A22', bg: '#F3E7D3' },
+          'conflict': { label: 'conflict', color: '#C0341A', bg: '#FBE3DC' },
+          'unit-mismatch': { label: 'unit mismatch', color: '#8A5A22', bg: '#F3E7D3' },
+          'type-mismatch': { label: 'type mismatch', color: '#8A5A22', bg: '#F3E7D3' },
+          'no-current-state': { label: 'no current data', color: '#A39D91', bg: '#F2EFE8' },
+          'no-goal': { label: 'no goal set', color: '#A39D91', bg: '#F2EFE8' },
+          'no-data': { label: 'no data', color: '#A39D91', bg: '#F2EFE8' },
+        };
+        const st = STATUS[row.deltaStatus] || STATUS['no-data'];
+        const fmt = (o) => o ? `${o.value}${o.asOf ? ` (${o.asOf})` : ''}` : '—';
+        let deltaText = '—';
+        if (row.deltaStatus === 'computed' && row.delta) {
+          const amt = row.delta.amount;
+          const sign = amt > 0 ? '+' : '';
+          deltaText = `${sign}${Number.isInteger(amt) ? amt : amt.toFixed(2)}`;
+          if (row.delta.pctOfGoal != null) deltaText += ` (${Math.round(row.delta.pctOfGoal)}% of goal)`;
+        } else if (row.deltaStatus !== 'no-data') {
+          deltaText = st.label;
+        }
+        return {
+          key: row.key, label: row.label, category: row.category,
+          goalText: fmt(row.goal), currentText: fmt(row.current),
+          deltaText,
+          statusLabel: st.label, statusColor: st.color, statusBg: st.bg,
+          signalCount: row.signalCount,
+        };
+      }),
     };
   }
 }

@@ -3008,6 +3008,7 @@ function describeAbsence({ query, poolName, sourceFilter, searchedQuery }) {
 // ── Project store ──
 
 import { ProjectStore, projectStore } from "./project-store.js";
+import { insightStore } from "./insight-store.js";
 
 // ── Server ──
 
@@ -4853,6 +4854,150 @@ const server = http.createServer((req, res) => {
               createdAt: m.createdAt, updatedAt: m.updatedAt,
             })),
           });
+        }
+
+        // ── Project community insights ──
+        //
+        // A merged, standardized-key ledger that sits beside this project's
+        // document corpus rather than inside it: ingest a plan's goals, its
+        // current-state reporting, its intervention metrics and its
+        // definitions, and read back a standardized key table with goal vs.
+        // current deltas, keys still awaiting a human merge decision, and
+        // any conflicting signals for the same key. See insight-store.js for
+        // the merge/conflict/delta rules this surface exposes.
+        if (segments.length >= 4 && segments[3] === "insights") {
+          const project = await projectStore.get(segments[2]);
+          if (!project) return sendJson(404, { error: `project not found: ${segments[2]}` });
+          const sub = segments[4];
+
+          // GET /api/projects/:id/insights/keys — the canonical key table
+          if (req.method === "GET" && segments.length === 5 && sub === "keys") {
+            return sendJson(200, { keys: await insightStore.listKeys(project.id) });
+          }
+
+          // POST /api/projects/:id/insights/keys — define a canonical key by hand
+          if (req.method === "POST" && segments.length === 5 && sub === "keys") {
+            const data = await readJsonBody();
+            if (!data.label) return sendJson(400, { error: "'label' is required" });
+            const entry = await insightStore.createKey(project.id, {
+              key: data.key, label: data.label, category: data.category ?? null,
+              unit: data.unit ?? null, directionality: data.directionality || "unknown",
+            });
+            return sendJson(201, entry);
+          }
+
+          // POST /api/projects/:id/insights/ingest — extract standardized facts
+          // from already-decoded document text (the same text the UI's
+          // file-formats.js extraction or a project source upload produces).
+          // Never re-parses raw file bytes itself — see insight-store.js.
+          if (req.method === "POST" && segments.length === 5 && sub === "ingest") {
+            const data = await readJsonBody();
+            const text = data.content ?? data.text;
+            if (!text) return sendJson(400, { error: "'content' (document text) is required" });
+            const result = await insightStore.ingestDocument(project.id, {
+              text,
+              kind: data.kind || null,
+              asOf: data.asOf || null,
+              sourceId: data.sourceId || (data.name ? `source:${data.name}` : null),
+              sourceName: data.name || null,
+            });
+            return sendJson(200, result);
+          }
+
+          // GET /api/projects/:id/insights/observations?key=&kind=&keyStatus=
+          if (req.method === "GET" && segments.length === 5 && sub === "observations") {
+            const observations = await insightStore.listObservations(project.id, {
+              key: url.searchParams.get("key") || undefined,
+              kind: url.searchParams.get("kind") || undefined,
+              keyStatus: url.searchParams.get("keyStatus") || undefined,
+            });
+            return sendJson(200, { observations });
+          }
+
+          // POST /api/projects/:id/insights/observations — manual fact entry;
+          // the correction path for whatever automatic extraction misses or
+          // gets wrong.
+          if (req.method === "POST" && segments.length === 5 && sub === "observations") {
+            const data = await readJsonBody();
+            if (!data.kind || data.value === undefined) return sendJson(400, { error: "'kind' and 'value' are required" });
+            if (!data.key && !data.rawKey) return sendJson(400, { error: "'key' or 'rawKey' is required" });
+            const observation = await insightStore.addObservation(project.id, {
+              key: data.key || null, rawKey: data.rawKey || data.key, kind: data.kind, value: data.value,
+              asOf: data.asOf || null, sourceId: data.sourceId || null, sourceName: data.sourceName || null,
+              quote: data.quote || null,
+            });
+            return sendJson(201, observation);
+          }
+
+          // DELETE /api/projects/:id/insights/observations/:obsId
+          if (req.method === "DELETE" && segments.length === 6 && sub === "observations") {
+            const result = await insightStore.removeObservation(project.id, decodeURIComponent(segments[5]));
+            return sendJson(200, result);
+          }
+
+          // GET /api/projects/:id/insights/unclear — raw keys awaiting a human
+          // merge decision, grouped so one resolve-key call clears every
+          // observation that used that exact wording.
+          if (req.method === "GET" && segments.length === 5 && sub === "unclear") {
+            return sendJson(200, { unclear: await insightStore.unclearKeys(project.id) });
+          }
+
+          // POST /api/projects/:id/insights/resolve-key — merge a raw key into
+          // an existing canonical key, or mint a new one from it.
+          if (req.method === "POST" && segments.length === 5 && sub === "resolve-key") {
+            const data = await readJsonBody();
+            if (!data.rawKey) return sendJson(400, { error: "'rawKey' is required" });
+            if (!data.canonicalKey && !data.createLabel) {
+              return sendJson(400, { error: "'canonicalKey' (map to an existing key) or 'createLabel' (mint a new one) is required" });
+            }
+            const result = await insightStore.resolveKey(project.id, {
+              rawKey: data.rawKey, canonicalKey: data.canonicalKey || null, createLabel: data.createLabel || null,
+              category: data.category ?? null, unit: data.unit ?? null, directionality: data.directionality || "unknown",
+            });
+            return sendJson(200, result);
+          }
+
+          // GET /api/projects/:id/insights/state — merged goal/current/delta
+          // per standardized key: the "are we where the plan said we'd be" view.
+          if (req.method === "GET" && segments.length === 5 && sub === "state") {
+            return sendJson(200, { rows: await insightStore.state(project.id) });
+          }
+
+          // GET /api/projects/:id/insights/delta-report — state(), filtered to
+          // keys that actually have a goal and/or a current value to compare.
+          if (req.method === "GET" && segments.length === 5 && sub === "delta-report") {
+            return sendJson(200, { rows: await insightStore.deltaReport(project.id) });
+          }
+
+          // GET /api/projects/:id/insights/conflicts — disagreeing signals for
+          // the same resolved key/kind/point-in-time, each with its source.
+          if (req.method === "GET" && segments.length === 5 && sub === "conflicts") {
+            return sendJson(200, { conflicts: await insightStore.conflicts(project.id) });
+          }
+
+          // GET /api/projects/:id/insights/history?key=&kind= — every resolved
+          // observation for a key over time, oldest first.
+          if (req.method === "GET" && segments.length === 5 && sub === "history") {
+            const key = url.searchParams.get("key");
+            if (!key) return sendJson(400, { error: "'key' query param is required" });
+            const observations = await insightStore.history(project.id, key, { kind: url.searchParams.get("kind") || "current_state" });
+            return sendJson(200, { key, observations });
+          }
+
+          // GET /api/projects/:id/insights/delta?key=&from=&to=&kind= — the
+          // delta between the state nearest `from` and the state nearest `to`.
+          if (req.method === "GET" && segments.length === 5 && sub === "delta") {
+            const key = url.searchParams.get("key");
+            const from = url.searchParams.get("from");
+            const to = url.searchParams.get("to");
+            if (!key || !from || !to) return sendJson(400, { error: "'key', 'from' and 'to' query params are required" });
+            const result = await insightStore.deltaBetween(project.id, key, {
+              from, to, kind: url.searchParams.get("kind") || "current_state",
+            });
+            return sendJson(200, result);
+          }
+
+          return sendJson(404, { error: "no such insights route" });
         }
 
         sendJson(404, { error: "no such projects route" });
