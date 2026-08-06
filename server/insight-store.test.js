@@ -209,6 +209,16 @@ test("resolveKey can create a brand-new canonical key from a raw key instead of 
   assert.ok(keys.some((k) => k.key === key && k.label === "Stormwater capacity"));
 });
 
+test("updateKey() edits a canonical key's label/category/unit/directionality without touching its aliases or observations", async () => {
+  const store = freshStore();
+  const entry = await store.createKey("p1", { label: "Poverty rate" });
+  await store.resolveKey("p1", { rawKey: "Poverty %", canonicalKey: entry.key }); // give it an alias to preserve
+  const updated = await store.updateKey("p1", entry.key, { directionality: "lower_is_better", unit: "%" });
+  assert.equal(updated.directionality, "lower_is_better");
+  assert.equal(updated.unit, "%");
+  assert.deepEqual(updated.aliases, ["Poverty %"]);
+});
+
 // ── Conflicts ────────────────────────────────────────────────────────────
 
 test("conflicts() surfaces disagreeing values for the same resolved key/kind/asOf, each with its own source", async () => {
@@ -293,4 +303,69 @@ test("deltaBetween() finds the nearest observation at-or-before each requested p
   const result = await store.deltaBetween("p1", "affordable_housing_units", { from: "2022", to: "2026" });
   assert.equal(result.status, "computed");
   assert.equal(result.delta.amount, 60);
+});
+
+// ── unclearKeys() clustering / resolveKey() with rawKeys ────────────────
+
+test("unclearKeys() clusters mutually-similar-enough distinct spellings into one row instead of asking twice for the same document", async () => {
+  const store = freshStore();
+  await store.ingestDocument("p1", {
+    text: "Affordable housing units total: 500\nAffordable housing units: 210\n",
+    kind: "current_state",
+  });
+  const unclear = await store.unclearKeys("p1");
+  // "Affordable housing units total" and "Affordable housing units" are
+  // similar enough to auto-merge once a canonical key exists — they must be
+  // offered as ONE row, not two, so resolving it clears both spellings.
+  assert.equal(unclear.length, 1);
+  assert.equal(unclear[0].count, 2);
+  assert.ok(unclear[0].rawKeys.length >= 2);
+});
+
+test("unclearKeys() does NOT cluster genuinely different keys just because they share some words", async () => {
+  const store = freshStore();
+  await store.addObservation("p1", { rawKey: "Affordable housing units", kind: "goal", value: "500" });
+  await store.addObservation("p1", { rawKey: "Youth graduation rate", kind: "current_state", value: "74%" });
+  const unclear = await store.unclearKeys("p1");
+  assert.equal(unclear.length, 2);
+});
+
+test("resolveKey() accepts a rawKeys array and clears every spelling in the cluster with one call", async () => {
+  const store = freshStore();
+  await store.ingestDocument("p1", {
+    text: "Affordable housing units total: 500\nAffordable housing units: 210\n",
+    kind: "current_state",
+  });
+  const [group] = await store.unclearKeys("p1");
+  const { resolvedCount } = await store.resolveKey("p1", { rawKeys: group.rawKeys, createLabel: "Affordable housing units" });
+  assert.equal(resolvedCount, 2);
+  assert.equal((await store.unclearKeys("p1")).length, 0);
+});
+
+// ── state(): quote provenance and directionality-aware progress ─────────
+
+test("state() carries the goal/current observation's quote and id through for provenance display", async () => {
+  const store = freshStore();
+  await store.createKey("p1", { label: "Affordable housing units" });
+  await store.ingestDocument("p1", { text: "Affordable housing units: 500\n", kind: "goal", sourceId: "s1", sourceName: "Plan" });
+  const [row] = await store.state("p1");
+  assert.equal(row.goal.quote, "Affordable housing units: 500");
+  assert.ok(row.goal.observationId);
+});
+
+test("state() reports progress on-track/off-track only when directionality is declared, never guessed", async () => {
+  const store = freshStore();
+  await store.createKey("p1", { label: "Poverty rate", directionality: "lower_is_better" });
+  await store.addObservation("p1", { key: "poverty_rate", rawKey: "x", kind: "goal", value: "10%" });
+  await store.addObservation("p1", { key: "poverty_rate", rawKey: "x", kind: "current_state", value: "8%" });
+  let [row] = await store.state("p1");
+  assert.equal(row.progress, "on-track"); // 8% <= 10% goal ceiling — good
+
+  const store2 = freshStore();
+  await store2.createKey("p1", { label: "Housing units" }); // directionality left "unknown"
+  await store2.addObservation("p1", { key: "housing_units", rawKey: "x", kind: "goal", value: "500" });
+  await store2.addObservation("p1", { key: "housing_units", rawKey: "x", kind: "current_state", value: "210" });
+  [row] = await store2.state("p1");
+  assert.equal(row.deltaStatus, "computed");
+  assert.equal(row.progress, null);
 });

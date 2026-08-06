@@ -1152,6 +1152,11 @@
             <span style="font-size:12.5px; font-weight:600; color:#26241F;">Ingest a document</span>
             <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">Paste the document's extracted text (from Documents → Open, or pasted straight from the source). "By 2030: X = Y", "Key: Value" lines and tables are read automatically; section headers like GOALS or CURRENT STATE set the default kind for the lines under them.</span>
             <textarea value="{{ insightIngestText }}" onChange="{{ onInsightIngestTextChange }}" placeholder="Affordable housing units: 500 by 2030&#10;Youth graduation rate: 74% (baseline)" style="min-height:90px; resize:vertical; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:9px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"></textarea>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="file" ref="{{ setInsightFileInput }}" onChange="{{ onInsightFileSelected }}" style="display:none;" />
+              <button type="button" onClick="{{ triggerInsightFileInput }}" disabled="{{ insightExtracting }}" style="display:flex; align-items:center; gap:6px; border:1px solid #E4DFD5; background:#FFFDFA; border-radius:7px; padding:6px 11px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;"><i class="ph ph-upload-simple"></i>{{ insightUploadButtonLabel }}</button>
+              <span style="font-size:11px; color:#A39D91;">PDF (text layer), DOCX/XLSX/ODT and plain text are read in-browser; a scanned PDF needs Documents → Open (OCR) first.</span>
+            </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
               <input type="text" value="{{ insightIngestName }}" onChange="{{ onInsightIngestNameChange }}" placeholder="Document name (optional)" style="flex:1; min-width:160px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:inherit; font-size:12px; color:#26241F;"/>
               <select value="{{ insightIngestKind }}" onChange="{{ onInsightIngestKindChange }}" style="border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:inherit; font-size:12px; color:#26241F;">
@@ -1178,6 +1183,9 @@
             <sc-for list="{{ insightUnclearRows }}" as="row">
               <div style="border:1px solid #F0DDBF; border-radius:8px; background:#FBF3E6; padding:10px 12px; display:flex; flex-direction:column; gap:7px;">
                 <span style="font-size:12.5px; color:#26241F;"><span style="font-family:'IBM Plex Mono', monospace; color:#8A5A22;">{{ row.rawKey }}</span> — seen in {{ row.count }} fact(s)</span>
+                <sc-if value="{{ row.hasOtherSpellings }}">
+                  <span style="font-size:11px; color:#8C877C;">also written as: {{ row.otherSpellingsText }}</span>
+                </sc-if>
                 <sc-if value="{{ row.hasCandidates }}">
                   <div style="display:flex; gap:6px; flex-wrap:wrap;">
                     <sc-for list="{{ row.candidateRows }}" as="cand">
@@ -1211,22 +1219,136 @@
 
           <!-- ── Standardized keys / delta table ── -->
           <div style="display:flex; flex-direction:column; gap:8px;">
-            <span style="font-size:12.5px; font-weight:600; color:#26241F;">Standardized keys</span>
+            <div style="display:flex; align-items:center; justify-content:space-between;">
+              <span style="font-size:12.5px; font-weight:600; color:#26241F;">Standardized keys</span>
+              <button type="button" onClick="{{ openInsightNewKey }}" style="border:1px solid #E4DFD5; background:none; border-radius:6px; padding:4px 10px; font-family:inherit; font-size:11.5px; color:#1F5A4C; cursor:pointer;">+ New key</button>
+            </div>
+
+            <sc-if value="{{ insightNewKeyOpen }}">
+              <div style="border:1px solid #E4DFD5; border-radius:8px; background:#FAF8F4; padding:10px 12px; display:flex; flex-direction:column; gap:7px;">
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                  <input type="text" value="{{ insightNewKeyLabel }}" onChange="{{ onInsightNewKeyLabelChange }}" placeholder="Standard key name, e.g. Affordable housing units" style="flex:1; min-width:200px; border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:6px 9px; font-family:inherit; font-size:12px; color:#26241F;"/>
+                  <input type="text" value="{{ insightNewKeyCategory }}" onChange="{{ onInsightNewKeyCategoryChange }}" placeholder="Category (optional)" style="width:140px; border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:6px 9px; font-family:inherit; font-size:12px; color:#26241F;"/>
+                  <input type="text" value="{{ insightNewKeyUnit }}" onChange="{{ onInsightNewKeyUnitChange }}" placeholder="Unit (optional)" style="width:110px; border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:6px 9px; font-family:inherit; font-size:12px; color:#26241F;"/>
+                  <select value="{{ insightNewKeyDirectionality }}" onChange="{{ onInsightNewKeyDirectionalityChange }}" style="border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:6px 9px; font-family:inherit; font-size:12px; color:#26241F;">
+                    <option value="unknown">Direction unknown</option>
+                    <option value="higher_is_better">Higher is better</option>
+                    <option value="lower_is_better">Lower is better</option>
+                  </select>
+                </div>
+                <div style="display:flex; gap:8px;">
+                  <button type="button" onClick="{{ createInsightKey }}" disabled="{{ insightNewKeySubmitDisabled }}" style="border:0; border-radius:6px; background:#1F5A4C; color:#FFFDFA; padding:6px 12px; font-family:inherit; font-size:11.5px; cursor:pointer;">Create</button>
+                  <button type="button" onClick="{{ closeInsightNewKey }}" style="border:1px solid #E4DFD5; background:none; border-radius:6px; padding:6px 12px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">Cancel</button>
+                </div>
+                <sc-if value="{{ hasInsightNewKeyError }}">
+                  <span style="font-size:11.5px; color:#C0341A;">{{ insightNewKeyError }}</span>
+                </sc-if>
+              </div>
+            </sc-if>
+
             <sc-if value="{{ noInsightState }}">
               <span style="font-size:12px; color:#A39D91;">No standardized keys yet — ingest a plan above, or define one from Unclear keys once you have a fact for it.</span>
             </sc-if>
             <sc-for list="{{ insightStateRows }}" as="row">
-              <div style="border:1px solid #E4DFD5; border-radius:8px; background:#FFFDFA; padding:10px 12px; display:flex; flex-direction:column; gap:5px;">
-                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-                  <span style="font-size:13px; font-weight:500; color:#26241F;">{{ row.label }}</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color: {{ row.statusColor }}; background: {{ row.statusBg }}; border-radius:5px; padding:2px 8px;">{{ row.statusLabel }}</span>
+              <div style="border:1px solid #E4DFD5; border-radius:8px; background:#FFFDFA; overflow:hidden;">
+                <button type="button" onClick="{{ row.toggle }}" style="width:100%; text-align:left; border:0; background:none; cursor:pointer; padding:10px 12px; display:flex; flex-direction:column; gap:5px; font-family:inherit;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <i class="{{ row.chevronClass }}" style="font-size:11px; color:#A39D91;"></i>
+                    <span style="flex:1; font-size:13px; font-weight:500; color:#26241F;">{{ row.label }}</span>
+                    <sc-if value="{{ row.hasProgress }}">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color: {{ row.progressColor }}; background: {{ row.progressBg }}; border-radius:5px; padding:2px 8px;">{{ row.progressLabel }}</span>
+                    </sc-if>
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color: {{ row.statusColor }}; background: {{ row.statusBg }}; border-radius:5px; padding:2px 8px;">{{ row.statusLabel }}</span>
+                  </div>
+                  <div style="display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:#4A463E; padding-left:19px;">
+                    <span>Goal: <span style="color:#26241F;">{{ row.goalText }}</span></span>
+                    <span>Current: <span style="color:#26241F;">{{ row.currentText }}</span></span>
+                    <span>Delta: <span style="color:#26241F;">{{ row.deltaText }}</span></span>
+                    <span style="color:#A39D91;">{{ row.signalCount }} signal(s)</span>
+                  </div>
+                </button>
+
+                <sc-if value="{{ row.expanded }}">
+                <div style="padding:0 14px 14px 41px; display:flex; flex-direction:column; gap:12px; border-top:1px solid #EBE6DC; margin-top:2px;">
+
+                  <div style="display:flex; align-items:center; gap:8px; padding-top:10px;">
+                    <span style="font-size:11.5px; color:#8C877C;">Direction:</span>
+                    <select value="{{ row.directionality }}" onChange="{{ row.onDirectionalityChange }}" style="border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:4px 8px; font-family:inherit; font-size:11.5px; color:#26241F;">
+                      <option value="unknown">Unknown</option>
+                      <option value="higher_is_better">Higher is better</option>
+                      <option value="lower_is_better">Lower is better</option>
+                    </select>
+                  </div>
+
+                  <sc-if value="{{ row.hasGoalQuote }}">
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                      <span style="font-size:11px; color:#8C877C;">Goal source — {{ row.goalSourceLabel }}</span>
+                      <span style="font-size:11.5px; color:#4A463E; font-style:italic;">"{{ row.goalQuote }}"</span>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ row.hasCurrentQuote }}">
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                      <span style="font-size:11px; color:#8C877C;">Current source — {{ row.currentSourceLabel }}</span>
+                      <span style="font-size:11.5px; color:#4A463E; font-style:italic;">"{{ row.currentQuote }}"</span>
+                    </div>
+                  </sc-if>
+
+                  <sc-if value="{{ row.hasDefinitions }}">
+                    <div style="display:flex; flex-direction:column; gap:3px;">
+                      <span style="font-size:11px; font-weight:600; color:#6E6A60; text-transform:uppercase; letter-spacing:.05em;">Definitions</span>
+                      <sc-for list="{{ row.definitionRows }}" as="d">
+                        <span style="font-size:11.5px; color:#4A463E;">{{ d.value }} <span style="color:#A39D91;">— {{ d.sourceLabel }}</span></span>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+
+                  <sc-if value="{{ row.hasInterventions }}">
+                    <div style="display:flex; flex-direction:column; gap:3px;">
+                      <span style="font-size:11px; font-weight:600; color:#6E6A60; text-transform:uppercase; letter-spacing:.05em;">Intervention metrics</span>
+                      <sc-for list="{{ row.interventionRows }}" as="iv">
+                        <span style="font-size:11.5px; color:#4A463E;">{{ iv.text }} <span style="color:#A39D91;">— {{ iv.sourceLabel }}</span></span>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+
+                  <div style="display:flex; gap:16px; flex-wrap:wrap;">
+                    <div style="flex:1; min-width:200px; display:flex; flex-direction:column; gap:3px;">
+                      <span style="font-size:11px; font-weight:600; color:#6E6A60; text-transform:uppercase; letter-spacing:.05em;">Goal history</span>
+                      <sc-if value="{{ row.noGoalHistory }}"><span style="font-size:11px; color:#A39D91;">No goal facts recorded.</span></sc-if>
+                      <sc-for list="{{ row.goalHistoryRows }}" as="h">
+                        <div style="display:flex; align-items:center; gap:6px;">
+                          <span style="font-size:11.5px; color:#4A463E; flex:1;">{{ h.text }} <span style="color:#A39D91;">— {{ h.sourceLabel }}</span></span>
+                          <button type="button" onClick="{{ h.del }}" aria-label="Delete" style="border:0; background:none; color:#A39D91; cursor:pointer; padding:0;"><i class="ph ph-trash" style="font-size:11px;"></i></button>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="flex:1; min-width:200px; display:flex; flex-direction:column; gap:3px;">
+                      <span style="font-size:11px; font-weight:600; color:#6E6A60; text-transform:uppercase; letter-spacing:.05em;">Current-state history</span>
+                      <sc-if value="{{ row.noCurrentHistory }}"><span style="font-size:11px; color:#A39D91;">No current-state facts recorded.</span></sc-if>
+                      <sc-for list="{{ row.currentHistoryRows }}" as="h">
+                        <div style="display:flex; align-items:center; gap:6px;">
+                          <span style="font-size:11.5px; color:#4A463E; flex:1;">{{ h.text }} <span style="color:#A39D91;">— {{ h.sourceLabel }}</span></span>
+                          <button type="button" onClick="{{ h.del }}" aria-label="Delete" style="border:0; background:none; color:#A39D91; cursor:pointer; padding:0;"><i class="ph ph-trash" style="font-size:11px;"></i></button>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+
+                  <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; border-top:1px solid #EBE6DC; padding-top:10px;">
+                    <span style="font-size:11px; color:#8C877C; width:100%;">Add a fact by hand</span>
+                    <select value="{{ row.factKind }}" onChange="{{ row.onFactKindChange }}" style="border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:5px 8px; font-family:inherit; font-size:11.5px; color:#26241F;">
+                      <option value="goal">Goal / target</option>
+                      <option value="current_state">Current state</option>
+                      <option value="intervention_metric">Intervention metric</option>
+                      <option value="definition">Definition</option>
+                    </select>
+                    <input type="text" value="{{ row.factValue }}" onChange="{{ row.onFactValueChange }}" placeholder="Value" style="width:120px; border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:5px 8px; font-family:inherit; font-size:11.5px; color:#26241F;"/>
+                    <input type="text" value="{{ row.factAsOf }}" onChange="{{ row.onFactAsOfChange }}" placeholder="As of" style="width:80px; border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:5px 8px; font-family:inherit; font-size:11.5px; color:#26241F;"/>
+                    <input type="text" value="{{ row.factSourceName }}" onChange="{{ row.onFactSourceNameChange }}" placeholder="Source (optional)" style="width:130px; border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:5px 8px; font-family:inherit; font-size:11.5px; color:#26241F;"/>
+                    <button type="button" onClick="{{ row.submitFact }}" disabled="{{ row.factSubmitDisabled }}" style="border:0; border-radius:6px; background:#1F5A4C; color:#FFFDFA; padding:5px 12px; font-family:inherit; font-size:11.5px; cursor:pointer;">Add</button>
+                  </div>
                 </div>
-                <div style="display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:#4A463E;">
-                  <span>Goal: <span style="color:#26241F;">{{ row.goalText }}</span></span>
-                  <span>Current: <span style="color:#26241F;">{{ row.currentText }}</span></span>
-                  <span>Delta: <span style="color:#26241F;">{{ row.deltaText }}</span></span>
-                  <span style="color:#A39D91;">{{ row.signalCount }} signal(s)</span>
-                </div>
+                </sc-if>
               </div>
             </sc-for>
           </div>
@@ -2433,8 +2555,19 @@ class Component extends DCLogic {
     // project. null = not fetched yet for the current project.
     _insightRows: null, _insightUnclear: null, _insightConflicts: null, _insightError: null, _insightLoading: false,
     _insightIngestText: '', _insightIngestName: '', _insightIngestKind: 'goal', _insightIngestAsOf: '',
-    _insightIngestLoading: false, _insightIngestResult: null, _insightIngestError: null,
+    _insightIngestLoading: false, _insightIngestResult: null, _insightIngestError: null, _insightExtracting: false,
     _insightResolveDrafts: {}, _insightForProjectId: null,
+    // Expanding a standardized-key row shows its definitions/intervention
+    // metrics (already in _insightRows) plus its full goal/current history —
+    // fetched lazily per key since a project can carry many keys and most are
+    // never expanded in a given sitting. Keyed "key:kind" -> observations[].
+    _insightExpandedKey: null, _insightHistoryCache: {},
+    // The manual "add a fact" mini-form scoped to whichever key is expanded —
+    // only one is ever open at a time, so one shared draft is enough.
+    _insightFactKind: 'current_state', _insightFactValue: '', _insightFactAsOf: '', _insightFactSourceName: '',
+    // The "+ New key" inline form above the standardized-keys table.
+    _insightNewKeyOpen: false, _insightNewKeyLabel: '', _insightNewKeyCategory: '', _insightNewKeyUnit: '',
+    _insightNewKeyDirectionality: 'unknown', _insightNewKeyError: null,
     // The other family of senses: Hugging Face models installed into THIS
     // browser and run here (senses-runtime.js / window.EOSenses), no endpoint
     // and no proxy. Mirrored from that module's snapshot rather than owned
@@ -3021,21 +3154,24 @@ class Component extends DCLogic {
   // `canonicalKey` maps to an existing key (a candidate the extractor already
   // suggested); `createLabel` mints a brand-new one from the raw text as-is —
   // the two paths resolveKey() on the server supports, offered here as one
-  // call so the UI never has to know which case it's in beforehand.
-  async resolveInsightKey(rawKey, { canonicalKey = null, createLabel = null } = {}) {
+  // call so the UI never has to know which case it's in beforehand. `rawKeys`
+  // is every distinct spelling unclearKeys() clustered into this one row —
+  // resolving the row resolves all of them in a single server call.
+  async resolveInsightKey(rawKeys, { canonicalKey = null, createLabel = null } = {}) {
     const projectId = this.state.activeProjectId;
     if (!projectId) return;
+    const draftKey = rawKeys[0];
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/resolve-key', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rawKey, canonicalKey, createLabel }),
+        body: JSON.stringify({ rawKeys, canonicalKey, createLabel }),
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `proxy returned ${res.status}`);
       }
-      this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [rawKey]: '' } }));
+      this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [draftKey]: '' } }));
       this.fetchInsights();
     } catch (err) {
       this.setState({ _insightError: err.message });
@@ -3049,9 +3185,193 @@ class Component extends DCLogic {
       await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/observations/' + encodeURIComponent(observationId), {
         method: 'DELETE', signal: AbortSignal.timeout(10000),
       });
+      // A deleted observation may have been part of an expanded key's
+      // history — drop the cache entries wholesale rather than trying to
+      // patch them, since removeObservation doesn't say which (key, kind)
+      // it belonged to and a stale cached history is worse than one refetch.
+      this.setState({ _insightHistoryCache: {} });
+      this.fetchInsights();
+      if (this.state._insightExpandedKey) {
+        this.fetchInsightHistory(this.state._insightExpandedKey, 'goal');
+        this.fetchInsightHistory(this.state._insightExpandedKey, 'current_state');
+      }
+    } catch (err) {
+      this.setState({ _insightError: err.message });
+    }
+  }
+
+  // Define a canonical key by hand — the "+ New key" form above the
+  // standardized-keys table. Lets a reader pre-seed keys (with a
+  // directionality) before ingesting anything, so the first document's facts
+  // merge onto them instead of starting 100% unclear.
+  async createInsightKey() {
+    const projectId = this.state.activeProjectId;
+    const label = this.state._insightNewKeyLabel.trim();
+    if (!projectId || !label) return;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/keys', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label,
+          category: this.state._insightNewKeyCategory.trim() || null,
+          unit: this.state._insightNewKeyUnit.trim() || null,
+          directionality: this.state._insightNewKeyDirectionality,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `proxy returned ${res.status}`);
+      this.setState({
+        _insightNewKeyOpen: false, _insightNewKeyLabel: '', _insightNewKeyCategory: '', _insightNewKeyUnit: '',
+        _insightNewKeyDirectionality: 'unknown', _insightNewKeyError: null,
+      });
+      this.fetchInsights();
+    } catch (err) {
+      this.setState({ _insightNewKeyError: err.message });
+    }
+  }
+
+  // Quick inline edit — just directionality, from a <select> right in the
+  // standardized-keys table row. Nothing else about the key needs a form:
+  // directionality is the one field that changes what the row's status badge
+  // means, and it's common to not know it until you've seen the first delta.
+  async setInsightKeyDirectionality(key, directionality) {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) return;
+    try {
+      await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/keys/' + encodeURIComponent(key), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directionality }),
+        signal: AbortSignal.timeout(10000),
+      });
       this.fetchInsights();
     } catch (err) {
       this.setState({ _insightError: err.message });
+    }
+  }
+
+  // Expanding a key row shows its goal/current history over time (the
+  // "different times" delta from the room's original ask) alongside the
+  // definitions/interventions already sitting in _insightRows. Collapsing
+  // doesn't clear the cache — re-expanding the same key is instant.
+  toggleInsightKey(key) {
+    const opening = this.state._insightExpandedKey !== key;
+    this.setState({ _insightExpandedKey: opening ? key : null });
+    if (opening) {
+      this.fetchInsightHistory(key, 'goal');
+      this.fetchInsightHistory(key, 'current_state');
+    }
+  }
+
+  async fetchInsightHistory(key, kind) {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) return;
+    const cacheKey = `${key}:${kind}`;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/history?key=' + encodeURIComponent(key) + '&kind=' + encodeURIComponent(kind), { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) return;
+      const { observations } = await res.json();
+      this.setState(s => ({ _insightHistoryCache: { ...s._insightHistoryCache, [cacheKey]: observations || [] } }));
+    } catch { /* history is supplementary to state() — a failed fetch just leaves the section showing "loading" */ }
+  }
+
+  // Manual fact entry, scoped to whichever key is currently expanded — the
+  // correction path for a plan's number that automatic extraction missed
+  // entirely (a chart, a footnote, a sentence extraction doesn't parse).
+  async submitInsightFact() {
+    const projectId = this.state.activeProjectId;
+    const key = this.state._insightExpandedKey;
+    const value = this.state._insightFactValue.trim();
+    if (!projectId || !key || !value) return;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/observations', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key, kind: this.state._insightFactKind, value,
+          asOf: this.state._insightFactAsOf.trim() || null,
+          sourceName: this.state._insightFactSourceName.trim() || 'manual entry',
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `proxy returned ${res.status}`);
+      this.setState({ _insightFactValue: '', _insightFactAsOf: '' });
+      this.fetchInsights();
+      this.fetchInsightHistory(key, this.state._insightFactKind);
+    } catch (err) {
+      this.setState({ _insightError: err.message });
+    }
+  }
+
+  setInsightFileInput(el) { this._insightFileInputEl = el; }
+  triggerInsightFileInput() { if (this._insightFileInputEl) this._insightFileInputEl.click(); }
+
+  // Best-effort client-side text extraction for the ingest form's file
+  // picker — reuses whichever library the main Documents upload path already
+  // uses for each format (PDF.js, SheetJS, EOFormats' own DOCX/EPUB/etc.
+  // parsers) rather than re-implementing any of them. A scanned PDF with no
+  // text layer is a named gap here, same discipline as file-formats.js: the
+  // main Documents tab runs OCR on upload, so that's pointed to explicitly
+  // rather than silently returning empty text.
+  async _extractTextForInsights(file) {
+    const name = file.name;
+    let id = null;
+    if (window.EOFormats) {
+      try {
+        const head = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
+        id = window.EOFormats.identify(name, head);
+      } catch { /* unreadable slice — fall back to the extension below */ }
+    }
+    const kind = (id && id.kind) || this.inferType(name);
+
+    if (kind === 'pdf') {
+      if (typeof pdfjsLib === 'undefined') return { text: '', note: `PDF.js didn't load — can't read "${name}" here. Paste the text manually instead.` };
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      let text = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += content.items.map(item => item.str).join(' ') + '\n\n';
+      }
+      if (text.replace(/\s+/g, '').length > 20) return { text, note: null };
+      return { text: '', note: `"${name}" has no PDF text layer (a scanned image) — open it from Documents, which runs OCR, then paste the transcribed text here.` };
+    }
+
+    if (kind === 'spreadsheet' && /\.(xlsx|xlsm|xlsb|xls)$/i.test(name) && typeof XLSX !== 'undefined') {
+      const buf = await file.arrayBuffer();
+      const workbook = XLSX.read(buf, { type: 'array' });
+      const csv = workbook.SheetNames.map((n, i) => {
+        const body = XLSX.utils.sheet_to_csv(workbook.Sheets[n]);
+        return i === 0 ? body : `\n--- Sheet: ${n} ---\n${body}`;
+      }).join('\n');
+      return { text: csv, note: null };
+    }
+
+    if (!window.EOFormats) return { text: '', note: 'file reader module unavailable — paste the text manually.' };
+    const r = await window.EOFormats.extract(file);
+    if (!r.text || !r.text.trim()) return { text: '', note: r.gap || `nothing indexable was found in "${name}" — paste the text manually.` };
+    return { text: r.text, note: null };
+  }
+
+  async onInsightFileSelected(e) {
+    const file = (e.target.files || [])[0];
+    e.target.value = '';
+    if (!file) return;
+    this.setState({ _insightExtracting: true, _insightIngestError: null });
+    try {
+      const { text, note } = await this._extractTextForInsights(file);
+      if (!text.trim()) {
+        this.setState({ _insightExtracting: false, _insightIngestError: note || `could not extract text from "${file.name}"` });
+        return;
+      }
+      this.setState(s => ({
+        _insightExtracting: false,
+        _insightIngestText: text,
+        _insightIngestName: s._insightIngestName.trim() || file.name,
+      }));
+    } catch (err) {
+      this.setState({ _insightExtracting: false, _insightIngestError: `could not read "${file.name}" — ${err.message}` });
     }
   }
 
@@ -9291,25 +9611,34 @@ class Component extends DCLogic {
         : '',
       hasInsightIngestError: !!S._insightIngestError,
       insightIngestError: S._insightIngestError,
+      setInsightFileInput: (el) => this.setInsightFileInput(el),
+      triggerInsightFileInput: () => this.triggerInsightFileInput(),
+      onInsightFileSelected: (e) => this.onInsightFileSelected(e),
+      insightExtracting: S._insightExtracting,
+      insightUploadButtonLabel: S._insightExtracting ? 'Reading file…' : 'Upload a file instead',
 
       hasInsightUnclear: !!(S._insightUnclear && S._insightUnclear.length),
       insightUnclearCount: (S._insightUnclear || []).length,
       insightUnclearRows: (S._insightUnclear || []).map(g => {
-        const draftValue = S._insightResolveDrafts[g.rawKey] || '';
+        const draftKey = g.rawKeys[0];
+        const draftValue = S._insightResolveDrafts[draftKey] || '';
+        const otherSpellings = g.rawKeys.slice(1);
         return {
           rawKey: g.rawKey,
+          hasOtherSpellings: otherSpellings.length > 0,
+          otherSpellingsText: otherSpellings.join(', '),
           count: g.count,
           hasCandidates: (g.candidates || []).length > 0,
           candidateRows: (g.candidates || []).map(c => ({
             label: c.label, scorePct: `${Math.round(c.score * 100)}%`,
-            pick: () => this.resolveInsightKey(g.rawKey, { canonicalKey: c.key }),
+            pick: () => this.resolveInsightKey(g.rawKeys, { canonicalKey: c.key }),
           })),
           draftValue,
-          onDraftChange: (e) => this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [g.rawKey]: e.target.value } })),
+          onDraftChange: (e) => this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [draftKey]: e.target.value } })),
           createDisabled: !draftValue.trim(),
           createNew: () => {
-            const label = (this.state._insightResolveDrafts[g.rawKey] || '').trim();
-            if (label) this.resolveInsightKey(g.rawKey, { createLabel: label });
+            const label = (this.state._insightResolveDrafts[draftKey] || '').trim();
+            if (label) this.resolveInsightKey(g.rawKeys, { createLabel: label });
           },
         };
       }),
@@ -9327,6 +9656,25 @@ class Component extends DCLogic {
         };
       }),
 
+      // "+ New key" — pre-seed a canonical key (with directionality) before
+      // ingesting anything, so the first document's facts have somewhere
+      // confident to merge onto instead of starting 100% unclear.
+      insightNewKeyOpen: S._insightNewKeyOpen,
+      openInsightNewKey: () => this.setState({ _insightNewKeyOpen: true }),
+      closeInsightNewKey: () => this.setState({ _insightNewKeyOpen: false, _insightNewKeyError: null }),
+      insightNewKeyLabel: S._insightNewKeyLabel,
+      onInsightNewKeyLabelChange: (e) => this.setState({ _insightNewKeyLabel: e.target.value }),
+      insightNewKeyCategory: S._insightNewKeyCategory,
+      onInsightNewKeyCategoryChange: (e) => this.setState({ _insightNewKeyCategory: e.target.value }),
+      insightNewKeyUnit: S._insightNewKeyUnit,
+      onInsightNewKeyUnitChange: (e) => this.setState({ _insightNewKeyUnit: e.target.value }),
+      insightNewKeyDirectionality: S._insightNewKeyDirectionality,
+      onInsightNewKeyDirectionalityChange: (e) => this.setState({ _insightNewKeyDirectionality: e.target.value }),
+      createInsightKey: () => this.createInsightKey(),
+      insightNewKeySubmitDisabled: !S._insightNewKeyLabel.trim(),
+      hasInsightNewKeyError: !!S._insightNewKeyError,
+      insightNewKeyError: S._insightNewKeyError,
+
       noInsightState: !(S._insightRows && S._insightRows.length),
       insightStateRows: (S._insightRows || []).map(row => {
         const STATUS = {
@@ -9340,7 +9688,12 @@ class Component extends DCLogic {
           'no-goal': { label: 'no goal set', color: '#A39D91', bg: '#F2EFE8' },
           'no-data': { label: 'no data', color: '#A39D91', bg: '#F2EFE8' },
         };
+        const PROGRESS = {
+          'on-track': { label: 'on track', color: '#1F5A4C', bg: '#E4EEE9' },
+          'off-track': { label: 'off track', color: '#C0341A', bg: '#FBE3DC' },
+        };
         const st = STATUS[row.deltaStatus] || STATUS['no-data'];
+        const pr = row.progress ? PROGRESS[row.progress] : null;
         const fmt = (o) => o ? `${o.value}${o.asOf ? ` (${o.asOf})` : ''}` : '—';
         let deltaText = '—';
         if (row.deltaStatus === 'computed' && row.delta) {
@@ -9351,12 +9704,68 @@ class Component extends DCLogic {
         } else if (row.deltaStatus !== 'no-data') {
           deltaText = st.label;
         }
+
+        const expanded = S._insightExpandedKey === row.key;
+        const historyRows = (kind) => {
+          const list = S._insightHistoryCache[`${row.key}:${kind}`];
+          if (!list) return { loaded: false, rows: [] };
+          return {
+            loaded: true,
+            rows: list.map(o => ({
+              id: o.id,
+              text: `${o.value}${o.asOf ? ` — ${o.asOf}` : ''}`,
+              sourceLabel: o.sourceName || o.sourceId || 'unknown source',
+              quote: o.quote || '',
+              hasQuote: !!o.quote,
+              del: () => this.deleteInsightObservation(o.id),
+            })),
+          };
+        };
+        const goalHist = expanded ? historyRows('goal') : { loaded: false, rows: [] };
+        const currentHist = expanded ? historyRows('current_state') : { loaded: false, rows: [] };
+
         return {
           key: row.key, label: row.label, category: row.category,
           goalText: fmt(row.goal), currentText: fmt(row.current),
           deltaText,
           statusLabel: st.label, statusColor: st.color, statusBg: st.bg,
+          hasProgress: !!pr, progressLabel: pr ? pr.label : '', progressColor: pr ? pr.color : '', progressBg: pr ? pr.bg : '',
           signalCount: row.signalCount,
+          toggle: () => this.toggleInsightKey(row.key),
+          expanded,
+          chevronClass: expanded ? 'ph ph-caret-down' : 'ph ph-caret-right',
+
+          directionality: row.directionality || 'unknown',
+          onDirectionalityChange: (e) => this.setInsightKeyDirectionality(row.key, e.target.value),
+
+          hasGoalQuote: !!(row.goal && row.goal.quote),
+          goalQuote: row.goal ? row.goal.quote : '',
+          goalSourceLabel: row.goal ? (row.goal.sourceName || row.goal.sourceId || 'unknown source') : '',
+          hasCurrentQuote: !!(row.current && row.current.quote),
+          currentQuote: row.current ? row.current.quote : '',
+          currentSourceLabel: row.current ? (row.current.sourceName || row.current.sourceId || 'unknown source') : '',
+
+          hasDefinitions: row.definitions.length > 0,
+          definitionRows: row.definitions.map(d => ({ value: d.value, sourceLabel: d.sourceName || d.sourceId || 'unknown source' })),
+          hasInterventions: row.interventions.length > 0,
+          interventionRows: row.interventions.map(iv => ({
+            text: `${iv.value}${iv.asOf ? ` — ${iv.asOf}` : ''}`, sourceLabel: iv.sourceName || iv.sourceId || 'unknown source',
+          })),
+
+          goalHistoryLoaded: goalHist.loaded, goalHistoryRows: goalHist.rows, noGoalHistory: goalHist.loaded && !goalHist.rows.length,
+          currentHistoryLoaded: currentHist.loaded, currentHistoryRows: currentHist.rows, noCurrentHistory: currentHist.loaded && !currentHist.rows.length,
+
+          // Manual "add a fact" mini-form, scoped to this key while it's expanded.
+          factKind: S._insightFactKind,
+          onFactKindChange: (e) => this.setState({ _insightFactKind: e.target.value }),
+          factValue: S._insightFactValue,
+          onFactValueChange: (e) => this.setState({ _insightFactValue: e.target.value }),
+          factAsOf: S._insightFactAsOf,
+          onFactAsOfChange: (e) => this.setState({ _insightFactAsOf: e.target.value }),
+          factSourceName: S._insightFactSourceName,
+          onFactSourceNameChange: (e) => this.setState({ _insightFactSourceName: e.target.value }),
+          submitFact: () => this.submitInsightFact(),
+          factSubmitDisabled: !S._insightFactValue.trim(),
         };
       }),
     };

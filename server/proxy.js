@@ -4886,6 +4886,17 @@ const server = http.createServer((req, res) => {
             return sendJson(201, entry);
           }
 
+          // PATCH /api/projects/:id/insights/keys/:key — edit a canonical
+          // key's label/category/unit/directionality (never its aliases or
+          // observations — see updateKey()).
+          if (req.method === "PATCH" && segments.length === 6 && sub === "keys") {
+            const data = await readJsonBody();
+            const entry = await insightStore.updateKey(project.id, decodeURIComponent(segments[5]), {
+              label: data.label, category: data.category, unit: data.unit, directionality: data.directionality,
+            });
+            return sendJson(200, entry);
+          }
+
           // POST /api/projects/:id/insights/ingest — extract standardized facts
           // from already-decoded document text (the same text the UI's
           // file-formats.js extraction or a project source upload produces).
@@ -4946,12 +4957,13 @@ const server = http.createServer((req, res) => {
           // an existing canonical key, or mint a new one from it.
           if (req.method === "POST" && segments.length === 5 && sub === "resolve-key") {
             const data = await readJsonBody();
-            if (!data.rawKey) return sendJson(400, { error: "'rawKey' is required" });
+            const rawKeys = Array.isArray(data.rawKeys) && data.rawKeys.length ? data.rawKeys : null;
+            if (!rawKeys && !data.rawKey) return sendJson(400, { error: "'rawKey' or 'rawKeys' is required" });
             if (!data.canonicalKey && !data.createLabel) {
               return sendJson(400, { error: "'canonicalKey' (map to an existing key) or 'createLabel' (mint a new one) is required" });
             }
             const result = await insightStore.resolveKey(project.id, {
-              rawKey: data.rawKey, canonicalKey: data.canonicalKey || null, createLabel: data.createLabel || null,
+              rawKey: data.rawKey || null, rawKeys, canonicalKey: data.canonicalKey || null, createLabel: data.createLabel || null,
               category: data.category ?? null, unit: data.unit ?? null, directionality: data.directionality || "unknown",
             });
             return sendJson(200, result);

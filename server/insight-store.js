@@ -406,6 +406,27 @@ export class InsightStore {
   }
 
   /**
+   * Edit a canonical key's own metadata — label, category, unit, or the
+   * directionality that makes progress() meaningful. Never touches aliases
+   * or any observation; those are unaffected by what a key is CALLED or
+   * which way is good, only by which raw texts merge into it.
+   */
+  async updateKey(projectId, key, { label, category, unit, directionality } = {}) {
+    return this.#withLock(projectId, async () => {
+      const registry = await this.#readRegistry(projectId);
+      const entry = registry.keys.find((k) => k.key === key);
+      if (!entry) throw new Error(`unknown key: ${key}`);
+      if (label !== undefined) entry.label = label;
+      if (category !== undefined) entry.category = category;
+      if (unit !== undefined) entry.unit = unit;
+      if (directionality !== undefined) entry.directionality = directionality;
+      registry.projectId = projectId;
+      await this.#writeRegistry(projectId, registry);
+      return entry;
+    });
+  }
+
+  /**
    * Ingest already-extracted document text as a batch of observations.
    * `kind` is the document-level default (e.g. this whole upload is a plan's
    * "goal" section) — a heading or "By <year>" prefix inside the text can
@@ -528,30 +549,70 @@ export class InsightStore {
     );
   }
 
-  /** Raw keys still awaiting a human decision, grouped so one merge decision resolves every observation that used that exact raw text. */
+  /**
+   * Raw keys still awaiting a human decision. First grouped by EXACT
+   * normalized text (precise), then those groups are greedily clustered when
+   * two distinct spellings are mutually similar enough that AUTO_MERGE_THRESHOLD
+   * would have merged them automatically had a canonical key already existed
+   * — e.g. "Affordable Housing Units" and "Aff Housing Units" appearing in
+   * the same document. This never groups two keys a confident auto-merge
+   * wouldn't have merged on its own; it only saves a reader from resolving
+   * the same concept twice in one sitting. Each row's `rawKeys` lists every
+   * distinct spelling folded in, so resolveKey() can clear all of them at once.
+   */
   async unclearKeys(projectId) {
     const obsStore = await this.#readObservations(projectId);
-    const groups = new Map();
+    const byNorm = new Map();
     for (const o of obsStore.observations) {
       if (o.keyStatus !== "unclear") continue;
       const norm = normalizeKeyText(o.rawKey);
-      if (!groups.has(norm)) groups.set(norm, { rawKey: o.rawKey, candidates: o.candidates || [], observationIds: [], count: 0 });
-      const g = groups.get(norm);
+      if (!byNorm.has(norm)) byNorm.set(norm, { rawKey: o.rawKey, candidates: o.candidates || [], observationIds: [], count: 0 });
+      const g = byNorm.get(norm);
       g.observationIds.push(o.id);
       g.count++;
       if ((o.candidates || []).length > (g.candidates || []).length) g.candidates = o.candidates;
     }
-    return [...groups.values()].sort((a, b) => b.count - a.count);
+
+    const clusters = [];
+    for (const entry of byNorm.values()) {
+      const home = clusters.find((cluster) =>
+        cluster.members.some((m) => jaccardSimilarity(m.rawKey, entry.rawKey) >= AUTO_MERGE_THRESHOLD)
+      );
+      if (home) home.members.push(entry);
+      else clusters.push({ members: [entry] });
+    }
+
+    return clusters.map((cluster) => {
+      const members = cluster.members.slice().sort((a, b) => b.count - a.count);
+      const candidateByKey = new Map();
+      for (const m of members) {
+        for (const c of m.candidates || []) {
+          const existing = candidateByKey.get(c.key);
+          if (!existing || c.score > existing.score) candidateByKey.set(c.key, c);
+        }
+      }
+      return {
+        rawKey: members[0].rawKey,
+        rawKeys: members.map((m) => m.rawKey),
+        count: members.reduce((sum, m) => sum + m.count, 0),
+        candidates: [...candidateByKey.values()].sort((a, b) => b.score - a.score).slice(0, MAX_CANDIDATES),
+        observationIds: members.flatMap((m) => m.observationIds),
+      };
+    }).sort((a, b) => b.count - a.count);
   }
 
   /**
-   * Resolve every observation whose raw key normalizes the same as `rawKey`.
+   * Resolve every observation whose raw key normalizes the same as any of
+   * `rawKeys` (or the single `rawKey`, kept for callers with just one).
    * Either maps to `canonicalKey` (must already exist) or, when `createLabel`
-   * is given instead, creates a brand-new canonical key from it. The raw text
-   * becomes an alias either way, so the next document using this exact wording
-   * merges automatically instead of asking again.
+   * is given instead, creates a brand-new canonical key from it. Every raw
+   * text becomes an alias either way, so the next document using any of this
+   * exact wording merges automatically instead of asking again.
    */
-  async resolveKey(projectId, { rawKey, canonicalKey = null, createLabel = null, category = null, unit = null, directionality = "unknown" } = {}) {
+  async resolveKey(projectId, { rawKey = null, rawKeys = null, canonicalKey = null, createLabel = null, category = null, unit = null, directionality = "unknown" } = {}) {
+    const keysToResolve = (rawKeys && rawKeys.length) ? rawKeys : (rawKey ? [rawKey] : []);
+    if (!keysToResolve.length) throw new Error("resolveKey requires rawKey or rawKeys");
+
     return this.#withLock(projectId, async () => {
       const registry = await this.#readRegistry(projectId);
       const obsStore = await this.#readObservations(projectId);
@@ -569,14 +630,18 @@ export class InsightStore {
       }
       const entry = registry.keys.find((k) => k.key === targetKey);
       if (!entry) throw new Error(`unknown key: ${targetKey}`);
-      if (!entry.aliases.some((a) => normalizeKeyText(a) === normalizeKeyText(rawKey))) {
-        entry.aliases.push(rawKey);
+
+      const norms = new Set();
+      for (const rk of keysToResolve) {
+        norms.add(normalizeKeyText(rk));
+        if (!entry.aliases.some((a) => normalizeKeyText(a) === normalizeKeyText(rk))) {
+          entry.aliases.push(rk);
+        }
       }
 
-      const norm = normalizeKeyText(rawKey);
       let resolvedCount = 0;
       for (const o of obsStore.observations) {
-        if (o.keyStatus === "unclear" && normalizeKeyText(o.rawKey) === norm) {
+        if (o.keyStatus === "unclear" && norms.has(normalizeKeyText(o.rawKey))) {
           o.key = targetKey;
           o.keyStatus = "resolved";
           o.candidates = [];
@@ -683,15 +748,33 @@ export class InsightStore {
         deltaStatus = "no-goal";
       }
 
+      // Whether the numbers moved the RIGHT way is a separate question from
+      // whether a delta could be computed at all, and it is only answerable
+      // when the key declares which direction is good — never guessed from
+      // the key's name. "unknown" directionality (the default) always
+      // yields progress: null rather than a fabricated verdict.
+      let progress = null;
+      if (deltaStatus === "computed" && (entry.directionality === "higher_is_better" || entry.directionality === "lower_is_better")) {
+        const good = entry.directionality === "higher_is_better" ? delta.amount >= 0 : delta.amount <= 0;
+        progress = good ? "on-track" : "off-track";
+      }
+
+      const goalOut = goal.value ? {
+        observationId: goal.value.id, value: goal.value.value, parsed: goal.value.parsed, asOf: goal.value.asOf,
+        sourceId: goal.value.sourceId, sourceName: goal.value.sourceName, quote: goal.value.quote,
+      } : null;
+      const currentOut = current.value ? {
+        observationId: current.value.id, value: current.value.value, parsed: current.value.parsed, asOf: current.value.asOf,
+        sourceId: current.value.sourceId, sourceName: current.value.sourceName, quote: current.value.quote,
+      } : null;
+
       return {
         key: entry.key, label: entry.label, category: entry.category, unit: entry.unit, directionality: entry.directionality,
-        goal: goal.value ? { value: goal.value.value, parsed: goal.value.parsed, asOf: goal.value.asOf, sourceId: goal.value.sourceId, sourceName: goal.value.sourceName } : null,
-        goalConflict: goal.conflict,
-        current: current.value ? { value: current.value.value, parsed: current.value.parsed, asOf: current.value.asOf, sourceId: current.value.sourceId, sourceName: current.value.sourceName } : null,
-        currentConflict: current.conflict,
-        delta, deltaStatus,
-        definitions: definitions.map((d) => ({ value: d.value, sourceId: d.sourceId, sourceName: d.sourceName, quote: d.quote })),
-        interventions: interventions.map((iv) => ({ value: iv.value, asOf: iv.asOf, sourceId: iv.sourceId, sourceName: iv.sourceName, quote: iv.quote })),
+        goal: goalOut, goalConflict: goal.conflict,
+        current: currentOut, currentConflict: current.conflict,
+        delta, deltaStatus, progress,
+        definitions: definitions.map((d) => ({ id: d.id, value: d.value, sourceId: d.sourceId, sourceName: d.sourceName, quote: d.quote })),
+        interventions: interventions.map((iv) => ({ id: iv.id, value: iv.value, asOf: iv.asOf, sourceId: iv.sourceId, sourceName: iv.sourceName, quote: iv.quote })),
         signalCount: all.filter((o) => o.key === entry.key).length,
       };
     });
