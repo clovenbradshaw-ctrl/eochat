@@ -31,6 +31,25 @@ import {
 import {
   buildCabinetBlock, emptyCabinet, mergeDeskFacts, markAccessed, retrieveCabinet,
 } from "./project-memory.js";
+import { createConversationHolon, recordTurn } from "./conversation-holon.js";
+import { generateAnswer } from "./turn-generation.js";
+
+// Every blink can be longform — these are ceilings, not targets; the model
+// still decides when to stop. DEFAULT is generous headroom for the common
+// case where a turn's evidence doesn't structurally split into more than one
+// earned section (turn-generation.js's outline collapses to one call, same
+// as before that module existed).
+const DEFAULT_MAX_TOKENS = 8192;
+// The output-review correction pass only fixes flagged violations in an
+// already-generated answer — it does not need longform headroom.
+const CORRECTION_MAX_TOKENS = 1500;
+// How many earned sections a turn's outline is allowed to grow to.
+// LONGFORM is the ceiling a turn earns once conversation-holon.js discovers
+// (never declares) that it depends on a prior turn's evidence — see
+// recordTurn in conversation-holon.js. Either way this bounds how far an
+// outline CAN split, never how far it must.
+const DEFAULT_MAX_SECTIONS = 4;
+const LONGFORM_MAX_SECTIONS = 8;
 
 // Mechanical post-processing: read the model's own output and format it for
 // display — no model call, no learned system, just regexes and rules.
@@ -430,13 +449,13 @@ export function createTurnController(deps) {
     });
   }
 
-  async function callOllamaStreaming(model, messages, { signal, onDelta }) {
+  async function callOllamaStreaming(model, messages, { signal, onDelta, maxTokens = DEFAULT_MAX_TOKENS }) {
     const resp = await fetch(`${target}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model, messages, stream: true,
-        options: { temperature: 0.7, num_predict: 4096, num_ctx: numCtx },
+        options: { temperature: 0.7, num_predict: maxTokens, num_ctx: numCtx },
       }),
       signal,
     });
@@ -466,12 +485,12 @@ export function createTurnController(deps) {
     return { text, model };
   }
 
-  async function callAnthropicStreaming(model, messages, { signal, onDelta }) {
+  async function callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens = DEFAULT_MAX_TOKENS }) {
     const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
     const nonSystem = messages.filter(m => m.role !== "system");
     const body = {
       model,
-      max_tokens: 4096,
+      max_tokens: maxTokens,
       messages: nonSystem.map(m => ({ role: m.role, content: m.content })),
       stream: true,
     };
@@ -515,7 +534,7 @@ export function createTurnController(deps) {
     return { text, model };
   }
 
-  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride, draftModel }) {
+  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride, draftModel, maxTokens = DEFAULT_MAX_TOKENS }) {
     let model, routerCtx;
     const key = _getAnthropicKey();
     const useAnthropic = provider === "anthropic" && key;
@@ -538,8 +557,8 @@ export function createTurnController(deps) {
     }
     const startedAt = Date.now();
     const result = useAnthropic
-      ? await callAnthropicStreaming(model, messages, { signal, onDelta })
-      : await callOllamaStreaming(model, messages, { signal, onDelta });
+      ? await callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens })
+      : await callOllamaStreaming(model, messages, { signal, onDelta, maxTokens });
     const elapsedMs = Date.now() - startedAt;
     if (routerCtx) {
       const outcome = elapsedMs > latencyBudgetMs ? "failure" : "success";
@@ -567,7 +586,7 @@ export function createTurnController(deps) {
     if (useAnthropic) {
       const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
       const body = {
-        model, max_tokens: 1500,
+        model, max_tokens: CORRECTION_MAX_TOKENS,
         messages: messages.filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content })),
       };
       if (systemMessages) body.system = systemMessages;
@@ -585,7 +604,7 @@ export function createTurnController(deps) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model, messages, stream: false,
-        options: { temperature: 0.4, num_predict: 1500, num_ctx: numCtx },
+        options: { temperature: 0.4, num_predict: CORRECTION_MAX_TOKENS, num_ctx: numCtx },
       }),
     });
     if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
@@ -898,6 +917,21 @@ export function createTurnController(deps) {
     }
   }
 
+  // Records this turn in the conversation's holon log against the sources its
+  // OWN retrieval actually grounded on, and returns the section-count ceiling
+  // this blink earned — DEFAULT unless the log discovers this turn depends on
+  // a prior one (conversation-holon.js). This only bounds how far
+  // turn-generation.js's outline is ALLOWED to split; the outline still only
+  // splits as far as the evidence itself earns. Persists the updated log
+  // best-effort; a persistence failure should never block the answer itself.
+  async function resolveMaxSections(conv, turn, sourceIds) {
+    const priorLog = conv.holonLog || createConversationHolon();
+    const { log, promoted } = recordTurn(priorLog, { turnId: turn.id, sourceIds });
+    conversationStore.setHolonLog(conv.id, log).catch(() => {});
+    conv.holonLog = log;
+    return promoted ? LONGFORM_MAX_SECTIONS : DEFAULT_MAX_SECTIONS;
+  }
+
   // The core pipeline shared by a fresh turn and a regenerate — both already
   // have a turnId/answerId and a question by the time this runs.
   async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, draftModel, mode, webSearch }, sendEvent) {
@@ -985,10 +1019,17 @@ export function createTurnController(deps) {
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
         messages.push(...history, { role: "user", content: question });
 
+        const maxSections = await resolveMaxSections(conv, turn, webResults.map((r) => r.url));
+        // span_id doubles as source_id here — a web result IS its source, so
+        // outlineFromEvidence's per-source grouping earns one section per URL
+        // that structurally stands apart, same as a per-source_id split does
+        // for engine grounding below.
+        const webEvidence = webResults.map((r) => ({ source_id: r.url, span_id: r.url, text: r.text || r.snippet || "" }));
         let sawStart = false;
-        const { text: rawText, model } = await callModelStreaming(messages, {
-          signal: controller.signal, provider, modelOverride, draftModel,
-          onDelta: (delta, text) => {
+        const { text: rawText, model } = await generateAnswer({
+          messages, evidence: webEvidence, maxSections, singleSectionMaxTokens: DEFAULT_MAX_TOKENS,
+          callModelStreaming, provider, modelOverride, draftModel, signal: controller.signal,
+          onSectionDelta: (delta, text) => {
             if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length }); }
             controller._partialText = formatOutput(text);
             sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
@@ -1135,10 +1176,12 @@ export function createTurnController(deps) {
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
         messages.push(...history, { role: "user", content: question });
 
+        const maxSections = await resolveMaxSections(conv, turn, (groundResult.citations || []).map((c) => c.source_id));
         let sawStart = false;
-        const { text: rawText, model } = await callModelStreaming(messages, {
-          signal: controller.signal, provider, modelOverride, draftModel,
-          onDelta: (delta, text) => {
+        const { text: rawText, model } = await generateAnswer({
+          messages, evidence: groundResult.citations || [], maxSections, singleSectionMaxTokens: DEFAULT_MAX_TOKENS,
+          callModelStreaming, provider, modelOverride, draftModel, signal: controller.signal,
+          onSectionDelta: (delta, text) => {
             if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
             controller._partialText = formatOutput(text);
             sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
