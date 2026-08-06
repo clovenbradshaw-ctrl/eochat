@@ -32,17 +32,24 @@ import {
   buildCabinetBlock, emptyCabinet, mergeDeskFacts, markAccessed, retrieveCabinet,
 } from "./project-memory.js";
 import { createConversationHolon, recordTurn } from "./conversation-holon.js";
+import { generateAnswer } from "./turn-generation.js";
 
 // Every blink can be longform — these are ceilings, not targets; the model
-// still decides when to stop. DEFAULT is generous headroom for an ordinary
-// turn. LONGFORM is the headroom a turn gets once conversation-holon.js
-// discovers (never declares) that this turn continues a thread rather than
-// opening a fresh one — see recordTurn in conversation-holon.js.
+// still decides when to stop. DEFAULT is generous headroom for the common
+// case where a turn's evidence doesn't structurally split into more than one
+// earned section (turn-generation.js's outline collapses to one call, same
+// as before that module existed).
 const DEFAULT_MAX_TOKENS = 8192;
-const LONGFORM_MAX_TOKENS = 32000;
 // The output-review correction pass only fixes flagged violations in an
 // already-generated answer — it does not need longform headroom.
 const CORRECTION_MAX_TOKENS = 1500;
+// How many earned sections a turn's outline is allowed to grow to.
+// LONGFORM is the ceiling a turn earns once conversation-holon.js discovers
+// (never declares) that it depends on a prior turn's evidence — see
+// recordTurn in conversation-holon.js. Either way this bounds how far an
+// outline CAN split, never how far it must.
+const DEFAULT_MAX_SECTIONS = 4;
+const LONGFORM_MAX_SECTIONS = 8;
 
 // Mechanical post-processing: read the model's own output and format it for
 // display — no model call, no learned system, just regexes and rules.
@@ -911,16 +918,18 @@ export function createTurnController(deps) {
   }
 
   // Records this turn in the conversation's holon log against the sources its
-  // OWN retrieval actually grounded on, and returns the token ceiling this
-  // blink earned — DEFAULT unless the log discovers this turn depends on a
-  // prior one (conversation-holon.js). Persists the updated log best-effort;
-  // a persistence failure should never block the answer itself.
-  async function resolveMaxTokens(conv, turn, sourceIds) {
+  // OWN retrieval actually grounded on, and returns the section-count ceiling
+  // this blink earned — DEFAULT unless the log discovers this turn depends on
+  // a prior one (conversation-holon.js). This only bounds how far
+  // turn-generation.js's outline is ALLOWED to split; the outline still only
+  // splits as far as the evidence itself earns. Persists the updated log
+  // best-effort; a persistence failure should never block the answer itself.
+  async function resolveMaxSections(conv, turn, sourceIds) {
     const priorLog = conv.holonLog || createConversationHolon();
     const { log, promoted } = recordTurn(priorLog, { turnId: turn.id, sourceIds });
     conversationStore.setHolonLog(conv.id, log).catch(() => {});
     conv.holonLog = log;
-    return promoted ? LONGFORM_MAX_TOKENS : DEFAULT_MAX_TOKENS;
+    return promoted ? LONGFORM_MAX_SECTIONS : DEFAULT_MAX_SECTIONS;
   }
 
   // The core pipeline shared by a fresh turn and a regenerate — both already
@@ -1010,11 +1019,17 @@ export function createTurnController(deps) {
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
         messages.push(...history, { role: "user", content: question });
 
-        const maxTokens = await resolveMaxTokens(conv, turn, webResults.map((r) => r.url));
+        const maxSections = await resolveMaxSections(conv, turn, webResults.map((r) => r.url));
+        // span_id doubles as source_id here — a web result IS its source, so
+        // outlineFromEvidence's per-source grouping earns one section per URL
+        // that structurally stands apart, same as a per-source_id split does
+        // for engine grounding below.
+        const webEvidence = webResults.map((r) => ({ source_id: r.url, span_id: r.url, text: r.text || r.snippet || "" }));
         let sawStart = false;
-        const { text: rawText, model } = await callModelStreaming(messages, {
-          signal: controller.signal, provider, modelOverride, draftModel, maxTokens,
-          onDelta: (delta, text) => {
+        const { text: rawText, model } = await generateAnswer({
+          messages, evidence: webEvidence, maxSections, singleSectionMaxTokens: DEFAULT_MAX_TOKENS,
+          callModelStreaming, provider, modelOverride, draftModel, signal: controller.signal,
+          onSectionDelta: (delta, text) => {
             if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length }); }
             controller._partialText = formatOutput(text);
             sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
@@ -1161,11 +1176,12 @@ export function createTurnController(deps) {
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
         messages.push(...history, { role: "user", content: question });
 
-        const maxTokens = await resolveMaxTokens(conv, turn, (groundResult.citations || []).map((c) => c.source_id));
+        const maxSections = await resolveMaxSections(conv, turn, (groundResult.citations || []).map((c) => c.source_id));
         let sawStart = false;
-        const { text: rawText, model } = await callModelStreaming(messages, {
-          signal: controller.signal, provider, modelOverride, draftModel, maxTokens,
-          onDelta: (delta, text) => {
+        const { text: rawText, model } = await generateAnswer({
+          messages, evidence: groundResult.citations || [], maxSections, singleSectionMaxTokens: DEFAULT_MAX_TOKENS,
+          callModelStreaming, provider, modelOverride, draftModel, signal: controller.signal,
+          onSectionDelta: (delta, text) => {
             if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
             controller._partialText = formatOutput(text);
             sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
