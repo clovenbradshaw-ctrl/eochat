@@ -239,6 +239,21 @@ export class ConversationStore {
     });
   }
 
+  // ── The holon log (conversation-holon.js) ──
+  //
+  // Same reasoning as setMemory above: the log is small (one entry per turn)
+  // and bounded by the conversation's own length, so it lives inside the
+  // conversation record rather than a second file that could drift out of
+  // sync. turn-controller.js owns what the log SAYS; the store only persists
+  // it atomically, exactly as it does for `memory`.
+  async setHolonLog(id, holonLog) {
+    return this.#withLock(id, async () => {
+      const conv = await this.require(id);
+      conv.holonLog = holonLog || null;
+      return this.#save(conv);
+    });
+  }
+
   /** Soft delete — moves the record into .trash/ so restore() can bring it back. */
   async remove(id) {
     return this.#withLock(id, async () => {
