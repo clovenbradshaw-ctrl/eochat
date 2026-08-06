@@ -1203,6 +1203,18 @@
               <button type="button" onClick="{{ triggerInsightFileInput }}" disabled="{{ insightExtracting }}" style="display:flex; align-items:center; gap:6px; border:1px solid #E4DFD5; background:#FFFDFA; border-radius:7px; padding:6px 11px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;"><i class="ph ph-upload-simple"></i>{{ insightUploadButtonLabel }}</button>
               <span style="font-size:11px; color:#A39D91;">PDF (text layer), DOCX/XLSX/ODT and plain text are read in-browser; a scanned PDF needs Documents → Open (OCR) first.</span>
             </div>
+            <sc-if value="{{ hasInsightSources }}">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-size:11px; color:#8C877C; flex:none;">or already in Documents:</span>
+              <select value="{{ insightSourceSelected }}" onChange="{{ onInsightSourceSelectedChange }}" style="flex:1; min-width:0; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:6px 8px; font-family:inherit; font-size:12px; color:#26241F;">
+                <option value="">Select a document…</option>
+                <sc-for list="{{ insightSourceOptions }}" as="opt">
+                  <option value="{{ opt.id }}">{{ opt.label }}</option>
+                </sc-for>
+              </select>
+              <button type="button" onClick="{{ loadInsightSourceText }}" disabled="{{ insightLoadSourceDisabled }}" style="border:1px solid #E4DFD5; background:#FFFDFA; border-radius:7px; padding:6px 12px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer; flex:none;">{{ insightLoadSourceButtonLabel }}</button>
+            </div>
+            </sc-if>
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
               <input type="text" value="{{ insightIngestName }}" onChange="{{ onInsightIngestNameChange }}" placeholder="Document name (optional)" style="flex:1; min-width:160px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:inherit; font-size:12px; color:#26241F;"/>
               <select value="{{ insightIngestKind }}" onChange="{{ onInsightIngestKindChange }}" style="border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:inherit; font-size:12px; color:#26241F;">
@@ -1263,11 +1275,30 @@
           </div>
           </sc-if>
 
+          <!-- ── Summary ── -->
+          <sc-if value="{{ hasInsightSummary }}">
+          <div style="display:flex; gap:16px; flex-wrap:wrap; padding:10px 12px; border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4;">
+            <span style="font-size:11.5px; color:#4A463E;"><span style="font-family:'IBM Plex Mono', monospace; font-weight:600; color:#26241F;">{{ insightKeyCount }}</span> key(s)</span>
+            <span style="font-size:11.5px; color:#4A463E;"><span style="font-family:'IBM Plex Mono', monospace; font-weight:600; color:#1F5A4C;">{{ insightOnTrackCount }}</span> on track</span>
+            <span style="font-size:11.5px; color:#4A463E;"><span style="font-family:'IBM Plex Mono', monospace; font-weight:600; color:#C0341A;">{{ insightOffTrackCount }}</span> off track</span>
+            <span style="font-size:11.5px; color:#4A463E;"><span style="font-family:'IBM Plex Mono', monospace; font-weight:600; color:#8A5A22;">{{ insightNeedsAttentionCount }}</span> need attention (conflict/mismatch/differs)</span>
+            <span style="font-size:11.5px; color:#4A463E;"><span style="font-family:'IBM Plex Mono', monospace; font-weight:600; color:#C0341A;">{{ insightConflictCount }}</span> conflicting</span>
+            <span style="font-size:11.5px; color:#4A463E;"><span style="font-family:'IBM Plex Mono', monospace; font-weight:600; color:#8A5A22;">{{ insightUnclearCount }}</span> unclear</span>
+          </div>
+          </sc-if>
+
           <!-- ── Standardized keys / delta table ── -->
           <div style="display:flex; flex-direction:column; gap:8px;">
-            <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
               <span style="font-size:12.5px; font-weight:600; color:#26241F;">Standardized keys</span>
-              <button type="button" onClick="{{ openInsightNewKey }}" style="border:1px solid #E4DFD5; background:none; border-radius:6px; padding:4px 10px; font-family:inherit; font-size:11.5px; color:#1F5A4C; cursor:pointer;">+ New key</button>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="text" value="{{ insightKeyFilter }}" onChange="{{ onInsightKeyFilterChange }}" placeholder="Filter by name or category" style="border:1px solid #E4DFD5; border-radius:6px; background:#FFFDFA; padding:5px 9px; font-family:inherit; font-size:11.5px; color:#26241F; width:180px;"/>
+                <sc-if value="{{ hasInsightKeyFilter }}">
+                  <button type="button" onClick="{{ clearInsightKeyFilter }}" aria-label="Clear filter" style="border:0; background:none; color:#A39D91; cursor:pointer; padding:0;"><i class="ph ph-x" style="font-size:12px;"></i></button>
+                </sc-if>
+                <button type="button" onClick="{{ exportInsightDeltaCsv }}" disabled="{{ insightExportDisabled }}" style="border:1px solid #E4DFD5; background:none; border-radius:6px; padding:4px 10px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">Export CSV</button>
+                <button type="button" onClick="{{ openInsightNewKey }}" style="border:1px solid #E4DFD5; background:none; border-radius:6px; padding:4px 10px; font-family:inherit; font-size:11.5px; color:#1F5A4C; cursor:pointer;">+ New key</button>
+              </div>
             </div>
 
             <sc-if value="{{ insightNewKeyOpen }}">
@@ -1294,6 +1325,9 @@
 
             <sc-if value="{{ noInsightState }}">
               <span style="font-size:12px; color:#A39D91;">No standardized keys yet — ingest a plan above, or define one from Unclear keys once you have a fact for it.</span>
+            </sc-if>
+            <sc-if value="{{ noInsightFilterResults }}">
+              <span style="font-size:12px; color:#A39D91;">No standardized key matches "{{ insightKeyFilter }}".</span>
             </sc-if>
             <sc-for list="{{ insightStateRows }}" as="row">
               <div style="border:1px solid #E4DFD5; border-radius:8px; background:#FFFDFA; overflow:hidden;">
@@ -2884,6 +2918,13 @@ class Component extends DCLogic {
     // The "+ New key" inline form above the standardized-keys table.
     _insightNewKeyOpen: false, _insightNewKeyLabel: '', _insightNewKeyCategory: '', _insightNewKeyUnit: '',
     _insightNewKeyDirectionality: 'unknown', _insightNewKeyError: null,
+    // Ingesting straight from a document already uploaded to this project's
+    // Documents tab, instead of re-uploading the same file a second time.
+    _insightSources: null, _insightSourcesPool: null, _insightSourceSelected: '', _insightLoadingSource: false,
+    // Search/filter over the standardized-keys table — a text match against
+    // label or category, since a real community-insights project can end up
+    // with far more keys than fit on screen at once.
+    _insightKeyFilter: '',
     // The other family of senses: Hugging Face models installed into THIS
     // browser and run here (senses-runtime.js / window.EOSenses), no endpoint
     // and no proxy. Mirrored from that module's snapshot rather than owned
@@ -4231,6 +4272,82 @@ class Component extends DCLogic {
         _insightError: null, _insightOffline: true, _insightLoading: false,
       });
     }
+  }
+
+  // The "pick a document already in this project" list — the same sources
+  // shown in the Documents tab, so a plan already uploaded for chat doesn't
+  // have to be re-uploaded a second time just to feed the insights ledger.
+  async fetchInsightSources() {
+    const projectId = this.state.activeProjectId;
+    if (!projectId) return;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/sources', { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return;
+      const { sources, pool } = await res.json();
+      this.setState({ _insightSources: sources || [], _insightSourcesPool: pool || null });
+    } catch { /* the ingest form still works by paste/upload without this */ }
+  }
+
+  async loadInsightSourceText() {
+    const projectId = this.state.activeProjectId;
+    const sourceId = this.state._insightSourceSelected;
+    if (!projectId || !sourceId) return;
+    this.setState({ _insightLoadingSource: true, _insightIngestError: null });
+    try {
+      const params = new URLSearchParams({ source: sourceId, max: '2000000' });
+      if (this.state._insightSourcesPool) params.set('pool', this.state._insightSourcesPool);
+      const res = await fetch(this.proxyUrl() + '/api/source/text?' + params.toString(), { signal: AbortSignal.timeout(15000) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `proxy returned ${res.status}`);
+      const picked = (this.state._insightSources || []).find(s => s.sourceId === sourceId);
+      this.setState(s => ({
+        _insightLoadingSource: false,
+        _insightIngestText: data.text || '',
+        _insightIngestName: (picked && picked.name) || s._insightIngestName,
+      }));
+      if (data.truncated) {
+        this.setState({ _insightIngestError: `Only the first ${data.text.length.toLocaleString()} of ${data.total_bytes.toLocaleString()} bytes were loaded — the rest was not read.` });
+      }
+    } catch (err) {
+      this.setState({ _insightLoadingSource: false, _insightIngestError: `could not load that document — ${err.message}` });
+    }
+  }
+
+  // Client-side CSV of the current delta table — a "community insights
+  // platform" is meant to feed reports elsewhere, and the merged/standardized
+  // view is exactly the row shape a spreadsheet or a board deck wants. Built
+  // from what's already on screen (_insightRows via renderVals), not a
+  // separate server round-trip.
+  exportInsightDeltaCsv() {
+    const rows = this.state._insightRows || [];
+    if (!rows.length) return;
+    const esc = (v) => {
+      const s = String(v ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['Key', 'Category', 'Goal', 'Goal as of', 'Current', 'Current as of', 'Delta', 'Status', 'Progress', 'Signals'];
+    const lines = [header.map(esc).join(',')];
+    for (const r of rows) {
+      const delta = r.deltaStatus === 'computed' && r.delta
+        ? `${r.delta.amount}${r.delta.pctOfGoal != null ? ` (${Math.round(r.delta.pctOfGoal)}% of goal)` : ''}`
+        : '';
+      lines.push([
+        r.label, r.category || '',
+        r.goal ? r.goal.value : '', r.goal ? (r.goal.asOf || '') : '',
+        r.current ? r.current.value : '', r.current ? (r.current.asOf || '') : '',
+        delta, r.deltaStatus, r.progress || '', r.signalCount,
+      ].map(esc).join(','));
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const projectName = (this.state.projects.find(p => p.id === this.state.activeProjectId) || {}).name || 'insights';
+    a.download = `${projectName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'insights'}-delta.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   async submitInsightIngest() {
@@ -9975,6 +10092,110 @@ class Component extends DCLogic {
         : (mon.ollama.models.length ? `${mon.ollama.models.join(', ')} · ${mon.ollama.vramMb} MB VRAM` : 'no model loaded in VRAM'))
       : '';
 
+    // Computed once, ahead of the return object, because both the full
+    // standardized-keys table AND the header's at-a-glance summary counts
+    // (below) need the same per-key status/progress derivation — deriving it
+    // twice would be one more place for the two to quietly disagree.
+    const insightStateRowsAll = (S._insightRows || []).map(row => {
+      const STATUS = {
+        'computed': { label: 'delta', color: '#1F5A4C', bg: '#E4EEE9' },
+        'met': { label: 'met', color: '#1F5A4C', bg: '#E4EEE9' },
+        'differs': { label: 'differs', color: '#8A5A22', bg: '#F3E7D3' },
+        'conflict': { label: 'conflict', color: '#C0341A', bg: '#FBE3DC' },
+        'unit-mismatch': { label: 'unit mismatch', color: '#8A5A22', bg: '#F3E7D3' },
+        'type-mismatch': { label: 'type mismatch', color: '#8A5A22', bg: '#F3E7D3' },
+        'no-current-state': { label: 'no current data', color: '#A39D91', bg: '#F2EFE8' },
+        'no-goal': { label: 'no goal set', color: '#A39D91', bg: '#F2EFE8' },
+        'no-data': { label: 'no data', color: '#A39D91', bg: '#F2EFE8' },
+      };
+      const PROGRESS = {
+        'on-track': { label: 'on track', color: '#1F5A4C', bg: '#E4EEE9' },
+        'off-track': { label: 'off track', color: '#C0341A', bg: '#FBE3DC' },
+      };
+      const st = STATUS[row.deltaStatus] || STATUS['no-data'];
+      const pr = row.progress ? PROGRESS[row.progress] : null;
+      const fmt = (o) => o ? `${o.value}${o.asOf ? ` (${o.asOf})` : ''}` : '—';
+      let deltaText = '—';
+      if (row.deltaStatus === 'computed' && row.delta) {
+        const amt = row.delta.amount;
+        const sign = amt > 0 ? '+' : '';
+        deltaText = `${sign}${Number.isInteger(amt) ? amt : amt.toFixed(2)}`;
+        if (row.delta.pctOfGoal != null) deltaText += ` (${Math.round(row.delta.pctOfGoal)}% of goal)`;
+      } else if (row.deltaStatus !== 'no-data') {
+        deltaText = st.label;
+      }
+
+      const expanded = S._insightExpandedKey === row.key;
+      const historyRows = (kind) => {
+        const list = S._insightHistoryCache[`${row.key}:${kind}`];
+        if (!list) return { loaded: false, rows: [] };
+        return {
+          loaded: true,
+          rows: list.map(o => ({
+            id: o.id,
+            text: `${o.value}${o.asOf ? ` — ${o.asOf}` : ''}`,
+            sourceLabel: o.sourceName || o.sourceId || 'unknown source',
+            quote: o.quote || '',
+            hasQuote: !!o.quote,
+            del: () => this.deleteInsightObservation(o.id),
+          })),
+        };
+      };
+      const goalHist = expanded ? historyRows('goal') : { loaded: false, rows: [] };
+      const currentHist = expanded ? historyRows('current_state') : { loaded: false, rows: [] };
+
+      return {
+        key: row.key, label: row.label, category: row.category,
+        goalText: fmt(row.goal), currentText: fmt(row.current),
+        deltaText, deltaStatus: row.deltaStatus, progress: row.progress,
+        statusLabel: st.label, statusColor: st.color, statusBg: st.bg,
+        hasProgress: !!pr, progressLabel: pr ? pr.label : '', progressColor: pr ? pr.color : '', progressBg: pr ? pr.bg : '',
+        signalCount: row.signalCount,
+        toggle: () => this.toggleInsightKey(row.key),
+        expanded,
+        chevronClass: expanded ? 'ph ph-caret-down' : 'ph ph-caret-right',
+
+        directionality: row.directionality || 'unknown',
+        onDirectionalityChange: (e) => this.setInsightKeyDirectionality(row.key, e.target.value),
+
+        hasGoalQuote: !!(row.goal && row.goal.quote),
+        goalQuote: row.goal ? row.goal.quote : '',
+        goalSourceLabel: row.goal ? (row.goal.sourceName || row.goal.sourceId || 'unknown source') : '',
+        hasCurrentQuote: !!(row.current && row.current.quote),
+        currentQuote: row.current ? row.current.quote : '',
+        currentSourceLabel: row.current ? (row.current.sourceName || row.current.sourceId || 'unknown source') : '',
+
+        hasDefinitions: row.definitions.length > 0,
+        definitionRows: row.definitions.map(d => ({ value: d.value, sourceLabel: d.sourceName || d.sourceId || 'unknown source' })),
+        hasInterventions: row.interventions.length > 0,
+        interventionRows: row.interventions.map(iv => ({
+          text: `${iv.value}${iv.asOf ? ` — ${iv.asOf}` : ''}`, sourceLabel: iv.sourceName || iv.sourceId || 'unknown source',
+        })),
+
+        goalHistoryLoaded: goalHist.loaded, goalHistoryRows: goalHist.rows, noGoalHistory: goalHist.loaded && !goalHist.rows.length,
+        currentHistoryLoaded: currentHist.loaded, currentHistoryRows: currentHist.rows, noCurrentHistory: currentHist.loaded && !currentHist.rows.length,
+
+        // Manual "add a fact" mini-form, scoped to this key while it's expanded.
+        factKind: S._insightFactKind,
+        onFactKindChange: (e) => this.setState({ _insightFactKind: e.target.value }),
+        factValue: S._insightFactValue,
+        onFactValueChange: (e) => this.setState({ _insightFactValue: e.target.value }),
+        factAsOf: S._insightFactAsOf,
+        onFactAsOfChange: (e) => this.setState({ _insightFactAsOf: e.target.value }),
+        factSourceName: S._insightFactSourceName,
+        onFactSourceNameChange: (e) => this.setState({ _insightFactSourceName: e.target.value }),
+        submitFact: () => this.submitInsightFact(),
+        factSubmitDisabled: !S._insightFactValue.trim(),
+      };
+    });
+    const insightKeyFilterQuery = S._insightKeyFilter.trim().toLowerCase();
+    const insightStateRowsFiltered = insightKeyFilterQuery
+      ? insightStateRowsAll.filter(r => r.label.toLowerCase().includes(insightKeyFilterQuery) || (r.category || '').toLowerCase().includes(insightKeyFilterQuery))
+      : insightStateRowsAll;
+    const insightOnTrackCount = insightStateRowsAll.filter(r => r.progress === 'on-track').length;
+    const insightOffTrackCount = insightStateRowsAll.filter(r => r.progress === 'off-track').length;
+    const insightNeedsAttentionCount = insightStateRowsAll.filter(r => ['conflict', 'unit-mismatch', 'type-mismatch', 'differs'].includes(r.deltaStatus)).length;
+
     return {
       showGlyphs: this.props.showGlyphs ?? true,
       isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses', isInsights: t === 'insights', isEoCode: t === 'eocode', isMonitor: t === 'monitor',
@@ -10330,7 +10551,7 @@ class Component extends DCLogic {
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
       tabPriors: () => this.setState({ tab: 'priors' }),
       tabSenses: () => this.setState({ tab: 'senses' }),
-      tabInsights: () => { this.setState({ tab: 'insights' }); this.fetchInsights(); },
+      tabInsights: () => { this.setState({ tab: 'insights' }); this.fetchInsights(); this.fetchInsightSources(); },
       tabEoCode: () => { this.setState({ tab: 'eocode' }); this.fetchEoCodeWorkspaces(); },
       tabMonitor: () => this.setState({ tab: 'monitor' }),
       tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
@@ -11219,6 +11440,17 @@ class Component extends DCLogic {
       insightExtracting: S._insightExtracting,
       insightUploadButtonLabel: S._insightExtracting ? 'Reading file…' : 'Upload a file instead',
 
+      // Pick-from-existing-Documents row — only worth showing once the
+      // project actually has sources; an empty picker next to an upload
+      // button that already covers "no sources yet" would just be noise.
+      hasInsightSources: !!(S._insightSources && S._insightSources.length),
+      insightSourceOptions: (S._insightSources || []).map(s => ({ id: s.sourceId, label: s.name })),
+      insightSourceSelected: S._insightSourceSelected,
+      onInsightSourceSelectedChange: (e) => this.setState({ _insightSourceSelected: e.target.value }),
+      loadInsightSourceText: () => this.loadInsightSourceText(),
+      insightLoadSourceDisabled: S._insightLoadingSource || !S._insightSourceSelected,
+      insightLoadSourceButtonLabel: S._insightLoadingSource ? 'Loading…' : 'Load',
+
       hasInsightUnclear: !!(S._insightUnclear && S._insightUnclear.length),
       insightUnclearCount: (S._insightUnclear || []).length,
       insightUnclearRows: (S._insightUnclear || []).map(g => {
@@ -11277,99 +11509,23 @@ class Component extends DCLogic {
       hasInsightNewKeyError: !!S._insightNewKeyError,
       insightNewKeyError: S._insightNewKeyError,
 
-      noInsightState: !(S._insightRows && S._insightRows.length),
-      insightStateRows: (S._insightRows || []).map(row => {
-        const STATUS = {
-          'computed': { label: 'delta', color: '#1F5A4C', bg: '#E4EEE9' },
-          'met': { label: 'met', color: '#1F5A4C', bg: '#E4EEE9' },
-          'differs': { label: 'differs', color: '#8A5A22', bg: '#F3E7D3' },
-          'conflict': { label: 'conflict', color: '#C0341A', bg: '#FBE3DC' },
-          'unit-mismatch': { label: 'unit mismatch', color: '#8A5A22', bg: '#F3E7D3' },
-          'type-mismatch': { label: 'type mismatch', color: '#8A5A22', bg: '#F3E7D3' },
-          'no-current-state': { label: 'no current data', color: '#A39D91', bg: '#F2EFE8' },
-          'no-goal': { label: 'no goal set', color: '#A39D91', bg: '#F2EFE8' },
-          'no-data': { label: 'no data', color: '#A39D91', bg: '#F2EFE8' },
-        };
-        const PROGRESS = {
-          'on-track': { label: 'on track', color: '#1F5A4C', bg: '#E4EEE9' },
-          'off-track': { label: 'off track', color: '#C0341A', bg: '#FBE3DC' },
-        };
-        const st = STATUS[row.deltaStatus] || STATUS['no-data'];
-        const pr = row.progress ? PROGRESS[row.progress] : null;
-        const fmt = (o) => o ? `${o.value}${o.asOf ? ` (${o.asOf})` : ''}` : '—';
-        let deltaText = '—';
-        if (row.deltaStatus === 'computed' && row.delta) {
-          const amt = row.delta.amount;
-          const sign = amt > 0 ? '+' : '';
-          deltaText = `${sign}${Number.isInteger(amt) ? amt : amt.toFixed(2)}`;
-          if (row.delta.pctOfGoal != null) deltaText += ` (${Math.round(row.delta.pctOfGoal)}% of goal)`;
-        } else if (row.deltaStatus !== 'no-data') {
-          deltaText = st.label;
-        }
+      // Summary strip — counts derived from the SAME per-row status/progress
+      // insightStateRowsFiltered itself uses, so the header total and the
+      // rows under it can never quietly disagree.
+      insightKeyCount: insightStateRowsAll.length,
+      insightOnTrackCount, insightOffTrackCount, insightNeedsAttentionCount,
+      hasInsightSummary: insightStateRowsAll.length > 0,
 
-        const expanded = S._insightExpandedKey === row.key;
-        const historyRows = (kind) => {
-          const list = S._insightHistoryCache[`${row.key}:${kind}`];
-          if (!list) return { loaded: false, rows: [] };
-          return {
-            loaded: true,
-            rows: list.map(o => ({
-              id: o.id,
-              text: `${o.value}${o.asOf ? ` — ${o.asOf}` : ''}`,
-              sourceLabel: o.sourceName || o.sourceId || 'unknown source',
-              quote: o.quote || '',
-              hasQuote: !!o.quote,
-              del: () => this.deleteInsightObservation(o.id),
-            })),
-          };
-        };
-        const goalHist = expanded ? historyRows('goal') : { loaded: false, rows: [] };
-        const currentHist = expanded ? historyRows('current_state') : { loaded: false, rows: [] };
+      insightKeyFilter: S._insightKeyFilter,
+      onInsightKeyFilterChange: (e) => this.setState({ _insightKeyFilter: e.target.value }),
+      hasInsightKeyFilter: !!S._insightKeyFilter.trim(),
+      clearInsightKeyFilter: () => this.setState({ _insightKeyFilter: '' }),
+      exportInsightDeltaCsv: () => this.exportInsightDeltaCsv(),
+      insightExportDisabled: !insightStateRowsAll.length,
 
-        return {
-          key: row.key, label: row.label, category: row.category,
-          goalText: fmt(row.goal), currentText: fmt(row.current),
-          deltaText,
-          statusLabel: st.label, statusColor: st.color, statusBg: st.bg,
-          hasProgress: !!pr, progressLabel: pr ? pr.label : '', progressColor: pr ? pr.color : '', progressBg: pr ? pr.bg : '',
-          signalCount: row.signalCount,
-          toggle: () => this.toggleInsightKey(row.key),
-          expanded,
-          chevronClass: expanded ? 'ph ph-caret-down' : 'ph ph-caret-right',
-
-          directionality: row.directionality || 'unknown',
-          onDirectionalityChange: (e) => this.setInsightKeyDirectionality(row.key, e.target.value),
-
-          hasGoalQuote: !!(row.goal && row.goal.quote),
-          goalQuote: row.goal ? row.goal.quote : '',
-          goalSourceLabel: row.goal ? (row.goal.sourceName || row.goal.sourceId || 'unknown source') : '',
-          hasCurrentQuote: !!(row.current && row.current.quote),
-          currentQuote: row.current ? row.current.quote : '',
-          currentSourceLabel: row.current ? (row.current.sourceName || row.current.sourceId || 'unknown source') : '',
-
-          hasDefinitions: row.definitions.length > 0,
-          definitionRows: row.definitions.map(d => ({ value: d.value, sourceLabel: d.sourceName || d.sourceId || 'unknown source' })),
-          hasInterventions: row.interventions.length > 0,
-          interventionRows: row.interventions.map(iv => ({
-            text: `${iv.value}${iv.asOf ? ` — ${iv.asOf}` : ''}`, sourceLabel: iv.sourceName || iv.sourceId || 'unknown source',
-          })),
-
-          goalHistoryLoaded: goalHist.loaded, goalHistoryRows: goalHist.rows, noGoalHistory: goalHist.loaded && !goalHist.rows.length,
-          currentHistoryLoaded: currentHist.loaded, currentHistoryRows: currentHist.rows, noCurrentHistory: currentHist.loaded && !currentHist.rows.length,
-
-          // Manual "add a fact" mini-form, scoped to this key while it's expanded.
-          factKind: S._insightFactKind,
-          onFactKindChange: (e) => this.setState({ _insightFactKind: e.target.value }),
-          factValue: S._insightFactValue,
-          onFactValueChange: (e) => this.setState({ _insightFactValue: e.target.value }),
-          factAsOf: S._insightFactAsOf,
-          onFactAsOfChange: (e) => this.setState({ _insightFactAsOf: e.target.value }),
-          factSourceName: S._insightFactSourceName,
-          onFactSourceNameChange: (e) => this.setState({ _insightFactSourceName: e.target.value }),
-          submitFact: () => this.submitInsightFact(),
-          factSubmitDisabled: !S._insightFactValue.trim(),
-        };
-      }),
+      noInsightState: !insightStateRowsAll.length,
+      noInsightFilterResults: insightStateRowsAll.length > 0 && insightKeyFilterQuery && !insightStateRowsFiltered.length,
+      insightStateRows: insightStateRowsFiltered,
     };
   }
 }
