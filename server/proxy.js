@@ -4596,7 +4596,18 @@ const server = http.createServer((req, res) => {
       try {
         // GET /api/projects — list all projects
         if (req.method === "GET" && segments.length === 2) {
-          return sendJson(200, { projects: await projectStore.list() });
+          const projects = await projectStore.list();
+          // A conversation belongs to a project by the spaceId stamped at
+          // creation (see the conversations POST route); project.conversationIds
+          // is only ever populated by addConversation, which nothing calls, so
+          // counting it alone would report every project as empty. Count the
+          // real members so the projects view and sidebar match what a reader
+          // would find under each project's Chats list.
+          const allConvs = await conversationStore.list();
+          for (const p of projects) {
+            p.conversationCount = allConvs.filter(c => (c.spaceId === p.id) || (c.pool === p.pool)).length;
+          }
+          return sendJson(200, { projects });
         }
 
         // POST /api/projects — create a new project

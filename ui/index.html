@@ -330,6 +330,7 @@
 
       <div style="display:flex; flex-direction:column; gap:14px; flex:1; min-height:0; overflow-y:auto; width:100%;" class="eo-scrollbar">
 
+        <sc-if value="{{ showingProjects }}">
         <div style="display:flex; flex-direction:column; gap:1px;">
           <div style="display:flex; align-items:center; gap:4px;">
             <button type="button" onClick="{{ toggleProjectsOpen }}" style="flex:1; min-width:0; display:flex; align-items:center; gap:8px; text-align:left; border:0; background:none; padding:8px 9px; cursor:pointer; font-family:inherit;">
@@ -356,6 +357,7 @@
             </sc-if>
           </sc-if>
         </div>
+        </sc-if>
 
         <sc-if value="{{ insideProject }}">
         <div style="display:flex; flex-direction:column; gap:1px; padding-top:10px; border-top:1px solid #EBE6DC;">
@@ -2936,8 +2938,11 @@ class Component extends DCLogic {
   }
 
   async switchProject(id) {
-    this.setState({ activeProjectId: id, view: 'chat', tab: 'chat' });
     const project = this.state.projects.find(p => p.id === id);
+    // Land inside the target project's own chat, not whatever conversation the
+    // previous project was on — cross-project chats must never carry over.
+    const scoped = this.state.spaces.filter(sp => sp.spaceId === id || (project && sp.pool === project.pool));
+    this.setState({ activeProjectId: id, view: 'chat', tab: 'chat', activeSpaceId: scoped.length ? scoped[0].id : null });
     if (project) {
       this.logAdd('●', `Switched to project "${project.name}"`, 'chat');
     }
@@ -3574,7 +3579,13 @@ class Component extends DCLogic {
   }
 
   activeSpace() {
-    return this.state.spaces.find(s => s.id === this.state.activeSpaceId) || this.state.spaces[0] || { id: 'default', name: 'Room', turns: [], retrievals: [], sources: [] };
+    // The chat surface is scoped to the active project: the active space must
+    // belong to it, and when none does the first space of the project (if any)
+    // stands in. Outside a project every space is eligible. This is what keeps
+    // the reader from landing in another project's conversation after switching
+    // projects, and from "Switch chat" ever offering a cross-project chat.
+    const scoped = this.state.spaces.filter(sp => !this.state.activeProjectId || sp.spaceId === this.state.activeProjectId);
+    return scoped.find(s => s.id === this.state.activeSpaceId) || scoped[0] || { id: 'default', name: 'Room', turns: [], retrievals: [], sources: [] };
   }
 
   // Every space mutation goes through here. `spaces` is the single source of
@@ -4232,11 +4243,17 @@ class Component extends DCLogic {
         await this.newConversation({ silent: true });
         return;
       }
+      // The most recently touched conversation may belong to another project.
+      // Chats are scoped per project, so land on the active project's newest
+      // conversation (or none) rather than carrying a cross-project chat in.
+      const scoped = this.state.activeProjectId
+        ? conversations.filter(c => c.spaceId === this.state.activeProjectId)
+        : conversations;
       this.setState({
         spaces: conversations.map(c => this._spaceFromSummary(c, localSpaces)),
-        activeSpaceId: conversations[0].id,
+        activeSpaceId: scoped.length ? scoped[0].id : null,
       });
-      await this.switchConversation(conversations[0].id);
+      if (scoped.length) await this.switchConversation(scoped[0].id);
     } catch (err) {
       // Offline/unreachable proxy — fall back to whatever was local so the UI
       // still renders; checkHealth()'s retry banner covers the rest.
@@ -4254,6 +4271,8 @@ class Component extends DCLogic {
     const existing = (existingSpaces || []).find(s => s.id === summary.id);
     return {
       id: summary.id, name: summary.title,
+      spaceId: summary.spaceId ?? null,
+      pool: summary.pool || 'corpus',
       parentId: summary.parentId || null,
       path: summary.path || null,
       mode: summary.mode || 'chat',
@@ -4390,6 +4409,8 @@ class Component extends DCLogic {
       const conv = await res.json();
       const space = {
         id: conv.id, name: conv.title,
+        spaceId: conv.spaceId ?? (activeProject ? activeProject.id : null),
+        pool: conv.pool || (activeProject ? activeProject.pool : 'corpus'),
         parentId: conv.parentId || null, path: conv.path || null,
         mode: conv.mode || 'chat', childIds: conv.childIds || [],
         turns: [], retrievals: [], sources: [], sourcesOff: {}, _loaded: true,
@@ -4406,6 +4427,8 @@ class Component extends DCLogic {
       const space = {
         id: 'local-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
         name: opts.title || 'New conversation',
+        spaceId: activeProject ? activeProject.id : null,
+        pool: activeProject ? activeProject.pool : 'corpus',
         parentId: opts.parentId || null, path: opts.path || null,
         mode: opts.mode || 'chat', childIds: [],
         turns: [], retrievals: [], sources: [], sourcesOff: {}, _loaded: true,
@@ -6978,7 +7001,13 @@ class Component extends DCLogic {
       },
       remove: () => this.setState(s => ({ draftAttachments: s.draftAttachments.filter(x => x.id !== att.id) }))
     }));
-    const spaces = S.spaces.map(sp => ({
+    // Chats are segmented by project: inside a project the sidebar "Chats" list
+    // and the topbar "Switch chat" dropdown show only that project's
+    // conversations (matched by the spaceId stamped at creation), never the
+    // whole flat pile. Outside any project (activeProjectId null — a
+    // deployment with no projects) everything is eligible.
+    const projectSpaces = S.activeProjectId ? S.spaces.filter(sp => sp.spaceId === S.activeProjectId) : S.spaces;
+    const spaces = projectSpaces.map(sp => ({
       id: sp.id, name: sp.name, marker: sp.id === S.activeSpaceId ? '●' : '○',
       bg: sp.id === S.activeSpaceId ? '#F2EFE8' : 'transparent',
       select: () => this.switchConversation(sp.id),
@@ -8264,7 +8293,7 @@ class Component extends DCLogic {
       toggleProjectsOpen: () => this.setState(s => ({ projectsOpen: !s.projectsOpen })),
       toggleSourcesOpen: () => this.setState(s => ({ sourcesOpen: !s.sourcesOpen })),
       toggleChatsOpen: () => this.setState(s => ({ chatsOpen: !s.chatsOpen })),
-      spacesCount: S.spaces.length,
+      spacesCount: projectSpaces.length,
       addSource: () => this.addSource(), addProjectDocument: () => this.addProjectDocument(), searchWeb: () => this.searchWeb(),
       editProjectInstructions: () => this.editProjectInstructions(),
       // "none" is a real state and reads differently from a character count,
