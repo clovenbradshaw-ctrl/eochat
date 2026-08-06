@@ -23,6 +23,11 @@
      nothing at load — the model itself is only fetched once init() is
      called (toggling "Local" on). -->
 <script type="module" src="./webllm-client.js"></script>
+<!-- Deliberate long-form answers driven by the local WebLLM engine instead
+     of Ollama — window.EOLongform, same reason as window.EOWebLLM above.
+     Fetches server/longform-orchestrator.js's exact bytes from the proxy's
+     /shared/ route on first use; nothing loads at page-load time. -->
+<script type="module" src="./webllm-longform.js"></script>
 <!-- Senses that install: Hugging Face vision models downloaded into this
      browser and run here via Transformers.js, wired through window.EOSenses
      for the same reason as above. Nothing is fetched at load — the weights
@@ -230,7 +235,7 @@
       <sc-if value="{{ notShowingProjects }}">
         <span onClick="{{ goToApp }}" style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C; cursor:pointer;">eochat</span>
         <button type="button" onClick="{{ goToProjects }}" style="display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:4px 9px; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C;"><i class="ph ph-arrow-left" style="font-size:11px;"></i>Back</button>
-        <span style="font-size:13px; color:#26241F; font-weight:500;">{{ activeProjectName }}</span>
+        <span style="font-size:13px; color:#26241F; font-weight:500; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ activeProjectName }}">{{ activeProjectName }}</span>
         <span style="width:1px; height:16px; background:#E0DACE; flex:none;"></span>
         <button type="button" aria-label="Switch chat" aria-expanded="{{ spacesOpen }}" onClick="{{ toggleSpaces }}" style="display:flex; align-items:center; gap:6px; max-width:220px; border:0; background:none; border-radius:7px; padding:5px 6px; cursor:pointer; font-family:inherit;">
           <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; flex:none;">○</span>
@@ -401,7 +406,7 @@
                   </button>
                   <button type="button" aria-label="Read" onClick="{{ src.open }}" style="border:0; background:none; color:#8C877C; cursor:pointer; padding:0 2px; display:flex; flex:none;"><i class="ph ph-book-open" style="font-size:14px;"></i></button>
                   <button type="button" aria-label="Delete source" onClick="{{ src.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:0 2px; display:flex; flex:none; opacity:0.4;"><i class="ph ph-trash" style="font-size:13px;"></i></button>
-                  <button type="button" aria-label="Toggle source" onClick="{{ src.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ src.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+                  <button type="button" aria-label="Toggle source" onClick="{{ src.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ src.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
                     <span style="position:absolute; top:2px; left: {{ src.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                   </button>
                 </div>
@@ -461,7 +466,7 @@
               <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ webHistoryCount }}</span>
               <i class="{{ webHistoryChevron }}" style="font-size:11px; color:#A39D91;"></i>
             </button>
-            <button type="button" aria-label="Toggle all web sources" onClick="{{ toggleAllWeb }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ webAllSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+            <button type="button" aria-label="Toggle all web sources" onClick="{{ toggleAllWeb }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ webAllSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
               <span style="position:absolute; top:2px; left: {{ webAllKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
             </button>
           </div>
@@ -472,7 +477,7 @@
                   <span style="max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:#26241F;">{{ w.host }}</span>
                   <span style="max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ w.meta }}</span>
                 </button>
-                <button type="button" aria-label="{{ w.toggleLabel }}" onClick="{{ w.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ w.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+                <button type="button" aria-label="{{ w.toggleLabel }}" onClick="{{ w.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ w.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
                   <span style="position:absolute; top:2px; left: {{ w.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                 </button>
               </div>
@@ -567,10 +572,8 @@
         <button type="button" onClick="{{ tabDocuments }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabDocumentsColor }}; box-shadow: {{ tabDocumentsUnderline }}; cursor:pointer;">Documents</button>
         <button type="button" onClick="{{ tabOutline }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOutlineColor }}; box-shadow: {{ tabOutlineUnderline }}; cursor:pointer;">Outline</button>
         <button type="button" onClick="{{ tabPriors }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabPriorsColor }}; box-shadow: {{ tabPriorsUnderline }}; cursor:pointer;">Priors</button>
-        <button type="button" onClick="{{ tabCompose }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabComposeColor }}; box-shadow: {{ tabComposeUnderline }}; cursor:pointer;">Compose</button>
         <button type="button" onClick="{{ tabGlassBox }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabGlassBoxColor }}; box-shadow: {{ tabGlassBoxUnderline }}; cursor:pointer;">Glass box</button>
         <button type="button" onClick="{{ tabSenses }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabSensesColor }}; box-shadow: {{ tabSensesUnderline }}; cursor:pointer;">Senses</button>
-        <button type="button" onClick="{{ tabAdmin }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabAdminColor }}; box-shadow: {{ tabAdminUnderline }}; cursor:pointer;">Admin</button>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
           <sc-if value="{{ proxyDead }}">
             <button type="button" onClick="{{ retryProxy }}" style="border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
@@ -852,10 +855,35 @@
                     </sc-for>
                   </select>
                 </div>
-                <div style="display:flex; flex-direction:column; gap:4px;">
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Model</span>
-                  <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ model }}" onChange="{{ onModelChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; outline:none;" />
-                </div>
+                <sc-if value="{{ ollamaNotAuthorized }}">
+                  <button type="button" onClick="{{ requestOllamaConnect }}" style="border:1px solid #1F5A4C; border-radius:8px; background:#1F5A4C; color:#FFFDFA; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:7px 9px; cursor:pointer;">Connect Ollama</button>
+                </sc-if>
+                <sc-if value="{{ ollamaFetching }}">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;"><i class="ph ph-spinner eo-spin" style="font-size:10px;"></i> Fetching models from Ollama…</span>
+                </sc-if>
+                <sc-if value="{{ ollamaError }}">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:10px; color:#c0341a;">{{ ollamaError }}</span>
+                    <button type="button" onClick="{{ retryOllamaFetch }}" style="align-self:flex-start; border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ ollamaReady }}">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Model · {{ ollamaModelCount }}</span>
+                    <select value="{{ model }}" onChange="{{ onModelChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; cursor:pointer;">
+                      <sc-for list="{{ ollamaModelList }}" as="om">
+                        <option value="{{ om.name }}">{{ om.label }}</option>
+                      </sc-for>
+                    </select>
+                  </div>
+                  <button type="button" onClick="{{ disconnectOllama }}" style="align-self:flex-start; border:0; background:none; color:#A39D91; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 0; cursor:pointer; text-decoration:underline;">disconnect</button>
+                </sc-if>
+                <sc-if value="{{ ollamaNotInPlay }}">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Model</span>
+                    <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ model }}" onChange="{{ onModelChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; outline:none;" />
+                  </div>
+                </sc-if>
               </sc-if>
               <button type="button" onClick="{{ closeModelMenu }}" style="align-self:flex-end; border:0; background:none; color:#8C877C; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:2px 4px; cursor:pointer;">done</button>
             </div>
@@ -970,7 +998,7 @@
                   </span>
                   <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ genre.onCount }}</span>
                 </button>
-                <button type="button" aria-label="Toggle bucket" onClick="{{ genre.toggleBucket }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ genre.bucketSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:10px;">
+                <button type="button" aria-label="Toggle bucket" onClick="{{ genre.toggleBucket }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ genre.bucketSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:10px;">
                   <span style="position:absolute; top:2px; left: {{ genre.bucketKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                 </button>
               </div>
@@ -986,7 +1014,7 @@
                         <sc-if value="{{ item.surprising }}">
                           <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color:#8A5A22; background:#F3E7D3; border-radius:5px; padding:2px 7px; flex:none;">gap · {{ item.gapLabel }}</span>
                         </sc-if>
-                        <button type="button" aria-label="Toggle prior" onClick="{{ item.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.switchBg }}; position:relative; cursor:pointer; padding:0; margin-bottom:9px;">
+                        <button type="button" aria-label="Toggle prior" onClick="{{ item.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ item.switchBg }}; position:relative; cursor:pointer; padding:0; margin-bottom:9px;">
                           <span style="position:absolute; top:2px; left: {{ item.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                         </button>
                       </div>
@@ -1045,14 +1073,14 @@
                         <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.03em; color: {{ item.connectedColor }}; background: {{ item.connectedBg }}; border-radius:5px; padding:2px 7px; flex:none;">{{ item.connectedLabel }}</span>
                         <span style="display:flex; align-items:center; gap:4px; flex:none;">
                           <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">sub</span>
-                          <button type="button" aria-label="Subscribe" onClick="{{ item.toggleSubscribed }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.subSwitchBg }}; position:relative; cursor:pointer; padding:0;">
-                            <span style="position:absolute; top:2px; left: {{ item.subKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                          <button type="button" aria-label="Subscribe" onClick="{{ item.toggleSubscribed }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ item.subSwitchBg }}; position:relative; cursor:pointer; padding:0;">
+                            <span style="position:absolute; top:50%; left: {{ item.subKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transform:translateY(-50%); transition:left .15s;"></span>
                           </button>
                         </span>
                         <span style="display:flex; align-items:center; gap:4px; flex:none;">
                           <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">active</span>
-                          <button type="button" aria-label="Activate on ingestion" onClick="{{ item.toggleActive }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.activeSwitchBg }}; opacity: {{ item.activeOpacity }}; position:relative; cursor: {{ item.activeCursor }}; padding:0;">
-                            <span style="position:absolute; top:2px; left: {{ item.activeKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
+                          <button type="button" aria-label="Activate on ingestion" onClick="{{ item.toggleActive }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ item.activeSwitchBg }}; opacity: {{ item.activeOpacity }}; position:relative; cursor: {{ item.activeCursor }}; padding:0;">
+                            <span style="position:absolute; top:50%; left: {{ item.activeKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transform:translateY(-50%); transition:left .15s;"></span>
                           </button>
                         </span>
                       </div>
@@ -1119,344 +1147,6 @@
       </div>
       </sc-if>
 
-      <sc-if value="{{ isAdminTab }}">
-      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:16px; min-height:0; overflow:hidden;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-          <div style="display:flex; flex-direction:column; gap:2px;">
-            <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Admin · Review</span>
-            <span style="font-size:11px; color:#A39D91;">{{ adminQueueSummary }}</span>
-          </div>
-          <div style="display:flex; gap:6px;">
-            <button type="button" onClick="{{ adminShowQueue }}" style="border:1px solid {{ adminQueueBtnBorder }}; background:{{ adminQueueBtnBg }}; border-radius:7px; padding:5px 10px; font-family:inherit; font-size:11px; color:{{ adminQueueBtnColor }}; cursor:pointer;">Queue</button>
-            <button type="button" onClick="{{ adminShowEngine }}" style="border:1px solid {{ adminEngineBtnBorder }}; background:{{ adminEngineBtnBg }}; border-radius:7px; padding:5px 10px; font-family:inherit; font-size:11px; color:{{ adminEngineBtnColor }}; cursor:pointer;">Engine</button>
-          </div>
-        </div>
-
-        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:14px;" class="eo-scrollbar">
-
-          <!-- ── Review queue view ── -->
-          <sc-if value="{{ adminShowingQueue }}">
-
-            <!-- Submission detail (when reviewing a specific item) -->
-            <sc-if value="{{ adminReviewing }}">
-              <div class="eo-fade-in" style="display:flex; flex-direction:column; gap:12px;">
-                <button type="button" onClick="{{ adminBackToQueue }}" style="align-self:flex-start; display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; padding:5px 10px; cursor:pointer; font-family:inherit; font-size:11px; color:#4A463E;"><i class="ph ph-arrow-left" style="font-size:11px;"></i>Back to queue</button>
-
-                <!-- Provenance chain -->
-                <div style="border:1px solid #E4DFD5; border-radius:10px; padding:14px 16px; background:#FAF8F4; display:flex; flex-direction:column; gap:10px;">
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Provenance chain</span>
-
-                  <!-- Raw input -->
-                  <div style="display:flex; gap:10px; padding-bottom:10px;">
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; background:#F1EEE7; border-radius:4px; padding:2px 7px; font-weight:500; flex:none; height:fit-content; margin-top:1px;">raw</span>
-                    <div style="display:flex; flex-direction:column; gap:3px; flex:1; min-width:0;">
-                      <div style="display:flex; align-items:center; gap:6px;">
-                        <span style="font-size:11px; color:#8C877C;">{{ adminReviewMediaLabel }}</span>
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ adminReviewSubmitted }}</span>
-                      </div>
-                      <span style="font-size:12.5px; color:#26241F; line-height:1.55; white-space:pre-wrap; word-break:break-word;">{{ adminReviewRawText }}</span>
-                    </div>
-                  </div>
-
-                  <!-- Heard (audio transcription) -->
-                  <sc-if value="{{ adminReviewHasHeard }}">
-                  <div style="display:flex; gap:10px; padding-bottom:10px; padding-left:10px; border-left:2px solid #DDEAE6;">
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#DDEAE6; border-radius:4px; padding:2px 7px; font-weight:500; flex:none; height:fit-content; margin-top:1px;">heard</span>
-                    <div style="display:flex; flex-direction:column; gap:3px; flex:1; min-width:0;">
-                      <div style="display:flex; align-items:center; gap:6px;">
-                        <span style="font-size:11px; color:#8C877C;">model · {{ adminReviewHeardModel }}</span>
-                      </div>
-                      <span style="font-size:12.5px; color:#26241F; line-height:1.55; white-space:pre-wrap; word-break:break-word;">{{ adminReviewHeardText }}</span>
-                    </div>
-                  </div>
-                  </sc-if>
-
-                  <!-- Admin edits -->
-                  <sc-for list="{{ adminReviewEdits }}" as="edit">
-                  <div style="display:flex; gap:10px; padding-bottom:10px; padding-left:10px; border-left:2px solid #E4DFD5;">
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#6E6A60; background:#F1EEE7; border-radius:4px; padding:2px 7px; font-weight:500; flex:none; height:fit-content; margin-top:1px;">edit</span>
-                    <div style="display:flex; flex-direction:column; gap:3px; flex:1; min-width:0;">
-                      <div style="display:flex; align-items:center; gap:6px;">
-                        <span style="font-size:11px; color:#8C877C;">{{ edit.by }} · {{ edit.when }}</span>
-                        <sc-if value="{{ edit.hasReason }}">
-                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A3592B;">{{ edit.reason }}</span>
-                        </sc-if>
-                      </div>
-                      <span style="font-size:12.5px; color:#26241F; line-height:1.55; white-space:pre-wrap; word-break:break-word;">{{ edit.text }}</span>
-                    </div>
-                  </div>
-                  </sc-for>
-
-                  <!-- Final approved -->
-                  <sc-if value="{{ adminReviewHasFinal }}">
-                  <div style="display:flex; gap:10px; padding-top:6px; border-top:1px solid #E4DFD5;">
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#FFFDFA; background:#1F5A4C; border-radius:4px; padding:2px 7px; font-weight:500; flex:none; height:fit-content; margin-top:1px;">final</span>
-                    <div style="display:flex; flex-direction:column; gap:3px; flex:1; min-width:0;">
-                      <span style="font-size:11px; color:#8C877C;">approved · {{ adminReviewApproved }}</span>
-                      <span style="font-size:12.5px; color:#1F5A4C; line-height:1.55; white-space:pre-wrap; word-break:break-word; font-weight:500;">{{ adminReviewFinalText }}</span>
-                      <sc-if value="{{ adminReviewHasTemplate }}">
-                        <div style="margin-top:4px; border:1px solid #DDEAE6; border-radius:8px; background:#F4F8F6; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
-                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#1F5A4C;">template · {{ adminReviewTemplateKind }}</span>
-                          <sc-for list="{{ adminReviewTemplateFields }}" as="tf">
-                            <div style="display:flex; gap:6px; align-items:baseline;">
-                              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#6E8880; flex:none;">{{ tf.name }}</span>
-                              <span style="font-size:11.5px; color:#3A372F; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ tf.value }}</span>
-                            </div>
-                          </sc-for>
-                        </div>
-                      </sc-if>
-                    </div>
-                  </div>
-                  </sc-if>
-                </div>
-
-                <!-- Edit controls (only for pending) -->
-                <sc-if value="{{ adminReviewPending }}">
-                <div style="border:1px solid #E4DFD5; border-radius:10px; padding:14px 16px; background:#FFFDFA; display:flex; flex-direction:column; gap:8px;">
-                  <span style="font-size:12px; font-weight:500; color:#26241F;">Edit & review</span>
-                  <textarea value="{{ adminEditDraft }}" onChange="{{ onAdminEditDraft }}" placeholder="Correct the text here before approving…" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:8px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none; resize:vertical; min-height:80px;" class="eo-input-text"></textarea>
-                  <div style="display:flex; gap:8px; align-items:center;">
-                    <button type="button" onClick="{{ adminSaveEdit }}" style="border:1px solid #E0DACE; background:none; border-radius:7px; padding:6px 12px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">Save edit</button>
-                    <button type="button" onClick="{{ adminApprove }}" style="border:0; border-radius:7px; padding:6px 14px; font-family:inherit; font-size:11.5px; font-weight:500; background:{{ adminApproveBg }}; color:#FFFDFA; cursor:pointer;">Approve</button>
-                    <button type="button" onClick="{{ adminReject }}" style="border:1px solid #E0DACE; background:none; border-radius:7px; padding:6px 12px; font-family:inherit; font-size:11.5px; color:#C0392B; cursor:pointer;">Reject</button>
-                  </div>
-                </div>
-                </sc-if>
-
-                <!-- Resolved actions -->
-                <sc-if value="{{ adminReviewResolved }}">
-                <div style="display:flex; gap:8px; align-items:center; border:1px solid #E4DFD5; border-radius:10px; padding:12px 14px; background:#FAF8F4;">
-                  <span style="font-size:11.5px; color:{{ adminReviewStatusColor }}; flex:1;">{{ adminReviewStatusLabel }}</span>
-                  <button type="button" onClick="{{ adminReopen }}" style="border:1px solid #E0DACE; background:none; border-radius:7px; padding:5px 10px; font-family:inherit; font-size:11px; color:#4A463E; cursor:pointer;">Reopen</button>
-                  <button type="button" onClick="{{ adminArchive }}" style="border:1px solid #E0DACE; background:none; border-radius:7px; padding:5px 10px; font-family:inherit; font-size:11px; color:#A39D91; cursor:pointer;">Archive</button>
-                </div>
-                </sc-if>
-              </div>
-            </sc-if>
-
-            <!-- Queue list -->
-            <sc-if value="{{ adminNotReviewing }}">
-              <div style="display:flex; flex-direction:column; gap:12px;">
-                <div style="display:flex; align-items:center; justify-content:space-between;">
-                  <span style="font-size:13px; font-weight:500; color:#26241F;">Pending review</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ adminPendingCount }} item(s)</span>
-                </div>
-                <sc-if value="{{ adminQueueEmpty }}">
-                  <div style="display:flex; flex-direction:column; align-items:center; gap:10px; padding:40px 0;">
-                    <span style="font-size:40px; color:#E4DFD5;">⊚</span>
-                    <span style="font-size:13px; color:#A39D91;">Review queue is empty — nothing needs attention.</span>
-                  </div>
-                </sc-if>
-                <sc-for list="{{ adminQueueItems }}" as="item">
-                  <button type="button" onClick="{{ item.open }}" style="display:flex; align-items:flex-start; gap:12px; width:100%; text-align:left; border:1px solid #E4DFD5; border-radius:9px; background:#FFFDFA; padding:12px 14px; cursor:pointer; font-family:inherit;">
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:14px; color:{{ item.glyphColor }}; flex:none; margin-top:1px;">{{ item.glyph }}</span>
-                    <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:4px;">
-                      <span style="font-size:12.5px; color:#26241F; line-height:1.5; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">{{ item.preview }}</span>
-                      <div style="display:flex; gap:8px; align-items:center;">
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ item.id }}</span>
-                        <span style="font-size:10.5px; color:{{ item.mediaColor }};">{{ item.mediaLabel }}</span>
-                        <sc-if value="{{ item.hasHeard }}">
-                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#1F5A4C; background:#E4EEE9; border-radius:4px; padding:1px 5px;">audio</span>
-                        </sc-if>
-                        <sc-if value="{{ item.hasEdits }}">
-                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#6E6A60; background:#F1EEE7; border-radius:4px; padding:1px 5px;">edited</span>
-                        </sc-if>
-                      </div>
-                    </div>
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">→</span>
-                  </button>
-                </sc-for>
-
-                <!-- Resolved section -->
-                <sc-if value="{{ adminHasResolved }}">
-                <div style="display:flex; align-items:center; justify-content:space-between; padding-top:16px; border-top:1px solid #EBE6DC;">
-                  <span style="font-size:13px; font-weight:500; color:#26241F;">Resolved</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ adminResolvedCount }} item(s)</span>
-                </div>
-                <sc-for list="{{ adminResolvedItems }}" as="item">
-                  <button type="button" onClick="{{ item.open }}" style="display:flex; align-items:flex-start; gap:12px; width:100%; text-align:left; border:1px solid #E4DFD5; border-radius:9px; background:#FAF8F4; padding:12px 14px; cursor:pointer; font-family:inherit; opacity:{{ item.opacity }};">
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:14px; color:{{ item.glyphColor }}; flex:none; margin-top:1px;">{{ item.glyph }}</span>
-                    <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:4px;">
-                      <span style="font-size:12.5px; color:#26241F; line-height:1.5; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">{{ item.preview }}</span>
-                      <div style="display:flex; gap:8px; align-items:center;">
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ item.id }}</span>
-                        <span style="font-size:10.5px; color:{{ item.statusColor }}; font-weight:500;">{{ item.statusLabel }}</span>
-                      </div>
-                    </div>
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">→</span>
-                  </button>
-                </sc-for>
-                </sc-if>
-              </div>
-            </sc-if>
-
-          </sc-if>
-
-          <!-- ── Engine diagnostics view ── -->
-          <sc-if value="{{ adminShowingEngine }}">
-
-            <div style="display:flex; flex-direction:column; gap:8px; border:1px solid #E4DFD5; border-radius:10px; padding:14px 16px; background:#FAF8F4;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color: {{ adminEngineColor }}; flex:none;">{{ adminEngineGlyph }}</span>
-                <span style="font-size:13px; font-weight:500; color:#26241F;">Server engine</span>
-              </div>
-              <div style="display:flex; flex-direction:column; gap:4px; padding-left:20px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <span style="font-size:11.5px; color:#6E6A60;">Status</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color: {{ adminEngineColor }};">{{ adminEngineStatus }}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <span style="font-size:11.5px; color:#6E6A60;">Uptime</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">{{ adminEngineUptime }}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <span style="font-size:11.5px; color:#6E6A60;">Store</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">{{ adminStoreSize }}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <span style="font-size:11.5px; color:#6E6A60;">Models</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">{{ adminModels }}</span>
-                </div>
-                <button type="button" onClick="{{ retryProxy }}" style="align-self:flex-start; margin-top:4px; border:1px solid #E0DACE; border-radius:7px; background:none; font-family:inherit; font-size:11px; color:#4A463E; padding:4px 10px; cursor:pointer;">Retry health</button>
-              </div>
-            </div>
-
-            <div style="display:flex; flex-direction:column; gap:8px; border:1px solid #E4DFD5; border-radius:10px; padding:14px 16px; background:#FAF8F4;">
-              <span style="font-size:13px; font-weight:500; color:#26241F;">Projects</span>
-              <div style="display:flex; flex-direction:column; gap:5px;">
-                <sc-if value="{{ adminNoProjects }}">
-                  <span style="font-size:11.5px; color:#A39D91; padding-left:4px;">No projects exist.</span>
-                </sc-if>
-                <sc-for list="{{ adminProjectRows }}" as="ap">
-                  <div style="display:flex; align-items:center; justify-content:space-between; padding:6px 8px; border:1px solid #EBE6DC; border-radius:7px; background:#FFFDFA;">
-                    <div style="display:flex; flex-direction:column; gap:1px;">
-                      <span style="font-size:12px; color:#26241F;">{{ ap.name }}</span>
-                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">{{ ap.meta }}</span>
-                    </div>
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ ap.id }}</span>
-                  </div>
-                </sc-for>
-              </div>
-            </div>
-
-            <div style="display:flex; flex-direction:column; gap:8px; border:1px solid #E4DFD5; border-radius:10px; padding:14px 16px; background:#FAF8F4;">
-              <span style="font-size:13px; font-weight:500; color:#26241F;">Submissions</span>
-              <div style="display:flex; flex-direction:column; gap:4px; padding-left:4px;">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <span style="font-size:11.5px; color:#6E6A60;">Pending</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C;">{{ adminSubmissionsPending }}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <span style="font-size:11.5px; color:#6E6A60;">Approved</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C;">{{ adminSubmissionsApproved }}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                  <span style="font-size:11.5px; color:#6E6A60;">Rejected</span>
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#C0392B;">{{ adminSubmissionsRejected }}</span>
-                </div>
-              </div>
-            </div>
-
-            <div style="display:flex; flex-direction:column; gap:8px; border:1px solid #E4DFD5; border-radius:10px; padding:14px 16px; background:#FAF8F4;">
-              <span style="font-size:13px; font-weight:500; color:#26241F;">Diagnostic overlays</span>
-              <div style="display:flex; flex-direction:column; gap:4px; padding-left:4px;">
-                <span style="font-size:11.5px; color:#6E6A60;">Per-turn admin controls are <span style="font-weight:500; color: #1F5A4C;">enabled</span> on the Chat tab.</span>
-                <span style="font-size:11px; color:#A39D91; line-height:1.5;">Passages, trace, raw prompts, fork, surf, and regenerate buttons appear beneath every assistant turn.</span>
-              </div>
-            </div>
-
-            <div style="display:flex; flex-direction:column; gap:8px; border:1px solid #E4DFD5; border-radius:10px; padding:14px 16px; background:#FAF8F4;">
-              <span style="font-size:13px; font-weight:500; color:#26241F;">Recycle bin</span>
-              <div style="display:flex; align-items:center; justify-content:space-between;">
-                <span style="font-size:11.5px; color:#6E6A60;">Deleted sources</span>
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">{{ adminRecycleBinCount }} item(s)</span>
-              </div>
-            </div>
-
-            <div style="display:flex; flex-direction:column; gap:8px; border:1px solid #E4DFD5; border-radius:10px; padding:14px 16px; background:#FAF8F4;">
-              <span style="font-size:13px; font-weight:500; color:#26241F;">Memory</span>
-              <div style="display:flex; flex-direction:column; gap:5px;">
-                <sc-for list="{{ adminMemoryFiles }}" as="mf">
-                  <div style="display:flex; align-items:center; justify-content:space-between; padding:4px 8px; border:1px solid #EBE6DC; border-radius:7px; background:#FFFDFA;">
-                    <span style="font-size:11.5px; color:#26241F;">{{ mf.name }}</span>
-                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">{{ mf.count }} file(s)</span>
-                  </div>
-                </sc-for>
-                <sc-if value="{{ adminNoMemory }}">
-                  <span style="font-size:11.5px; color:#A39D91; padding-left:4px;">Memory directory not available.</span>
-                </sc-if>
-              </div>
-            </div>
-
-          </sc-if>
-
-        </div>
-      </div>
-      </sc-if>
-
-      <sc-if value="{{ isCompose }}">
-      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
-        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Compose</span>
-        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A deliberate long-form generation, not a chat reply — each section is drafted, mechanically checked against the source, and revised before moving on.</span>
-
-        <div style="display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 12px; background:#FFFDFA;">
-          <input type="text" class="eo-input-text" placeholder="e.g. write a 3-page essay about the Creature's intellectual development" value="{{ composeTask }}" onChange="{{ onComposeTask }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
-          <button type="button" onClick="{{ runCompose }}" style="border:0; border-radius:8px; padding:8px 14px; font-family:inherit; font-size:12.5px; font-weight:500; background: {{ composeButtonBg }}; color:#FFFDFA; cursor:pointer; flex:none;">{{ composeButtonLabel }}</button>
-        </div>
-
-        <sc-if value="{{ hasComposeError }}">
-          <div style="display:flex; align-items:flex-start; gap:7px; background:#FBF0EC; border:1px solid #E8C9BC; border-radius:8px; padding:8px 10px;">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#c0341a;">⊘</span>
-            <span style="font-size:11.5px; color:#8a3a26; line-height:1.55;">{{ composeError }}</span>
-          </div>
-        </sc-if>
-
-        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:12px;" class="eo-scrollbar">
-          <sc-if value="{{ hasComposePlan }}">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">plan: {{ composePlanCount }} section(s)</span>
-          </sc-if>
-
-          <sc-if value="{{ composeReplanNotice }}">
-            <div style="display:flex; align-items:flex-start; gap:7px; background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px;">
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C;">⊚</span>
-              <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ composeReplanNotice }}</span>
-            </div>
-          </sc-if>
-
-          <sc-for list="{{ composeSectionRows }}" as="sec">
-            <div style="border:1px solid #E7E2D8; border-radius:9px; background:#FAF8F4; padding:10px 12px; display:flex; flex-direction:column; gap:4px;">
-              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-                <span style="font-size:13px; font-weight:500; color:#26241F;">{{ sec.label }}</span>
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color: {{ sec.statusColor }};">{{ sec.statusLabel }}</span>
-              </div>
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">grounding: {{ sec.groundingTrail }}</span>
-            </div>
-          </sc-for>
-
-          <sc-if value="{{ composeDone }}">
-            <div style="display:flex; flex-direction:column; gap:14px; padding-top:10px; border-top:1px solid #EBE6DC;">
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ composeSummary }}</span>
-              <sc-for list="{{ composeResultSections }}" as="rs">
-                <div style="display:flex; flex-direction:column; gap:8px;">
-                  <span style="font-size:13.5px; font-weight:500; color:#26241F;">{{ rs.label }}</span>
-                  <div class="eo-md" style="font-size:13.5px; color:#1B1A17;">{{{ rs.contentHtml }}}</div>
-                  <sc-for list="{{ rs.citations }}" as="cit">
-                    <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
-                      <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">mechanical · {{ cit.jaccard }}</span>
-                        <span style="font-size:11.5px; color:#4A463E;">{{ cit.source }}</span>
-                      </div>
-                      <span style="font-size:12px; color:#3A372F; line-height:1.6; font-style:italic;">{{ cit.quote }}</span>
-                    </div>
-                  </sc-for>
-                </div>
-              </sc-for>
-            </div>
-          </sc-if>
-        </div>
-      </div>
-      </sc-if>
-
       <sc-if value="{{ isDocuments }}">
       <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
         <div style="display:flex; align-items:center; justify-content:space-between;">
@@ -1488,7 +1178,7 @@
               </div>
               <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ doc.typeLabel }}</span>
               <button type="button" aria-label="Read" onClick="{{ doc.open }}" style="border:1px solid #E0DACE; border-radius:6px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:4px 8px; font-family:'IBM Plex Mono', monospace; font-size:9px; justify-self:center;">Open</button>
-              <button type="button" aria-label="{{ doc.toggleLabel }}" onClick="{{ doc.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ doc.switchBg }}; position:relative; cursor:pointer; padding:0; justify-self:center;">
+              <button type="button" aria-label="{{ doc.toggleLabel }}" onClick="{{ doc.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ doc.switchBg }}; position:relative; cursor:pointer; padding:0; justify-self:center;">
                 <span style="position:absolute; top:2px; left: {{ doc.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
               </button>
             </div>
@@ -2305,7 +1995,7 @@
                       <button type="button" onClick="{{ bs.installAction }}" style="border:1px solid {{ bs.installBorder }}; background:none; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:11px; color:{{ bs.installBorder }}; cursor:pointer; flex:none;">{{ bs.installLabel }}</button>
                       <span style="display:flex; align-items:center; gap:4px; flex:none;">
                         <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">on</span>
-                        <button type="button" aria-label="Use this sense on ingestion" aria-pressed="{{ bs.enabled }}" onClick="{{ bs.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background:{{ bs.enabledSwitchBg }}; opacity:{{ bs.enabledOpacity }}; position:relative; cursor:pointer; padding:0;">
+                        <button type="button" aria-label="Use this sense on ingestion" aria-pressed="{{ bs.enabled }}" onClick="{{ bs.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background:{{ bs.enabledSwitchBg }}; opacity:{{ bs.enabledOpacity }}; position:relative; cursor:pointer; padding:0;">
                           <span style="position:absolute; top:2px; left:{{ bs.enabledKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                         </button>
                       </span>
@@ -2378,6 +2068,22 @@
       <div style="display:flex; align-items:center; justify-content:flex-end; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
         <button type="button" onClick="{{ closeSettings }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Cancel</button>
         <button type="button" onClick="{{ saveSettings }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Save</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <sc-if value="{{ ollamaShowPermission }}">
+  <div onClick="{{ cancelOllamaConnect }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:10vh 24px 24px; z-index:60;">
+    <div onClick="{{ stopOllamaPermClick }}" class="eo-fade-in" style="width:100%; max-width:400px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#6E6A60;">Connect Ollama</span>
+        <button type="button" aria-label="Cancel" onClick="{{ cancelOllamaConnect }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
+      </div>
+      <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">EOChat will connect to a local Ollama instance to list your installed models and use them for generation. No data is sent anywhere except to the Ollama server running on your machine.</span>
+      <div style="display:flex; justify-content:flex-end; gap:8px; padding-top:4px;">
+        <button type="button" onClick="{{ cancelOllamaConnect }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Cancel</button>
+        <button type="button" onClick="{{ connectOllama }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Connect</button>
       </div>
     </div>
   </div>
@@ -2538,7 +2244,8 @@ class Component extends DCLogic {
     projects: [], activeProjectId: null,
     tab: 'chat', draft: '',
     webSearch: true,
-    provider: ON_GH_PAGES ? 'local' : 'ollama', model: null, _availableModels: [], modelMenuOpen: false,
+    provider: 'local', model: null, _availableModels: [], modelMenuOpen: false,
+    _ollamaModels: [], _ollamaFetching: false, _ollamaError: null, _ollamaAuthorized: false, _ollamaShowPermission: false, _ollamaUrl: '',
     // Local mode: answer entirely in this tab via WebLLM (see
     // webllm-client.js / window.EOWebLLM), no proxy generation call.
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
@@ -2621,15 +2328,6 @@ class Component extends DCLogic {
     // place of text. Keyed by source name, same as readerContent.
     readerFileInfo: {},
     readerBinaryView: 'hex',
-    // Compose tab: a deliberate long-form generation action, distinct from
-    // ambient chat — always runs holonic_task directly via /api/holonic
-    // rather than waiting for the model to choose to call it. `composeSections`
-    // is keyed by sub-task id; each entry accumulates its own iteration trace
-    // live as SSE events arrive, so the correction loop is visible while it
-    // runs, not just in the final assembled output.
-    composeTask: '', composeRunning: false, composeError: null,
-    composePlan: null, composeSections: {}, composeOrder: [],
-    composeReplan: null, composeResult: null,
     // Priors catalog from /api/priors — the witness-tier pool, kept separate
     // from `_proxySources` (the corpus pool) because asking about the priors
     // and asking about the texts are different questions. null = not fetched.
@@ -3089,7 +2787,7 @@ class Component extends DCLogic {
         const data = await res.json();
         this.setState(s => ({
           _availableModels: data.providers || [],
-          provider: s.provider || data.defaultProvider || 'ollama',
+          provider: s.provider || data.defaultProvider || 'local',
           model: s.model || data.defaultModel || null,
         }));
         return;
@@ -3104,12 +2802,79 @@ class Component extends DCLogic {
       this.setState(s => ({
         _availableModels: [
           { id: 'local', label: 'Local (WebLLM)', defaultModel: localId },
+          { id: 'ollama', label: 'Ollama', defaultModel: '' },
           { id: 'anthropic', label: 'Anthropic', defaultModel: 'claude-sonnet-4-20250514' },
         ],
         provider: s.provider || 'local',
         model: s.model || localId,
       }));
     }
+  }
+
+  // Called when the reader picks "Ollama" from the provider dropdown.
+  requestOllamaConnect() {
+    if (ON_GH_PAGES) {
+      // Static build: prompt for the Ollama host URL since there's no proxy.
+      const url = prompt('Enter your Ollama host URL (e.g. http://localhost:11434):', this.state._ollamaUrl || 'http://localhost:11434');
+      if (!url) return;
+      this.setState({ _ollamaUrl: url, _ollamaShowPermission: true });
+    } else {
+      this.setState({ _ollamaShowPermission: true });
+    }
+  }
+
+  connectOllama() {
+    this.setState({ _ollamaShowPermission: false, _ollamaAuthorized: true, _ollamaFetching: true, _ollamaError: null });
+    this._doFetchOllamaModels();
+  }
+
+  cancelOllamaConnect() {
+    this.setState({ _ollamaShowPermission: false });
+    // Revert provider if they backed out of Ollama.
+    if (this.state.provider === 'ollama') this.setState({ provider: 'local' });
+  }
+
+  async _doFetchOllamaModels() {
+    try {
+      let models = [];
+      if (ON_GH_PAGES) {
+        const resp = await fetch((this.state._ollamaUrl || 'http://localhost:11434') + '/api/tags', { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) throw new Error('upstream returned ' + resp.status);
+        const data = await resp.json();
+        models = (data.models || []).map(m => ({ name: m.name, size: m.size }));
+      } else {
+        const resp = await fetch(this.proxyUrl() + '/api/ollama/models', { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error || 'upstream returned ' + resp.status);
+        }
+        const data = await resp.json();
+        models = data.models || [];
+      }
+      this.setState({ _ollamaModels: models, _ollamaFetching: false, _ollamaError: null });
+      if (models.length && !this.state.model) {
+        this.setState({ model: models[0].name });
+      }
+    } catch (err) {
+      this.setState({ _ollamaModels: [], _ollamaFetching: false, _ollamaError: err.message });
+    }
+  }
+
+  disconnectOllama() {
+    this.setState({ _ollamaAuthorized: false, _ollamaModels: [], _ollamaError: null, _ollamaFetching: false, _ollamaUrl: '' });
+    if (this.state.provider === 'ollama') this.setState({ provider: 'local' });
+  }
+
+  selectOllamaModel(name) {
+    this.setState({ model: name });
+  }
+
+  _formatOllamaSize(bytes) {
+    if (bytes == null) return '';
+    if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+    if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
+    if (bytes >= 1e3) return (bytes / 1e3).toFixed(1) + ' KB';
+    return bytes + ' B';
   }
 
   // The priors catalog is a separate pool from /api/sources. A proxy too old
@@ -5147,114 +4912,6 @@ class Component extends DCLogic {
     return chunk ? `${file} · ${chunk}` : file;
   }
 
-  onComposeTask(e) { this.setState({ composeTask: e.target.value }); }
-
-  // Runs holonic_task directly via the dedicated /api/holonic endpoint (not
-  // the LLM tool-choice loop) and renders each SSE event as it arrives —
-  // per-section iteration scores, replan decisions, and the final assembled
-  // sections with their real mechanical citations. The live iteration trace
-  // IS the point: it's the only place a user can actually see the model
-  // correct itself against the source rather than just reading a finished
-  // essay with no evidence anything was checked.
-  async runCompose() {
-    const task = this.state.composeTask.trim();
-    if (!task || this.state.composeRunning) return;
-
-    this.setState({
-      composeRunning: true, composeError: null, composePlan: null,
-      composeSections: {}, composeOrder: [], composeReplan: null, composeResult: null,
-    });
-    this.logAdd('⊨', `Compose: "${task.slice(0, 60)}${task.length > 60 ? '…' : ''}"`, 'chat');
-
-    try {
-      const res = await fetch(this.proxyUrl() + '/api/holonic', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task }),
-      });
-      if (!res.ok) throw new Error('Proxy returned ' + res.status);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.trim() || !line.startsWith('data: ')) continue;
-          let data;
-          try { data = JSON.parse(line.slice(6)); } catch { continue; }
-          this._applyComposeEvent(data);
-        }
-      }
-    } catch (err) {
-      this.setState({ composeError: err.message, composeRunning: false });
-      this.logAdd('⊘', `Compose failed: ${err.message}`, 'chat');
-      return;
-    }
-    this.setState({ composeRunning: false });
-  }
-
-  // Each holonic_* payload carries enough of its own shape (msg + phase-
-  // specific fields) to route on without needing the SSE `event:` line.
-  _applyComposeEvent(data) {
-    if (data.subTasks) {
-      // holonic_plan
-      this.setState({ composePlan: data.subTasks });
-      this.logAdd('⊚', `Compose plan: ${data.subTasks.length} section(s)`, 'chat');
-      return;
-    }
-    if (data.id && data.label !== undefined && data.iteration === undefined && data.groundingScore === undefined) {
-      // holonic_subtask_start
-      this.setState(s => ({
-        composeSections: { ...s.composeSections, [data.id]: { id: data.id, label: data.label, iterations: [], done: false } },
-        composeOrder: s.composeOrder.includes(data.id) ? s.composeOrder : [...s.composeOrder, data.id],
-      }));
-      return;
-    }
-    if (data.id && data.iteration !== undefined && data.groundingScore !== undefined && data.citationsCount === undefined) {
-      // holonic_subtask_iteration
-      this.setState(s => {
-        const existing = s.composeSections[data.id] || { id: data.id, label: data.id, iterations: [], done: false };
-        return { composeSections: { ...s.composeSections, [data.id]: { ...existing, iterations: [...existing.iterations, data] } } };
-      });
-      return;
-    }
-    if (data.id && data.citationsCount !== undefined) {
-      // holonic_subtask_done
-      this.setState(s => {
-        const existing = s.composeSections[data.id] || { id: data.id, label: data.label, iterations: [], done: false };
-        return { composeSections: { ...s.composeSections, [data.id]: { ...existing, done: true, groundingScore: data.groundingScore, citationsCount: data.citationsCount } } };
-      });
-      return;
-    }
-    if (data.unresolvedIds || data.redundantPairs) {
-      // holonic_replan_start
-      this.setState({ composeReplan: { status: 'running', unresolvedIds: data.unresolvedIds || [], redundantPairs: data.redundantPairs || [] } });
-      this.logAdd('⊚', `Replanning: ${(data.unresolvedIds || []).length} unresolved, ${(data.redundantPairs || []).length} redundant`, 'chat');
-      return;
-    }
-    if (data.changes) {
-      // holonic_replan_done
-      this.setState({ composeReplan: { status: 'done', changes: data.changes } });
-      return;
-    }
-    if (data.sections !== undefined && data.output !== undefined) {
-      // final `done` event
-      this.setState({ composeResult: data });
-      this.logAdd('⊨', `Compose done: ${data.sections} section(s), ${data.mechanicalCitations} citations`, 'chat');
-      return;
-    }
-    if (data.message && !data.msg) {
-      // error event
-      this.setState({ composeError: data.message });
-    }
-  }
-
   // draftAttachments carries a File object (needed for the upload) that a
   // turn — which lives in conversation state, exported and copied around —
   // has no business holding onto. This is the shape a turn actually keeps.
@@ -5290,6 +4947,7 @@ class Component extends DCLogic {
     if (this.composerEl) { this.composerEl.style.height = 'auto'; }
     this.logAdd('→', `Sending ${mode !== 'chat' ? mode + ' ' : ''}question…`, 'chat');
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
+    const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
     const localReady = this.state.localModel && this.state.localModelStatus === 'ready';
     if (anthropic) {
       // Static build, Anthropic selected: generation happens in this tab via a
@@ -5299,6 +4957,10 @@ class Component extends DCLogic {
       } else {
         await this.localUnavailableTurn(q, mode, 'no-anthropic-key', attachments);
       }
+    } else if (ollamaDirect) {
+      // Static build, Ollama connected: generation happens in this tab via a
+      // direct browser call to the reader's Ollama instance.
+      await this.localAskConversation(q, attachments);
     } else if (localReady) {
       await this.localAskConversation(q, attachments);
     } else if (this.state.localModel || ON_GH_PAGES) {
@@ -5580,6 +5242,41 @@ class Component extends DCLogic {
     }
   }
 
+  // Direct browser call to the Ollama API (newline-delimited JSON streaming).
+  // Used on static builds when the reader wires up their local Ollama instance.
+  async *_streamOllama(messages, ollamaUrl) {
+    const url = ollamaUrl || this.state._ollamaUrl || 'http://localhost:11434';
+    const model = this.state.model || 'llama3.2:latest';
+    const res = await fetch(url + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, stream: true }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      throw new Error(`Ollama ${res.status}: ${String(errText).slice(0, 300)}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        let j;
+        try { j = JSON.parse(t); } catch { continue; }
+        if (j.message && j.message.content) {
+          yield j.message.content;
+        }
+      }
+    }
+  }
+
   // Local mode: retrieval only through the proxy — either POST /api/ground
   // (engineGroundQuery against the local corpus) or, when the reader's "Web"
   // toggle is on, POST /api/web-ground (a live web search + fetch, see
@@ -5591,6 +5288,7 @@ class Component extends DCLogic {
     const localId = 'local-' + Date.now();
     const useWeb = !!this.state.webSearch;
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
+    const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
     this.updateActiveSpace(sp => ({
       ...sp,
       turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
@@ -5599,15 +5297,31 @@ class Component extends DCLogic {
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
     }));
 
-    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: useWeb ? 'searching the web...' : 'surfing...', thinkingMeta: anthropic ? 'anthropic api' : 'local model' });
-    this.logAdd('◱', `Asked (${anthropic ? 'Anthropic API' : 'local model'}${useWeb ? ', web search' : ''}): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
+    const engineLabel = anthropic ? 'anthropic api' : ollamaDirect ? 'ollama' : 'local model';
+    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: useWeb ? 'searching the web...' : 'surfing...', thinkingMeta: engineLabel });
+    this.logAdd('◱', `Asked (${anthropic ? 'Anthropic API' : ollamaDirect ? 'Ollama' : 'local model'}${useWeb ? ', web search' : ''}): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
 
     let groundData;
     let groundFailed = null;
     try {
+      // `history` lets /api/ground run the SAME instruction-gate signal check
+      // (server-only, instruction-gate.js reads instruction-set/*.md from
+      // disk) that decides deliberate long-form treatment for server-mode
+      // chat — this path has no way to run that gate itself.
+      const recentQuestions = this.activeSpace().turns.filter(t => !t.streaming && t.a).slice(-6).map(t => t.q);
+      // Local-mode turns carry no server-held conversation record (nothing
+      // is persisted), so unlike askConversation — where the pool is fixed
+      // once at conversation creation and the server looks it up — this is
+      // the only place that can tell /api/ground which project's sources to
+      // search. Without it, retrieval silently falls back to the shared
+      // "corpus" pool regardless of which project the reader is actually in.
+      const activeProject = this.state.projects.find(p => p.id === this.state.activeProjectId);
       const gres = await fetch(this.proxyUrl() + (useWeb ? '/api/web-ground' : '/api/ground'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(useWeb ? { query: question } : { query: question, groundSource: this.groundSourceFilter() }),
+        body: JSON.stringify(useWeb ? { query: question } : {
+          query: question, groundSource: this.groundSourceFilter(), history: recentQuestions,
+          pool: activeProject ? activeProject.pool : 'corpus',
+        }),
       });
       if (!gres.ok) throw new Error('proxy returned ' + gres.status);
       groundData = await gres.json();
@@ -5718,13 +5432,54 @@ class Component extends DCLogic {
       { role: 'user', content: question },
     ];
 
+    // Deliberate long-form: a section-by-section, citation-verified answer
+    // (window.EOLongform, driving the exact same orchestrator turn-controller.js
+    // runs server-side against Ollama) instead of one single-shot completion —
+    // decided server-side in /api/ground (the client has no way to run
+    // instruction-gate.js itself). Only for the plain WebLLM engine for now;
+    // web search and the browser-direct Anthropic/Ollama paths are unaffected.
+    const deliberate = !useWeb && !anthropic && !ollamaDirect && !!groundData.deliberate;
+
     let answer = '';
-    const engineName = anthropic ? 'Anthropic API' : 'Local model';
+    let deliberateResult = null;
+    const engineName = anthropic ? 'Anthropic API' : ollamaDirect ? 'Ollama' : 'Local model';
     try {
-      const stream = anthropic ? this._streamAnthropic(messages) : window.EOWebLLM.stream(messages);
-      for await (const delta of stream) {
-        answer += delta;
-        patchTurn({ a: answer });
+      if (deliberate) {
+        deliberateResult = await window.EOLongform.run({
+          proxyUrl: this.proxyUrl(), question, citations: groundData.citations || [],
+          onProgress: (e) => {
+            if (e.phase === 'web_research_started') {
+              this.logAdd('⋈', 'Local evidence was thin — searching the web to supplement it.', 'chat');
+            } else if (e.phase === 'section_closed') {
+              answer += (answer ? '\n\n' : '') + `## ${e.title}\n\n${e.text}`;
+              // Citations arrive WITH the section that cites them — each
+              // section_closed event carries the running, already-renumbered
+              // table, so the citation chips update in step with the text
+              // instead of staying empty until the whole answer finishes.
+              const liveCitations = (e.citations || []).map(c => ({
+                num: String(c.index), resolved: true,
+                source: this._shortSource(c.source_id), sourceId: c.source_id,
+                byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
+                quote: String(c.text || '').slice(0, 300),
+              }));
+              patchTurn({ a: answer, citations: liveCitations.length ? liveCitations : null });
+            }
+          },
+        });
+        answer = deliberateResult.text;
+      } else {
+        let stream;
+        if (anthropic) {
+          stream = this._streamAnthropic(messages);
+        } else if (ollamaDirect) {
+          stream = this._streamOllama(messages);
+        } else {
+          stream = window.EOWebLLM.stream(messages);
+        }
+        for await (const delta of stream) {
+          answer += delta;
+          patchTurn({ a: answer });
+        }
       }
     } catch (err) {
       this.setState({ streamingLoading: false, streamingTurnId: null });
@@ -5737,25 +5492,41 @@ class Component extends DCLogic {
     // the engine or web search retrieved" — the same check server turns run
     // before the mechanical fidelity pass, never the fidelity pass itself.
     // That gap is named explicitly in the trace row below, not left for the
-    // reader to notice on their own.
-    const citedNums = [...new Set((answer.match(/\[(\d+)\]/g) || []).map(m => Number(m.slice(1, -1))))];
-    const citations = citedNums.map(num => {
-      const gc = (groundData.citations || []).find(c => c.index === num);
-      return {
-        num: String(num), resolved: !!gc,
-        source: gc ? (useWeb ? gc.title : this._shortSource(gc.source_id)) : ('⊘ unresolved — no ' + (useWeb ? 'web result' : 'engine passage') + ' for [' + num + ']'),
-        sourceId: gc ? gc.source_id : null,
-        url: gc && useWeb ? gc.url : undefined,
-        byteStart: gc ? gc.byte_start : undefined, byteEnd: gc ? gc.byte_end : undefined, score: gc ? gc.score : undefined,
-        quote: gc ? String(gc.text || '').slice(0, 300) : '',
-      };
-    });
+    // reader to notice on their own. The deliberate path is the one exception:
+    // its citations are already fidelity/attribution-verified and renumbered
+    // by the orchestrator, so there is nothing left for the regex to add.
+    let citations;
+    if (deliberate) {
+      citations = deliberateResult.citations.map(c => ({
+        num: String(c.index), resolved: true,
+        source: this._shortSource(c.source_id), sourceId: c.source_id,
+        byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
+        quote: String(c.text || '').slice(0, 300),
+      }));
+    } else {
+      const citedNums = [...new Set((answer.match(/\[(\d+)\]/g) || []).map(m => Number(m.slice(1, -1))))];
+      citations = citedNums.map(num => {
+        const gc = (groundData.citations || []).find(c => c.index === num);
+        return {
+          num: String(num), resolved: !!gc,
+          source: gc ? (useWeb ? gc.title : this._shortSource(gc.source_id)) : ('⊘ unresolved — no ' + (useWeb ? 'web result' : 'engine passage') + ' for [' + num + ']'),
+          sourceId: gc ? gc.source_id : null,
+          url: gc && useWeb ? gc.url : undefined,
+          byteStart: gc ? gc.byte_start : undefined, byteEnd: gc ? gc.byte_end : undefined, score: gc ? gc.score : undefined,
+          quote: gc ? String(gc.text || '').slice(0, 300) : '',
+        };
+      });
+    }
 
     patchTurn({
       a: answer, citations: citations.length ? citations : null, streaming: false,
       model: anthropic
         ? (this.state.model || 'claude')
         : window.EOWebLLM.modelLabel(),
+      // Dropped/withheld sections ride in the same collapsed-by-default gaps
+      // panel retrieval gaps already use — no new UI surface, matching
+      // ordinary chat's own "nothing to switch on" shape.
+      grounding: deliberate ? { ...grounding, gaps: [...(grounding.gaps || []), ...deliberateResult.gaps] } : grounding,
       trace: [
         { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: groundFailed
           ? `Unavailable — ${groundFailed.message}. Answered offline from the project's own rules and general knowledge, without retrieval.`
@@ -5767,9 +5538,11 @@ class Component extends DCLogic {
         { kind: 'model', name: 'Model', detail: anthropic
           ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
           : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
-        { kind: 'gap', name: 'Citation check', detail: useWeb
-          ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
-          : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
+        deliberate
+          ? { kind: 'ground', name: 'Deliberate long-form', detail: `${deliberateResult.sectionsKept} section(s) kept, ${deliberateResult.sectionsDropped} dropped for not being carried by their evidence, ${deliberateResult.withheld} withheld by the fold — checked with the same fidelity/attribution verification the server path uses, not just a citation-bracket check.` }
+          : { kind: 'gap', name: 'Citation check', detail: useWeb
+              ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
+              : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
         { kind: 'gap', name: 'Persistence', detail: anthropic
           ? 'This reply lives only in this tab — it was never sent to the proxy and will not survive a reload.'
           : 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
@@ -7359,7 +7132,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose'), se = tabStyle('senses'), ad = tabStyle('admin');
+    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // The proxy being unreachable only means "no engine" if the in-browser
@@ -8187,7 +7960,7 @@ class Component extends DCLogic {
 
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose', isSenses: t === 'senses', isAdminTab: t === 'admin',
+      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses',
       isAdmin: true,
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
@@ -8212,8 +7985,16 @@ class Component extends DCLogic {
         : S.localModelStatus === 'ready' ? `local · ${window.EOWebLLM.modelLabel(S.localModelId)}${S.localUpgrading ? ' (upgrading…)' : ''}`
         : 'local · off',
       onProviderChange: (e) => {
-        const p = S._availableModels.find(m => m.id === e.target.value);
-        this.setState({ provider: e.target.value, model: p ? p.defaultModel : S.model });
+        const id = e.target.value;
+        if (id === 'ollama' && !S._ollamaAuthorized) {
+          this.requestOllamaConnect();
+          return;
+        }
+        if (id === 'ollama' && S._ollamaAuthorized && !S._ollamaModels.length && !S._ollamaFetching) {
+          this.connectOllama();
+        }
+        const p = S._availableModels.find(m => m.id === id);
+        this.setState({ provider: id, model: p ? p.defaultModel : S.model });
       },
       onModelChange: (e) => this.setState({ model: e.target.value }),
       hasModels: S._availableModels.length > 0 || (S.localCatalog && S.localCatalog.length > 0),
@@ -8221,6 +8002,25 @@ class Component extends DCLogic {
       modelMenuOpen: S.modelMenuOpen,
       toggleModelMenu: () => this.setState(s => ({ modelMenuOpen: !s.modelMenuOpen })),
       closeModelMenu: () => this.setState({ modelMenuOpen: false }),
+      // ── Ollama connection state ──
+      _ollamaAuthorized: S._ollamaAuthorized,
+      _ollamaModels: S._ollamaModels,
+      _ollamaFetching: S._ollamaFetching,
+      _ollamaError: S._ollamaError,
+      ollamaShowPermission: S._ollamaShowPermission,
+      ollamaNotAuthorized: S.provider === 'ollama' && !S._ollamaAuthorized,
+      ollamaFetching: S.provider === 'ollama' && S._ollamaFetching,
+      ollamaError: S.provider === 'ollama' && S._ollamaError,
+      ollamaReady: S.provider === 'ollama' && S._ollamaAuthorized && !S._ollamaFetching && !S._ollamaError && S._ollamaModels.length > 0,
+      ollamaNotInPlay: (S.provider !== 'ollama' && !S._ollamaAuthorized) || (S.provider === 'ollama' && S._ollamaAuthorized && !S._ollamaFetching && !S._ollamaError && !S._ollamaModels.length),
+      ollamaModelCount: S._ollamaModels.length,
+      ollamaModelList: S._ollamaModels.map(m => ({ name: m.name, label: m.name + (m.size ? ' · ' + this._formatOllamaSize(m.size) : '') })),
+      requestOllamaConnect: () => this.requestOllamaConnect(),
+      connectOllama: () => this.connectOllama(),
+      cancelOllamaConnect: () => this.cancelOllamaConnect(),
+      disconnectOllama: () => this.disconnectOllama(),
+      retryOllamaFetch: () => this.connectOllama(),
+      stopOllamaPermClick: (e) => e.stopPropagation(),
       ...this._localModelProps(S),
       settingsOpen: S.settingsOpen,
       toggleSettings: () => this.toggleSettings(),
@@ -8454,8 +8254,8 @@ class Component extends DCLogic {
       tabDocuments: () => this.setState({ tab: 'documents' }),
       tabChat: () => this.setState({ tab: 'chat' }), tabOutline: () => this.setState({ tab: 'outline' }),
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
-      tabPriors: () => this.setState({ tab: 'priors' }), tabCompose: () => this.setState({ tab: 'compose' }),
-      tabSenses: () => this.setState({ tab: 'senses' }), tabAdmin: () => { this.setState({ tab: 'admin' }); this.loadAdminSubmissions(); },
+      tabPriors: () => this.setState({ tab: 'priors' }),
+      tabSenses: () => this.setState({ tab: 'senses' }),
       tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
       tabChatColor: c.color, tabChatUnderline: c.underline,
       tabOutlineColor: o.color, tabOutlineUnderline: o.underline,
@@ -8463,56 +8263,6 @@ class Component extends DCLogic {
       tabGlassBoxColor: g.color, tabGlassBoxUnderline: g.underline,
       tabPriorsColor: pr.color, tabPriorsUnderline: pr.underline,
       tabSensesColor: se.color, tabSensesUnderline: se.underline,
-      tabComposeColor: cp.color, tabComposeUnderline: cp.underline,
-      tabAdminColor: ad.color, tabAdminUnderline: ad.underline,
-      composeTask: S.composeTask,
-      onComposeTask: (e) => this.onComposeTask(e),
-      composeRunning: S.composeRunning,
-      composeCanRun: S.composeTask.trim().length > 0 && !S.composeRunning,
-      composeButtonBg: (S.composeTask.trim().length > 0 && !S.composeRunning) ? '#1F5A4C' : '#E0DACE',
-      runCompose: () => this.runCompose(),
-      composeButtonLabel: S.composeRunning ? 'Generating…' : 'Generate',
-      hasComposePlan: !!S.composePlan,
-      composePlanCount: S.composePlan ? S.composePlan.length : 0,
-      composeSectionRows: S.composeOrder.map(id => {
-        const sec = S.composeSections[id] || { id, label: id, iterations: [], done: false };
-        const trail = sec.iterations.map(it => it.groundingScore.toFixed(2)).join(' → ') || '…';
-        return {
-          id: sec.id,
-          label: sec.label,
-          groundingTrail: trail,
-          statusLabel: sec.done
-            ? `done — ${sec.citationsCount || 0} citation${sec.citationsCount === 1 ? '' : 's'}`
-            : (sec.iterations.length > 1 ? 'correcting…' : 'writing…'),
-          statusColor: sec.done ? '#1F5A4C' : '#A39D91',
-        };
-      }),
-      hasComposeSections: S.composeOrder.length > 0,
-      composeReplanNotice: S.composeReplan
-        ? (S.composeReplan.status === 'done'
-            ? (S.composeReplan.changes || []).map(c => `${c.action}: ${c.justification}`).join(' · ') || null
-            : 'Replanning — a section never grounded well or two sections turned out redundant…')
-        : null,
-      hasComposeError: !!S.composeError,
-      composeError: S.composeError,
-      composeDone: !!S.composeResult,
-      composeSummary: S.composeResult
-        ? `${S.composeResult.sections} section(s), ${S.composeResult.mechanicalCitations} mechanical citation(s), ${S.composeResult.gaps} gap(s)`
-        : '',
-        composeResultSections: (S.composeResult && S.composeResult.results || []).map(r => ({
-        id: r.id,
-        label: r.label,
-        content: r.content,
-        contentHtml: this.renderMarkdown(r.content),
-        citations: (r.citations || []).map(cit => {
-          const s = (r.surf || [])[cit.surfIndex];
-          return {
-            jaccard: cit.evidence.jaccard.toFixed(3),
-            source: this._shortSource(s ? s.source : ''),
-            quote: (s ? s.text : '').slice(0, 240),
-          };
-        }),
-      })),
       draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
       inputDisabled: S.streamingLoading,
       stopButtonAnim: S.streamingLoading ? 'animation: eoPulse 1.8s ease-in-out infinite;' : '',

@@ -1392,9 +1392,13 @@ function _renderTree(node, maxDepth, indent) {
   return parts.join("\n");
 }
 
-// Shared by the LLM-callable `holonic_task` tool and the dedicated
-// `/api/holonic` endpoint (the Compose UI surface) — one adapter
-// construction, two callers.
+// The engine adapter for the LLM-callable `holonic_task` tool — search and
+// prior activation, nothing else. (Previously also shared with a dedicated
+// `/api/holonic` endpoint behind a separate "Compose" UI tab; that surface
+// was removed — deliberate long-form treatment is now something Chat itself
+// does automatically, via server/longform-orchestrator.js, when a turn's
+// evidence and request call for it. holonic_task remains, unchanged, for
+// open-ended tasks beyond plain grounded long-form writing.)
 function buildHolonicEngineAdapter() {
   try {
     return {
@@ -3098,10 +3102,33 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       providers: PROVIDERS,
-      defaultProvider: "ollama",
+      defaultProvider: "local",
       defaultModel: MEDIUM_MODEL,
       anthropicAvailable: !!ANTHROPIC_KEY,
     }));
+    return;
+  }
+
+  // List models installed in the local Ollama instance. The frontend uses this
+  // to populate the model picker when the reader wires up Ollama.
+  if (req.method === "GET" && req.url === "/api/ollama/models") {
+    (async () => {
+      try {
+        const resp = await safeFetch(`${TARGET}/api/tags`, {}, 10000);
+        if (!resp.ok) throw new Error("upstream returned " + resp.status);
+        const data = await resp.json();
+        const models = (data.models || []).map(m => ({
+          name: m.name,
+          size: m.size,
+          modified: m.modified_at || null,
+        }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ models }));
+      } catch (err) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Could not reach Ollama: " + err.message }));
+      }
+    })();
     return;
   }
 
@@ -3412,12 +3439,35 @@ const server = http.createServer((req, res) => {
           pool: data.pool,
         });
 
+        // Same deterministic trigger turn-controller.js's server path checks
+        // (see runAnswer there) — this is what lets the browser-local WebLLM
+        // path run the SAME deliberate long-form pipeline, since it has no
+        // way to run instruction-gate.js itself (Node-only, reads
+        // instruction-set/*.md from disk). Computed BEFORE the grounded/
+        // ungrounded branch below and against the question regardless of
+        // whether local retrieval found anything: an essay-shaped request
+        // with zero local evidence is exactly the case web search exists to
+        // rescue (see the client's thin/zero-evidence supplement), not a
+        // reason to silently fall back to answering from pretrained memory.
+        const gateInfo = groundInstructionGate.folds.length
+          ? groundInstructionGate.gate({
+              question: query,
+              history: Array.isArray(data.history) ? data.history : [],
+              evidence: groundResult.citations.map((c) => c.text),
+            })
+          : null;
+        const deliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id));
+
         if (!groundResult.context) {
           const warming = corpusWarmup.started && !corpusWarmup.ready;
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({
             grounded: false,
-            deliberate: false,
+            // Still reported true here — no local passages does not mean no
+            // evidence is reachable; the client will attempt web search
+            // before ever falling back to ungrounded generation. See
+            // localAskConversation's thin/zero-evidence supplement.
+            deliberate,
             warming,
             systemPrompt: buildUngroundedSystemPrompt({ warming }),
             // Same L2e treatment as the server-model path above — a client
@@ -3431,20 +3481,6 @@ const server = http.createServer((req, res) => {
           }));
           return;
         }
-
-        // Same deterministic trigger turn-controller.js's server path checks
-        // (see runAnswer there) — this is what lets the browser-local WebLLM
-        // path run the SAME deliberate long-form pipeline, since it has no
-        // way to run instruction-gate.js itself (Node-only, reads
-        // instruction-set/*.md from disk).
-        const gateInfo = groundInstructionGate.folds.length
-          ? groundInstructionGate.gate({
-              question: query,
-              history: Array.isArray(data.history) ? data.history : [],
-              evidence: groundResult.citations.map((c) => c.text),
-            })
-          : null;
-        const deliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id));
 
         // Widen retrieval once, using write-longform.mjs's own already-tuned
         // values — the default width above leaves almost nothing for the
@@ -5008,80 +5044,11 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Dedicated holonic-task generation endpoint (the Compose UI surface) —
-  // always runs holonic_task directly rather than routing through the LLM's
-  // own tool-choice, since this is a deliberate, distinct action, not an
-  // ambient chat capability. Streams the same holonic_* SSE events the
-  // LLM-callable tool emits via onEvent.
-  if (req.method === "POST" && req.url === "/api/holonic") {
-    let body = "";
-    let bodySize = 0;
-    req.on("data", chunk => {
-      bodySize += chunk.length;
-      if (bodySize > MAX_BODY) { req.destroy(new Error("Request body too large")); return; }
-      body += chunk.toString("utf8");
-    });
-    req.on("end", async () => {
-      let data;
-      try {
-        data = JSON.parse(body);
-      } catch (err) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
-        return;
-      }
-
-      const taskDescription = data.task || "";
-      if (!taskDescription) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "'task' is required" }));
-        return;
-      }
-
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "X-Accel-Buffering": "no",
-      });
-      const sendSSE = (event, payload) => {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
-      };
-
-      const task = new HolonicTask({
-        task: taskDescription,
-        model: data.model || "gemma2:2b",
-        engine: buildHolonicEngineAdapter(),
-        outputPath: data.output_path || null,
-      });
-
-      try {
-        const result = await task.run({
-          onProgress: (phase, msg, progressData = {}) => sendSSE(`holonic_${phase}`, { msg, ...progressData }),
-        });
-        sendSSE("done", {
-          sections: result.results.length,
-          chars: result.output.length,
-          mechanicalCitations: result.results.reduce((a, r) => a + r.citations.length, 0),
-          gaps: result.gaps.length,
-          replanHistory: result.replanHistory,
-          output: result.output,
-          results: result.results,
-        });
-      } catch (err) {
-        sendSSE("error", { message: err.message });
-      }
-      res.end();
-    });
-    return;
-  }
-
   // Long-form code generation ACROSS messages — the sessionful build. The
   // first POST to a directory builds the project from scratch; every later
   // POST to the SAME directory is a revision of what earlier messages built.
-  // Mirrors /api/holonic's SSE shape: progress events stream per-file, and a
-  // final "done" carries the measured residual so the UI can show what the
-  // next message must still fix.
+  // Progress events stream per-file, and a final "done" carries the measured
+  // residual so the UI can show what the next message must still fix.
   if (req.method === "POST" && req.url === "/api/code-longform/session") {
     let body = "";
     let bodySize = 0;
