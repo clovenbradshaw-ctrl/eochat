@@ -2222,6 +2222,13 @@ const PROJECTS_KEY = 'eochat.projects.v1';
 // see _defaultToLocalModelIfNoEngine below.
 const ON_GH_PAGES = typeof window !== 'undefined' && /(^|\.)github\.io$/.test(window.location.hostname);
 
+// How many prior turns localAskConversation folds into a browser-direct
+// model's context (WebLLM / Ollama-direct / Anthropic-direct alike) —
+// mirrors the server's own HISTORY_TURNS (server/turn-controller.js), so a
+// follow-up like "reformat it" has the same bounded window to resolve "it"
+// against whether or not a proxy answered this conversation.
+const LOCAL_HISTORY_TURNS = 6;
+
 // On a deployment that DOES have a server, Local mode is the reader's own
 // choice rather than a forced default — but state.localModel is reset by
 // every component mount, so without this it silently reverted to off on
@@ -5165,6 +5172,11 @@ class Component extends DCLogic {
     const useWeb = !!this.state.webSearch;
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
     const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
+    // Snapshot before this turn is appended below. Every earlier local-mode
+    // turn lived only in this array — never resent — so a follow-up like
+    // "reformat it into bullet points" reached the model as its entire
+    // conversation, with no referent for "it" and nothing to reformat.
+    const priorTurns = this.activeSpace().turns || [];
     this.updateActiveSpace(sp => ({
       ...sp,
       turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
@@ -5241,7 +5253,16 @@ class Component extends DCLogic {
     if (projectRules.trim()) {
       messages.push({ role: 'system', content: 'PROJECT INSTRUCTIONS — the reader wrote these rules for this project; obey them.\n\n' + projectRules });
     }
-    messages.push({ role: 'user', content: question });
+    // Fold the recent back-and-forth in as real turns — not a summary, the
+    // same question/answer text the reader and model actually exchanged —
+    // so a pronoun or "reformat it" in `question` has something to resolve
+    // against. Only turns that finished with an answer count as history; a
+    // turn still streaming or one that errored out contributes nothing.
+    const history = priorTurns
+      .filter(t => t.q && t.a && !t.streaming)
+      .slice(-LOCAL_HISTORY_TURNS)
+      .flatMap(t => [{ role: 'user', content: t.q }, { role: 'assistant', content: t.a }]);
+    messages.push(...history, { role: 'user', content: question });
 
     let answer = '';
     const engineName = anthropic ? 'Anthropic API' : ollamaDirect ? 'Ollama' : 'Local model';
