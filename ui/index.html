@@ -2918,10 +2918,17 @@ class Component extends DCLogic {
   // fold; they are not things to ask questions of. An older proxy that ignores
   // ?pool= returns every pool, so the kind/pool filter below is the real
   // guarantee — a prior must never become an attachable chat source.
-  async fetchSources() {
+  // Accepts an optional project id override so a project switch can request
+  // the NEW project's sources immediately, rather than reading back
+  // this.state.activeProjectId — React batches the setState a switch just
+  // made, so without the override this would still see the OLD id and leave
+  // the previous project's engine-tier sources in the rail until the next
+  // 15s health poll happened to refetch.
+  async fetchSources(projectIdOverride) {
     try {
       // Fetch both the global corpus and the active project's pool
-      const activeProject = this.state.projects.find(p => p.id === this.state.activeProjectId);
+      const activeProjectId = projectIdOverride !== undefined ? projectIdOverride : this.state.activeProjectId;
+      const activeProject = this.state.projects.find(p => p.id === activeProjectId);
       const projectPool = activeProject ? activeProject.pool : null;
 
       const res = await fetch(this.proxyUrl() + '/api/sources?pool=corpus', { signal: AbortSignal.timeout(5000) });
@@ -2939,7 +2946,7 @@ class Component extends DCLogic {
 
       // Fetch project-scoped sources if a project is active
       if (projectPool) {
-        const projRes = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(this.state.activeProjectId) + '/sources', { signal: AbortSignal.timeout(5000) });
+        const projRes = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(activeProjectId) + '/sources', { signal: AbortSignal.timeout(5000) });
         if (projRes.ok) {
           const { sources } = await projRes.json();
           if (Array.isArray(sources)) {
@@ -3445,6 +3452,10 @@ class Component extends DCLogic {
     if (project) {
       this.logAdd('●', `Switched to project "${project.name}"`, 'chat');
     }
+    // Sources are pool-scoped per project — without this, the sidebar and
+    // grounding-availability list keep showing the previous project's
+    // engine-tier sources until the next 15s health poll happens to refetch.
+    await this.fetchSources(id);
   }
 
   renameProject(id, name) {
