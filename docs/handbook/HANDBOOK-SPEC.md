@@ -1,15 +1,22 @@
 # The EO Reader 6 / EO Chat Handbook — a specification
 
-**Status:** draft v0.2, structure and scope only. No chapter content is written
-yet. This document is the outline to review before anyone writes prose against
-it.
+**Status:** v0.3. Part 0 and Part I are now written in full, as the sample
+§8 called for. Parts II–VIII are still structure and scope only — no prose
+written against them yet.
 
 **Purpose of this file:** decide, on paper, what the handbook teaches, in what
 order, to whom, using what material — before spending the effort to write it.
 It follows the same discipline the rest of this lineage asks of everything
 else: declare the shape, checkpoint it, then build.
 
-**v0.2 changelog (this update):** `eoreader6` shipped a real, dated piece of
+**v0.3 changelog (this update):** Part 0 (0.1–0.4) and Part I (1.1–1.5) are
+written, one file per chapter, in this directory — see `000-index.md` for the
+table of contents and status. Writing them required taking a provisional
+position on Q1 (location: here) and Q3 (format: one numbered file per
+chapter); both are recorded in `000-index.md` and reversible. Q2, Q4, and Q5
+are untouched and still need a decision before Part II onward is written.
+
+**v0.2 changelog:** `eoreader6` shipped a real, dated piece of
 research since v0.1 — the "role-fold" arc (PRs #44–48), attacking Fillmore's
 case-role problem directly and closing with a measured cross-lingual result.
 Part VI.2 is rewritten around it, Part III.6 gets it as a second, currently-
