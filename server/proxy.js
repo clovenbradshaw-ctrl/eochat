@@ -47,6 +47,7 @@ import path from "path";
 import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies, PERCEIVER_DISPATCH, perceiverDispatchUrl } from "./paths.js";
 import { createModelRouter } from "./model-router.js";
 import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt, foldConversationTurns } from "./engine-ground.js";
+import { foldTurn, updateSummary, emptySummary } from "./conversation-summary.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
 import { formatTerrainReport } from "./terrain-report-format.js";
 import { compileInstructionFolds } from "./project-instructions.js";
@@ -3618,6 +3619,67 @@ const server = http.createServer((req, res) => {
           turns: foldResult.selected.map((u) => ({ q: u.q, a: u.a })),
           dropped: foldResult.dropped,
         }));
+      } catch (err) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // Fold the newest turn to its discourse contribution and roll it into the
+  // conversation summary. Used by the local/browser generation path (ui/index.html
+  // localAskConversation) where turns are never persisted server-side, so the
+  // summary must be computed here and handed back — the browser stores it in the
+  // space. The proxy path (turn-controller.js) uses the same two functions
+  // internally via persistTurnSummary. Cheap model, bounded context, best-effort.
+  if (req.method === "POST" && req.url === "/api/conversations/summary") {
+    let body = "";
+    req.on("data", (c) => { body += c; });
+    req.on("end", async () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+        return;
+      }
+      const question = String(data.question || "");
+      const answer = String(data.answer || "");
+      if (!question && !answer) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "missing question/answer" }));
+        return;
+      }
+      try {
+        const makeCall = (opts = {}) => async (prompt) => {
+          const body = {
+            model: "llama3.2:latest",
+            messages: [{ role: "user", content: prompt }],
+            stream: false,
+            options: { temperature: 0.4, num_predict: 150, num_ctx: NUM_CTX },
+          };
+          if (opts.format) body.format = opts.format;
+          const resp = await safeFetch(`${TARGET}/api/chat`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }, 20000);
+          if (!resp.ok) throw new Error(`Ollama ${resp.status}`);
+          const j = await resp.json();
+          return (j.message?.content || "").trim();
+        };
+        const plainCall = makeCall();
+        const jsonCall = makeCall({ format: "json" });
+        const fold = await foldTurn({ question, answer, callLLM: plainCall });
+        const nextSummary = await updateSummary({
+          previousSummary: data.previousSummary || emptySummary(),
+          turnFold: fold,
+          callLLM: jsonCall,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ summary: nextSummary }));
       } catch (err) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err.message }));

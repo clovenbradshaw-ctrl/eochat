@@ -29,6 +29,9 @@ import {
   isAcknowledgment,
 } from "./conversation-memory.js";
 import {
+  buildSummarySystemMessage, updateSummary, emptySummary, foldTurn,
+} from "./conversation-summary.js";
+import {
   buildCabinetBlock, emptyCabinet, mergeDeskFacts, markAccessed, retrieveCabinet,
 } from "./project-memory.js";
 import { createConversationHolon, recordTurn } from "./conversation-holon.js";
@@ -263,6 +266,17 @@ export function createTurnController(deps) {
       : emptyMemory();
     const memoryMsg = buildMemoryMessage(state);
 
+    const summary = conv.summary || emptySummary();
+    // The verbatim history fold already re-presents the last HISTORY_TURNS
+    // exchanges, so the summary adds no information until the oldest of those
+    // has fallen out of the window — and injecting it earlier only repeats the
+    // same old topic three times over (desk + history + summary), anchoring a
+    // fresh question to the thread it left instead of answering it. Inject
+    // only once the summary is carrying something the history no longer holds.
+    const summaryMsg = (conv.turns || []).length > HISTORY_TURNS
+      ? buildSummarySystemMessage(summary)
+      : null;
+
     const poolId = pool || conv.pool;
     let cabinet = null;
     let retrieval = null;
@@ -273,7 +287,7 @@ export function createTurnController(deps) {
       cabinetBlock = retrieval?.memos.length ? buildCabinetBlock(retrieval.memos) : null;
     }
 
-    return { state, memoryMsg, cabinet, retrieval, cabinetBlock };
+    return { state, memoryMsg, summary, summaryMsg, cabinet, retrieval, cabinetBlock };
   }
 
   // Advance the desk by this turn and persist it, then fold any newly confirmed
@@ -314,6 +328,33 @@ export function createTurnController(deps) {
       deskTokens: gateCountTokens(nextMsg || ""),
     });
     return next;
+  }
+
+  async function persistTurnSummary({ conv, question, answerText }) {
+    setImmediate(async () => {
+      try {
+        const baseCall = (format) => async (prompt) => {
+          const messages = [{ role: "user", content: prompt }];
+          return callModelNonStreaming(messages, {
+            provider: "ollama",
+            modelOverride: "llama3.2:latest",
+            maxTokens: 150,
+            format,
+          });
+        };
+        const fold = await foldTurn({ question, answer: answerText, callLLM: baseCall() });
+        const fresh = await conversationStore.require(conv.id);
+        const previousSummary = fresh.summary || emptySummary();
+        const nextSummary = await updateSummary({
+          previousSummary,
+          turnFold: fold,
+          callLLM: baseCall("json"),
+        });
+        await conversationStore.setSummary(conv.id, nextSummary);
+      } catch (err) {
+        // Silent fail - summary is best-effort
+      }
+    });
   }
 
   const DEFAULT_PROSIFY_TIMEOUT_MS = 4000;
@@ -569,7 +610,7 @@ export function createTurnController(deps) {
   // Non-streaming model call, used only by the output-review correction pass.
   // Same provider routing as callModelStreaming; the correction is short
   // (num_predict 1500) and low-temperature.
-  async function callModelNonStreaming(messages, { provider, modelOverride }) {
+  async function callModelNonStreaming(messages, { provider, modelOverride, maxTokens = CORRECTION_MAX_TOKENS, format }) {
     const key = _getAnthropicKey();
     const useAnthropic = provider === "anthropic" && key;
     let model;
@@ -585,7 +626,7 @@ export function createTurnController(deps) {
     if (useAnthropic) {
       const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
       const body = {
-        model, max_tokens: CORRECTION_MAX_TOKENS,
+        model, max_tokens: maxTokens,
         messages: messages.filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content })),
       };
       if (systemMessages) body.system = systemMessages;
@@ -598,13 +639,15 @@ export function createTurnController(deps) {
       const j = await resp.json();
       return (j.content?.map((c) => c.text).join("") || "").trim();
     }
+    const body = {
+      model, messages, stream: false,
+      options: { temperature: 0.4, num_predict: maxTokens, num_ctx: numCtx },
+    };
+    if (format) body.format = format;
     const resp = await fetch(`${target}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model, messages, stream: false,
-        options: { temperature: 0.4, num_predict: CORRECTION_MAX_TOKENS, num_ctx: numCtx },
-      }),
+      body: JSON.stringify(body),
     });
     if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
     const j = await resp.json();
@@ -940,7 +983,10 @@ export function createTurnController(deps) {
 
   // The core pipeline shared by a fresh turn and a regenerate — both already
   // have a turnId/answerId and a question by the time this runs.
-  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, draftModel, mode, webSearch }, sendEvent) {
+  async function runAnswer({ conv, turn, answerId, question, originalQuestion, sourceScope, pool, provider, model: modelOverride, draftModel, mode, webSearch }, sendEvent) {
+    // originalQuestion is the user's actual question, without cross-turn correction context.
+    // It's used for memory persistence so correction metadata doesn't pollute the desk.
+    const userQuestionForMemory = originalQuestion || question;
     // Dispatch to mode-specific handler
     if (mode === "surf") {
       return runSurfAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, draftModel }, sendEvent);
@@ -1015,6 +1061,7 @@ export function createTurnController(deps) {
         const messages = [];
         if (discourse.cabinetBlock) messages.push({ role: "system", content: discourse.cabinetBlock });
         if (discourse.memoryMsg) messages.push({ role: "system", content: discourse.memoryMsg });
+        if (discourse.summaryMsg) messages.push({ role: "system", content: discourse.summaryMsg });
         messages.push(systemMsg);
 
         const gateInfo = gateInstructionBlock({
@@ -1023,8 +1070,6 @@ export function createTurnController(deps) {
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
-        const webDeliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id))
-          && webResults.length > 0;
 
         const maxSections = await resolveMaxSections(conv, turn, webResults.map((r) => r.url));
         const webEvidence = webResults.map((r) => ({ source_id: r.url, span_id: r.url, text: r.text || r.snippet || "" }));
@@ -1104,8 +1149,11 @@ export function createTurnController(deps) {
           summary: `${webResults.length} web sources`,
         });
         await persistTurnMemory({
-          conv, turn, question, answerText: finalText, denial,
+          conv, turn, question: userQuestionForMemory, answerText: finalText, denial,
           discourse, answerId, sendEvent,
+        });
+        await persistTurnSummary({
+          conv, question: userQuestionForMemory, answerText: finalText,
         });
       } else {
         // ── Engine grounding path: retrieved is empty (reserved for web results) ──
@@ -1169,6 +1217,7 @@ export function createTurnController(deps) {
         const messages = [];
         if (discourse.cabinetBlock) messages.push({ role: "system", content: discourse.cabinetBlock });
         if (discourse.memoryMsg) messages.push({ role: "system", content: discourse.memoryMsg });
+        if (discourse.summaryMsg) messages.push({ role: "system", content: discourse.summaryMsg });
         messages.push(systemMsg);
 
         const gateInfo = gateInstructionBlock({
@@ -1199,9 +1248,9 @@ export function createTurnController(deps) {
           corrected: false,
         });
 
-        const groundText = effectiveLastCitations.map((c) => c.text).join("\n\n");
+        const groundText = lastCitations.map((c) => c.text).join("\n\n");
         const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
-          rawText, lastCitations: effectiveLastCitations, maxCitation: effectiveMaxCitation, question,
+          rawText, lastCitations, maxCitation, question,
           gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride, draftModel,
         });
 
@@ -1227,8 +1276,8 @@ export function createTurnController(deps) {
         for (const u of fidelity.unverified) {
           gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited passage." });
         }
-        for (const g of effectiveGround.gaps || []) gaps.push(g);
-        if (!effectiveGround.context) {
+        for (const g of groundResult.gaps || []) gaps.push(g);
+        if (!groundResult.context) {
           gaps.push({
             type: warming ? "corpus_warming" : "no_evidence_matched",
             reason: warming
@@ -1255,11 +1304,14 @@ export function createTurnController(deps) {
           turnId: turn.id, answerId, status: "completed", text: finalText,
           annotatedText, groundingCheck,
           citations: brackets, gaps, snippets, model, review,
-          summary: `${effectiveGround.folded || 0} passages · ${new Set((effectiveGround.citations || []).map((c) => c.source_id)).size} sources`,
+          summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
         });
         await persistTurnMemory({
-          conv, turn, question, answerText: finalText, denial,
+          conv, turn, question: userQuestionForMemory, answerText: finalText, denial,
           discourse, answerId, sendEvent,
+        });
+        await persistTurnSummary({
+          conv, question: userQuestionForMemory, answerText: finalText,
         });
       }
     } catch (err) {
@@ -1319,7 +1371,7 @@ export function createTurnController(deps) {
 
     const run = runAnswer({
       conv, turn, answerId: answer.id,
-      question: effectiveQuestion, sourceScope: effectiveScope, pool: pool || conv.pool,
+      question: effectiveQuestion, originalQuestion: question, sourceScope: effectiveScope, pool: pool || conv.pool,
       provider, model, draftModel, mode: effectiveMode, webSearch: effectiveWebSearch,
     }, sendEvent);
 

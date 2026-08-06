@@ -239,6 +239,14 @@ export class ConversationStore {
     });
   }
 
+  async setSummary(id, summary) {
+    return this.#withLock(id, async () => {
+      const conv = await this.require(id);
+      conv.summary = summary || null;
+      return this.#save(conv);
+    });
+  }
+
   // ── The holon log (conversation-holon.js) ──
   //
   // Same reasoning as setMemory above: the log is small (one entry per turn)

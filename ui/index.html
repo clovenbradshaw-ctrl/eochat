@@ -2222,11 +2222,10 @@ const PROJECTS_KEY = 'eochat.projects.v1';
 // see _defaultToLocalModelIfNoEngine below.
 const ON_GH_PAGES = typeof window !== 'undefined' && /(^|\.)github\.io$/.test(window.location.hostname);
 
-// How many prior turns localAskConversation folds into a browser-direct
-// model's context (WebLLM / Ollama-direct / Anthropic-direct alike) —
-// mirrors the server's own HISTORY_TURNS (server/turn-controller.js), so a
-// follow-up like "reformat it" has the same bounded window to resolve "it"
-// against whether or not a proxy answered this conversation.
+// How many finished local-mode turns get folded into the messages array as
+// verbatim user/assistant pairs, so a follow-up like "reformat it" has a
+// referent for "it". Deliberately small: a bounded recency window, not the
+// whole conversation — long-range continuity is the summary's job instead.
 const LOCAL_HISTORY_TURNS = 6;
 
 // On a deployment that DOES have a server, Local mode is the reader's own
@@ -4242,7 +4241,7 @@ class Component extends DCLogic {
       // Offline/unreachable proxy — fall back to whatever was local so the UI
       // still renders; checkHealth()'s retry banner covers the rest.
       this.setState({
-        spaces: localSpaces.length ? localSpaces : [{ id: 'local', name: 'Reading Room', turns: [], retrievals: [], sources: [] }],
+        spaces: localSpaces.length ? localSpaces : [{ id: 'local', name: 'Reading Room', turns: [], retrievals: [], sources: [], summary: null }],
         activeSpaceId: (localSpaces[0] || {}).id || 'local',
       });
     }
@@ -4263,6 +4262,7 @@ class Component extends DCLogic {
       retrievals: existing ? existing.retrievals : [],
       sources: existing ? existing.sources : [],
       sourcesOff: existing ? existing.sourcesOff : {},
+      summary: existing ? existing.summary : (summary.summary || null),
       _loaded: existing ? existing._loaded : false,
     };
   }
@@ -5172,8 +5172,8 @@ class Component extends DCLogic {
     const useWeb = !!this.state.webSearch;
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
     const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
-    // Snapshot before this turn is appended below. Every earlier local-mode
-    // turn lived only in this array — never resent — so a follow-up like
+    // Snapshot before this turn is appended. Every earlier local-mode turn
+    // lived only in this array — never resent — so a follow-up like
     // "reformat it into bullet points" reached the model as its entire
     // conversation, with no referent for "it" and nothing to reformat.
     const priorTurns = this.activeSpace().turns || [];
@@ -5253,6 +5253,26 @@ class Component extends DCLogic {
     if (projectRules.trim()) {
       messages.push({ role: 'system', content: 'PROJECT INSTRUCTIONS — the reader wrote these rules for this project; obey them.\n\n' + projectRules });
     }
+    // The always-running discourse summary — folded at the top of every turn
+    // so that long-range thread survives past the verbatim recency window.
+    // Shaped like the proxy's buildSummarySystemMessage; the model can name
+    // the thread (topic/flow/entities/language) without any source text.
+    // The verbatim history fold re-presents the last LOCAL_HISTORY_TURNS
+    // exchanges, so the summary adds nothing until those have fallen out of
+    // the window — and injecting it earlier repeats the same old topic, which
+    // anchors a fresh question to the thread it left. Same guard as the proxy.
+    const runningSummary = priorTurns.length > LOCAL_HISTORY_TURNS ? this.activeSpace().summary : null;
+    if (runningSummary && (runningSummary.topic || runningSummary.flow)) {
+      const parts = [
+        'PAST DISCOURSE — context from earlier turns ONLY. It is background for threads that started earlier, not the subject of the current turn. Answer the user\'s current question as a fresh request; use this only to follow along when it clearly refers to something already discussed.',
+        'Topic: ' + (runningSummary.topic || '(none yet)'),
+        'Flow: ' + (runningSummary.flow || '(none yet)'),
+        'Entities: ' + ((runningSummary.entities && runningSummary.entities.length ? runningSummary.entities.join(', ') : '(none)')),
+        'Carried context: ' + (runningSummary.context || '(none)'),
+        'Language: ' + (runningSummary.language || 'unknown'),
+      ];
+      messages.push({ role: 'system', content: parts.join('\n') });
+    }
     // Fold the recent back-and-forth in as real turns — not a summary, the
     // same question/answer text the reader and model actually exchanged —
     // so a pronoun or "reformat it" in `question` has something to resolve
@@ -5329,6 +5349,25 @@ class Component extends DCLogic {
       ],
     });
     this.setState({ streamingLoading: false, streamingTurnId: null });
+    // Fold this finished turn into the running discourse summary, server-side.
+    // Fired without await so the answer renders immediately; the next turn
+    // reads the refreshed summary from the space if this lands in time and the
+    // stale one otherwise — the same benign race the proxy path runs on
+    // purpose. A summary is a nicety, never a turn-failing dependency.
+    fetch(this.proxyUrl() + '/api/conversations/summary', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question,
+        answer,
+        previousSummary: this.activeSpace().summary || null,
+      }),
+      signal: AbortSignal.timeout(20000),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (d && d.summary) this.updateActiveSpace(sp => ({ ...sp, summary: d.summary }));
+      })
+      .catch(() => {});
     this.logAdd('◱', `${engineName} reply done`, 'chat');
   }
 
