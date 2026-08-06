@@ -39,21 +39,14 @@
 // structure was discovered rather than imposed, and the passages that did not
 // survive are visible rather than quietly dropped.
 
-import fs from "node:fs";
-import path from "node:path";
 import { createTaskLog, append, projectTasks, deriveLevels, foldToWorkingSet, produce, ENTRY_KINDS, OPERATOR_BASIS } from "./task-log.js";
 import { checkAttribution } from "../vendor/eoreader5/packages/def/attribution.js";
-import { PRIORS_ROOT } from "./paths.js";
 
-// The morphology prior, loaded once. Absent => checkAttribution reports a gap
-// and degrades to suffix stemming, which provably misses every irregular.
-let _morph;
-function morphologyPrior() {
-  if (_morph !== undefined) return _morph;
-  const p = path.join(PRIORS_ROOT, "priors", "morphology-eng.json");
-  _morph = fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, "utf8")) : null;
-  return _morph;
-}
+// Advisory terrain ladder — informs ordering and prior weight (II.8: host may
+// attend, measurement never does). Passages at higher rungs carry broader meaning.
+const TERRAIN_LADDER = ["Void","Entity","Kind","Field","Link","Network","Atmosphere","Lens","Paradigm"];
+const TERRAIN_RUNG = new Map(TERRAIN_LADDER.map((t,i)=>[t,i]));
+const terrainRung = (t)=>TERRAIN_RUNG.get(t)??2; // fallback to Field
 
 /**
  * Check a draft the way the ENGINE checks it: who did what to whom.
@@ -70,7 +63,7 @@ function morphologyPrior() {
  * surface fixed by scope, not by the token. Without it every "I" in the
  * creature's tale is silently Victor.
  */
-export async function attributionResidual(draft, citedPassages, { narratorSpans = [], aliases = [], cast = null } = {}) {
+export async function attributionResidual(draft, citedPassages, { narratorSpans = [], aliases = [], cast = null, morphology = null } = {}) {
   const evidence = citedPassages.map((p) => String(p.text ?? "")).join("\n\n");
   if (!evidence.trim()) return { residual: null, gap: "no evidence text to check against", vetoes: [] };
 
@@ -78,7 +71,7 @@ export async function attributionResidual(draft, citedPassages, { narratorSpans 
     narratorSpans,
     aliases,
     cast,
-    morphology: morphologyPrior(),
+    morphology,
   });
 
   const hard = r.vetoes.filter((v) => v.severity === "hard");
@@ -109,60 +102,59 @@ export function outlineFromEvidence(passages, { maxSections = 7 } = {}) {
   let log = createTaskLog();
   log = append(log, { kind: ENTRY_KINDS.PROPOSE, task_id: "work", description: "the whole" });
 
-  // Group by source, then by contiguity within a source. Nothing here reads a
-  // heading string; grouping is positional and structural.
+  // Group by (source, entity when present). Entity comes from coref priors
+  // (a declaration, II.2). Passages without an entity match stay in the
+  // source-only group. Within each group, sort by terrain ladder then byte_start.
   const bySource = new Map();
   for (const p of passages) {
     const src = String(p.source_id ?? p.source ?? "?").replace(/:chunk-\d+$/, "");
-    if (!bySource.has(src)) bySource.set(src, []);
-    bySource.get(src).push(p);
+    const entity = p.entity || "";
+    const key = entity ? `${src}::${entity}` : src;
+    if (!bySource.has(key)) bySource.set(key, []);
+    bySource.get(key).push(p);
+  }
+  for (const ps of bySource.values()) {
+    ps.sort((a, b) => {
+      if (a.terrain !== b.terrain) return terrainRung(a.terrain) - terrainRung(b.terrain);
+      if (a.operator !== b.operator) return String(a.operator||"").localeCompare(String(b.operator||""));
+      return (a.byte_start??0) - (b.byte_start??0);
+    });
   }
 
+  const dominantStance = (ps) => {
+    const c = new Map(); for (const p of ps) { const s = p.stance||"Tracing"; c.set(s,(c.get(s)??0)+1); }
+    let best="Tracing",bn=0; for (const [s,n] of c) if (n>bn){bn=n;best=s;} return best;
+  };
+
   const rules = {
-    // Each source stands apart: a differentiation of the whole.
     SEG: (tasks) => {
       const out = [];
-      for (const [src, ps] of bySource) {
-        const id = `sec:${src}`;
-        if (tasks.some((t) => t.task_id === id)) continue;
+      for (const [key, ps] of bySource) {
+        const id = `sec:${key}`;
+        if (tasks.some((t)=>t.task_id===id)) continue;
+        const terrains=new Set(ps.map(p=>p.terrain).filter(Boolean));
+        const rungs=[...terrains].map(terrainRung);
+        const helix=rungs.length>1?Math.max(...rungs)-Math.min(...rungs):0;
         out.push({
-          task_id: id,
-          depends_on: ["work"],
-          // A section is a CLAIM, not a file. Naming sections by filename
-          // ("## pg84.txt") reported where the evidence came from and said
-          // nothing about what the section argues — and it silently made
-          // "which file" the organizing principle of the prose, which is a
-          // property of the corpus layout, not of the question.
-          description: null,
-          evidence: ps.map((p) => p.span_id).filter(Boolean),
-          source: src,
-          extent: ps.reduce((n, p) => n + (p.text?.length ?? 0), 0),
+          task_id:id, depends_on:["work"], description:null,
+          evidence:ps.map(p=>p.span_id).filter(Boolean),
+          source:ps[0]?.source_id?.replace(/:chunk-\d+$/,"")||"?",
+          extent:ps.reduce((n,p)=>n+(p.text?.length??0),0),
+          total_score:ps.reduce((n,p)=>n+(p.score??0),0),
+          terrain_count:terrains.size, helix_span:helix,
+          dominant_stance:dominantStance(ps),
         });
       }
       return out;
     },
-    // Two sections whose evidence is comparable in weight bear on each other.
     CON: (tasks) => {
       const secs = tasks.filter((t) => t.task_id.startsWith("sec:"));
       if (secs.length < 2 || tasks.some((t) => t.task_id === "cmp")) return [];
-      return [{
-        task_id: "cmp",
-        depends_on: secs.map((s) => s.task_id),
-        description: "what these sources say about each other",
-        evidence: secs.flatMap((s) => s.evidence.slice(0, 2)),
-        extent: 1,
-      }];
+      return [{ task_id:"cmp", depends_on:secs.map(s=>s.task_id), description:"what these sources say about each other", evidence:secs.flatMap(s=>s.evidence.slice(0,2)), extent:1 }];
     },
-    // A claim holding only ACROSS sources — it cannot exist in any one of them.
     SYN: (tasks) => {
-      if (!tasks.some((t) => t.task_id === "cmp") || tasks.some((t) => t.task_id === "synth")) return [];
-      return [{
-        task_id: "synth",
-        depends_on: ["cmp"],
-        description: "what holds across all of them",
-        evidence: [],
-        extent: 1,
-      }];
+      if (!tasks.some((t)=>t.task_id==="cmp")||tasks.some((t)=>t.task_id==="synth")) return [];
+      return [{ task_id:"synth", depends_on:["cmp"], description:"what holds across all of them", evidence:[], extent:1 }];
     },
   };
 
@@ -170,11 +162,10 @@ export function outlineFromEvidence(passages, { maxSections = 7 } = {}) {
   const tasks = projectTasks(closure.log);
   const { levels, relations } = deriveLevels(tasks);
 
-  // The mouth, before a single word is generated.
+  // Score: evidence count + relevance×2 + extent/1000 + terrain diversity×0.5 + helix span×1
   const { working, withheld, withheld_ids } = foldToWorkingSet(
-    tasks.filter((t) => t.task_id !== "work"),
-    { k: maxSections, score: (t) => (t.evidence?.length ?? 0) + (t.extent ?? 0) / 1000 }
-  );
+    tasks.filter((t)=>t.task_id!=="work"),
+    { k:maxSections, score: (t)=>(t.evidence?.length??0)+(t.total_score??0)*2+(t.extent??0)/1000+(t.terrain_count??1)*0.5+(t.helix_span??0) });
 
   return {
     log: closure.log,
@@ -287,11 +278,11 @@ export function reviseDraft(log, drafts, evidenceBySection, { tolerance = 0.45 }
       evidence: t.evidence,
       source: t.source,
       extent: t.extent,
+      dominant_stance: t.dominant_stance,
       variation: (t.variation ?? 0) + 1,
       revised_because:
         `${(residual * 100).toFixed(0)}% of content words are not carried by the cited passages` +
         (unsupported.length ? ` (e.g. ${unsupported.slice(0, 8).join(", ")})` : ""),
-      // Handed to the next generation so the retry is specific.
       avoid: unsupported,
     });
   }

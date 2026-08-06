@@ -109,7 +109,31 @@ export function flattenDdgTopics(topics) {
   return out;
 }
 
+// DuckDuckGo's own topic pages (duckduckgo.com/<Slug>, duckduckgo.com/c/<Slug>)
+// are a JS single-page app — fetched without a browser they serve nothing but
+// a "you are being redirected to the non-JS site" shell, never the topic
+// content. There is no real page behind this fetch to wait for; the search
+// API's own Text/snippet field is the only real content DDG gives us for
+// these, so skip the network round-trip and let the caller fall back to that.
+function isUnfetchableStub(url) {
+  try {
+    const u = new URL(url);
+    return /(^|\.)duckduckgo\.com$/.test(u.hostname) && !/^\/(html|lite)\//.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+// The same "redirecting to the non-JS site" shell can come back from other
+// JS-shell sites too, not just DuckDuckGo — a generic content check catches
+// those without hardcoding every such host. A real page is never this short
+// AND built entirely around the word "redirect".
+function looksLikeRedirectStub(text) {
+  return text.length < 400 && /redirect(ed|ing)?\s+to\s+the\s+non-javascript\s+site/i.test(text);
+}
+
 export async function webFetch(url, { maxChars = 10000 } = {}) {
+  if (isUnfetchableStub(url)) return "";
   try {
     const resp = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" },
@@ -134,6 +158,7 @@ export async function webFetch(url, { maxChars = 10000 } = {}) {
       .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
       .replace(/\s+/g, " ").trim();
 
+    if (looksLikeRedirectStub(clean)) return "";
     return clean.slice(0, maxChars);
   } catch {
     return "";

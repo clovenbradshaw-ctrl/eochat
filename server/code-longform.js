@@ -60,7 +60,7 @@ export const MAX_CONTINUITY_REVISIONS = 2;
 // MEASURED: a real run left 12 of 13 CSS class references unresolved after
 // 2 correction attempts — not a typo, a genuinely different page structure
 // than the HTML delivered (.container/.header/.services/.form/.nav vs. an
-// HTML that only ever declared 3 ids). More than this many DISTINCT
+// HTML that only ever declared 3 ids). This many or more DISTINCT
 // references surviving correction is the declared, quantifiable signal
 // that the mismatch is structural rather than a stray wrong name — the
 // line between "ask the later file to adapt" and "the earlier file was
@@ -116,7 +116,7 @@ export function parseJSON(text) {
  * choice, and two independent choices are not the same choice.
  *
  * The actual fix is the one this whole session has applied to every other
- * naming problem (word order in conventions.js, coref in eoPriors): a name
+ * naming problem (word order in conventions.js, coref in live_priors): a name
  * is a DECLARED, received fact, never independently re-derived by whichever
  * file happens to need it. `sharedVocabulary` is exactly that — decided
  * ONCE, here, and handed to EVERY file verbatim, so index.html and
@@ -500,7 +500,7 @@ export async function writeFileStable({ file, request, files, contents, sharedVo
     // already verified against the HTML is put at risk.
     let escalated = false;
     const distinctRefs = new Set(flags.map((f) => f.ref));
-    if (distinctRefs.size > STRUCTURAL_MISMATCH_THRESHOLD) {
+    if (distinctRefs.size >= STRUCTURAL_MISMATCH_THRESHOLD) {
       const htmlDeps = (file.requires ?? []).filter((r) => files.find((ff) => ff.path === r)?.language === "html" && contents[r]);
       for (let esc = 0; esc < MAX_STRUCTURAL_ESCALATIONS && htmlDeps.length > 0 && flags.length > 0; esc++) {
         const htmlPath = htmlDeps[0];

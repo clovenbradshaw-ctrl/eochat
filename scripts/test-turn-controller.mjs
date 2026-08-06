@@ -328,7 +328,7 @@ async function testNeedleInHaystack(dir) {
 
   // The probe's request must have carried the code in a system message, even
   // though the code left the history window turns ago.
-  const probeRequest = requests.find((r) => r.body?.messages?.some((m) => m.role === "user" && m.content === "What is the vault access code?"));
+  const probeRequest = requests.find((r) => r.body?.messages?.some((m) => m.role === "user" && m.content?.includes("What is the vault access code?")));
   assert.ok(probeRequest, "the probe must have reached the model");
   const injected = systemMessagesOf(probeRequest).join("\n");
   assert.ok(injected.includes(CODE), `the desk was not injected into the probe turn:\n${injected}`);

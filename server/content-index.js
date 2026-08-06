@@ -13,7 +13,7 @@
 // Usage:
 //   import { ContentIndex } from "./content-index.js";
 //   const idx = new ContentIndex();
-//   await idx.scan(["/path/to/eoreader5", "/path/to/eoPriors", ...]);
+//   await idx.scan(["/path/to/eoreader5", "/path/to/live_priors", ...]);
 //   const results = idx.find("search");
 //   const info = idx.lookup("packages/engine/search/index.js");
 //   const tree = idx.structure("packages/engine/emergence");
@@ -95,7 +95,7 @@ const ENTITY_NAMES = new Map([
 
 const REPO_DESCRIPTIONS = {
   "eoreader5": "Current semantic engine — all organs (cube, presence, fold, store, discourse, spine, reaction) and the multi-altitude entity summary oracle",
-  "eoPriors": "Priors: corpus prior cube, per-text coref alias/narrator knowledge, injected as witness-tier priors",
+  "live_priors": "Live priors: source texts organized by category (literature, holy texts, source code, academic papers, etc.) from github.com/clovenbradshaw-ctrl/live_priors",
   "eoreader4.2": "Legacy engine — src/weave/write/ has the unported phraser→talker prose pipeline",
   "eoreader-chat": "Chat interface and proxy — connects users/LLMs to the eoreader5 engine via MCP tools and a BoundedStore memory layer",
   "eoreader-proxy": "Proxy server (if separate from chat)",

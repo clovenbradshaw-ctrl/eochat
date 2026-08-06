@@ -17,7 +17,7 @@
 
 import {
   validateCitations, verifyQuotedFidelity, parseCitationRefs,
-  checkGrounding, groundingGaps, annotateVoids,
+  checkGrounding, groundingGaps, annotateVoids, autoAttachCitations,
 } from "./citation-check.js";
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
@@ -28,6 +28,9 @@ import {
   applyTurn, buildMemoryMessage, checkRecallDenial, emptyMemory,
   isAcknowledgment,
 } from "./conversation-memory.js";
+import {
+  buildSummarySystemMessage, updateSummary, emptySummary, foldTurn,
+} from "./conversation-summary.js";
 import {
   buildCabinetBlock, emptyCabinet, mergeDeskFacts, markAccessed, retrieveCabinet,
 } from "./project-memory.js";
@@ -198,6 +201,11 @@ export function buildWebSystemMessage(webResults) {
     `Answer the reader's question using the web search results below. When you draw on specific information, ` +
     `cite the source number like [1], [2], etc. Do NOT invent facts beyond what the material contains. ` +
     `If it does not contain the answer, say so plainly.\n\n` +
+    `Before asserting a fact, look for confirmation the way a careful person would: does more than one ` +
+    `source here agree? If a claim rests on a single source, or the sources conflict, say so instead of ` +
+    `stating it as settled — name the disagreement or the thinness rather than picking one source silently. ` +
+    `A claim two or more independent sources agree on can be stated with more confidence than one only a ` +
+    `single source makes.\n\n` +
     `--- Web Search Results (${webResults.length} sources) ---\n\n` +
     parts.join("\n\n");
   return { message: { role: "system", content }, maxCitation: webResults.length, warming: false };
@@ -258,6 +266,17 @@ export function createTurnController(deps) {
       : emptyMemory();
     const memoryMsg = buildMemoryMessage(state);
 
+    const summary = conv.summary || emptySummary();
+    // The verbatim history fold already re-presents the last HISTORY_TURNS
+    // exchanges, so the summary adds no information until the oldest of those
+    // has fallen out of the window — and injecting it earlier only repeats the
+    // same old topic three times over (desk + history + summary), anchoring a
+    // fresh question to the thread it left instead of answering it. Inject
+    // only once the summary is carrying something the history no longer holds.
+    const summaryMsg = (conv.turns || []).length > HISTORY_TURNS
+      ? buildSummarySystemMessage(summary)
+      : null;
+
     const poolId = pool || conv.pool;
     let cabinet = null;
     let retrieval = null;
@@ -268,7 +287,7 @@ export function createTurnController(deps) {
       cabinetBlock = retrieval?.memos.length ? buildCabinetBlock(retrieval.memos) : null;
     }
 
-    return { state, memoryMsg, cabinet, retrieval, cabinetBlock };
+    return { state, memoryMsg, summary, summaryMsg, cabinet, retrieval, cabinetBlock };
   }
 
   // Advance the desk by this turn and persist it, then fold any newly confirmed
@@ -309,6 +328,33 @@ export function createTurnController(deps) {
       deskTokens: gateCountTokens(nextMsg || ""),
     });
     return next;
+  }
+
+  async function persistTurnSummary({ conv, question, answerText }) {
+    setImmediate(async () => {
+      try {
+        const baseCall = (format) => async (prompt) => {
+          const messages = [{ role: "user", content: prompt }];
+          return callModelNonStreaming(messages, {
+            provider: "ollama",
+            modelOverride: "llama3.2:latest",
+            maxTokens: 150,
+            format,
+          });
+        };
+        const fold = await foldTurn({ question, answer: answerText, callLLM: baseCall() });
+        const fresh = await conversationStore.require(conv.id);
+        const previousSummary = fresh.summary || emptySummary();
+        const nextSummary = await updateSummary({
+          previousSummary,
+          turnFold: fold,
+          callLLM: baseCall("json"),
+        });
+        await conversationStore.setSummary(conv.id, nextSummary);
+      } catch (err) {
+        // Silent fail - summary is best-effort
+      }
+    });
   }
 
   const DEFAULT_PROSIFY_TIMEOUT_MS = 4000;
@@ -540,20 +586,14 @@ export function createTurnController(deps) {
     const useAnthropic = provider === "anthropic" && key;
     if (useAnthropic) {
       model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
-      routerCtx = null;
     } else if (draftModel) {
-      // Draft model: use the fastest model that's still good enough. The
-      // correction loop will fix violations with a better model if needed.
       model = draftModel;
-      routerCtx = null;
     } else if (modelOverride) {
       model = modelOverride;
-      routerCtx = null;
     } else if (modelRouter) {
       ({ model, ctx: routerCtx } = modelRouter.pick(messages));
     } else {
       model = heuristicModel(messages);
-      routerCtx = null;
     }
     const startedAt = Date.now();
     const result = useAnthropic
@@ -570,7 +610,7 @@ export function createTurnController(deps) {
   // Non-streaming model call, used only by the output-review correction pass.
   // Same provider routing as callModelStreaming; the correction is short
   // (num_predict 1500) and low-temperature.
-  async function callModelNonStreaming(messages, { provider, modelOverride }) {
+  async function callModelNonStreaming(messages, { provider, modelOverride, maxTokens = CORRECTION_MAX_TOKENS, format }) {
     const key = _getAnthropicKey();
     const useAnthropic = provider === "anthropic" && key;
     let model;
@@ -586,7 +626,7 @@ export function createTurnController(deps) {
     if (useAnthropic) {
       const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
       const body = {
-        model, max_tokens: CORRECTION_MAX_TOKENS,
+        model, max_tokens: maxTokens,
         messages: messages.filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content })),
       };
       if (systemMessages) body.system = systemMessages;
@@ -599,13 +639,15 @@ export function createTurnController(deps) {
       const j = await resp.json();
       return (j.content?.map((c) => c.text).join("") || "").trim();
     }
+    const body = {
+      model, messages, stream: false,
+      options: { temperature: 0.4, num_predict: maxTokens, num_ctx: numCtx },
+    };
+    if (format) body.format = format;
     const resp = await fetch(`${target}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model, messages, stream: false,
-        options: { temperature: 0.4, num_predict: CORRECTION_MAX_TOKENS, num_ctx: numCtx },
-      }),
+      body: JSON.stringify(body),
     });
     if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
     const j = await resp.json();
@@ -623,7 +665,14 @@ export function createTurnController(deps) {
   // Order matters: citations/brackets/fidelity are resolved on the final text,
   // whether that text is the original or a correction.
   async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel }) {
-    let text = rawText;
+    // Mechanical pass before anything else touches the text: any sentence the
+    // model left uncited gets a bracket (plus a verbatim clause as proof) when
+    // — and only when — its own vocabulary is concentrated enough in one
+    // source to name it without guessing. Everything below (bracket
+    // resolution, fidelity, the void-checker) runs against this text exactly
+    // as it would against citations the model wrote itself; the mechanical
+    // pass never gets a separate, weaker check.
+    let text = maxCitation > 0 ? autoAttachCitations(rawText, lastCitations) : rawText;
     let display = formatOutput(text);
     let brackets = resolveCitationBrackets(text, lastCitations).citations;
     let finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
@@ -688,7 +737,7 @@ export function createTurnController(deps) {
           break; // keep the flagged text; the report will show correction was not achieved
         }
         if (!next) break;
-        text = next;
+        text = maxCitation > 0 ? autoAttachCitations(next, lastCitations) : next;
         corrected = true;
         iterations++;
         display = formatOutput(text);
@@ -934,7 +983,10 @@ export function createTurnController(deps) {
 
   // The core pipeline shared by a fresh turn and a regenerate — both already
   // have a turnId/answerId and a question by the time this runs.
-  async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, draftModel, mode, webSearch }, sendEvent) {
+  async function runAnswer({ conv, turn, answerId, question, originalQuestion, sourceScope, pool, provider, model: modelOverride, draftModel, mode, webSearch }, sendEvent) {
+    // originalQuestion is the user's actual question, without cross-turn correction context.
+    // It's used for memory persistence so correction metadata doesn't pollute the desk.
+    const userQuestionForMemory = originalQuestion || question;
     // Dispatch to mode-specific handler
     if (mode === "surf") {
       return runSurfAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, draftModel }, sendEvent);
@@ -953,7 +1005,7 @@ export function createTurnController(deps) {
       if (webSearch && webSearchFn) {
         // ── Web search path: retrieved carries web results, no engine grounding ──
         const webResults = await webSearchFn(question, { numResults: 5, maxFetchChars: 5000 });
-        const { message: systemMsg, maxCitation } = buildWebSystemMessage(webResults);
+        let { message: systemMsg, maxCitation } = buildWebSystemMessage(webResults);
 
         const retrieved = webResults.map((r) => ({
           rank: r.rank,
@@ -969,7 +1021,7 @@ export function createTurnController(deps) {
         // ingested one — a bracket the model writes against a web result has
         // to resolve against SOMETHING, or every web citation reports as
         // fabricated regardless of whether the page actually backs it.
-        const lastCitations = webResults.map((r, i) => ({
+        let lastCitations = webResults.map((r, i) => ({
           index: i + 1, source_id: r.url, title: r.title, url: r.url,
           text: r.text || r.snippet || "",
         }));
@@ -1009,6 +1061,7 @@ export function createTurnController(deps) {
         const messages = [];
         if (discourse.cabinetBlock) messages.push({ role: "system", content: discourse.cabinetBlock });
         if (discourse.memoryMsg) messages.push({ role: "system", content: discourse.memoryMsg });
+        if (discourse.summaryMsg) messages.push({ role: "system", content: discourse.summaryMsg });
         messages.push(systemMsg);
 
         const gateInfo = gateInstructionBlock({
@@ -1017,13 +1070,8 @@ export function createTurnController(deps) {
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
-        messages.push(...history, { role: "user", content: question });
 
         const maxSections = await resolveMaxSections(conv, turn, webResults.map((r) => r.url));
-        // span_id doubles as source_id here — a web result IS its source, so
-        // outlineFromEvidence's per-source grouping earns one section per URL
-        // that structurally stands apart, same as a per-source_id split does
-        // for engine grounding below.
         const webEvidence = webResults.map((r) => ({ source_id: r.url, span_id: r.url, text: r.text || r.snippet || "" }));
         let sawStart = false;
         const { text: rawText, model } = await generateAnswer({
@@ -1101,8 +1149,11 @@ export function createTurnController(deps) {
           summary: `${webResults.length} web sources`,
         });
         await persistTurnMemory({
-          conv, turn, question, answerText: finalText, denial,
+          conv, turn, question: userQuestionForMemory, answerText: finalText, denial,
           discourse, answerId, sendEvent,
+        });
+        await persistTurnSummary({
+          conv, question: userQuestionForMemory, answerText: finalText,
         });
       } else {
         // ── Engine grounding path: retrieved is empty (reserved for web results) ──
@@ -1166,6 +1217,7 @@ export function createTurnController(deps) {
         const messages = [];
         if (discourse.cabinetBlock) messages.push({ role: "system", content: discourse.cabinetBlock });
         if (discourse.memoryMsg) messages.push({ role: "system", content: discourse.memoryMsg });
+        if (discourse.summaryMsg) messages.push({ role: "system", content: discourse.summaryMsg });
         messages.push(systemMsg);
 
         const gateInfo = gateInstructionBlock({
@@ -1196,7 +1248,7 @@ export function createTurnController(deps) {
           corrected: false,
         });
 
-        const groundText = (groundResult.citations || []).map((c) => c.text).join("\n\n");
+        const groundText = lastCitations.map((c) => c.text).join("\n\n");
         const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
           rawText, lastCitations, maxCitation, question,
           gate: gateInfo, groundText, memory: discourse, sendEvent, turnId: turn.id, answerId, provider, modelOverride, draftModel,
@@ -1255,8 +1307,11 @@ export function createTurnController(deps) {
           summary: `${groundResult.folded || 0} passages · ${new Set((groundResult.citations || []).map((c) => c.source_id)).size} sources`,
         });
         await persistTurnMemory({
-          conv, turn, question, answerText: finalText, denial,
+          conv, turn, question: userQuestionForMemory, answerText: finalText, denial,
           discourse, answerId, sendEvent,
+        });
+        await persistTurnSummary({
+          conv, question: userQuestionForMemory, answerText: finalText,
         });
       }
     } catch (err) {
@@ -1281,7 +1336,7 @@ export function createTurnController(deps) {
     const conv = await conversationStore.require(conversationId);
     const effectiveScope = sourceScope !== undefined ? sourceScope : conv.sourceScope;
     const effectiveMode = mode || conv.mode || "chat";
-    const effectiveWebSearch = webSearch !== undefined ? webSearch : (conv.webSearch || false);
+    const effectiveWebSearch = webSearch !== undefined ? webSearch : (conv.webSearch !== undefined ? conv.webSearch : true);
 
     // Cross-turn correction: if the previous turn's active answer was flagged,
     // inject the flags as correction context into this turn's question. The
@@ -1316,7 +1371,7 @@ export function createTurnController(deps) {
 
     const run = runAnswer({
       conv, turn, answerId: answer.id,
-      question: effectiveQuestion, sourceScope: effectiveScope, pool: pool || conv.pool,
+      question: effectiveQuestion, originalQuestion: question, sourceScope: effectiveScope, pool: pool || conv.pool,
       provider, model, draftModel, mode: effectiveMode, webSearch: effectiveWebSearch,
     }, sendEvent);
 
@@ -1331,13 +1386,13 @@ export function createTurnController(deps) {
     sendEvent("accepted", {
       turnId, answerId: answer.id, question: turn.question,
       sourceScope: turn.sourceScope, pool: conv.pool || "corpus",
-      mode: conv.mode || "chat", webSearch: conv.webSearch || false,
+      mode: conv.mode || "chat", webSearch: conv.webSearch !== undefined ? conv.webSearch : true,
       regenerate: true,
     });
     const run = runAnswer({
       conv: { ...conv, id: conversationId }, turn, answerId: answer.id,
       question: turn.question, sourceScope: turn.sourceScope, pool: conv.pool,
-      mode: conv.mode || "chat", webSearch: conv.webSearch || false,
+      mode: conv.mode || "chat", webSearch: conv.webSearch !== undefined ? conv.webSearch : true,
     }, sendEvent);
     return { turnId, answerId: answer.id, done: run };
   }
