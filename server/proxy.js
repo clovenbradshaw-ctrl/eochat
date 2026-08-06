@@ -3023,10 +3023,33 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
       providers: PROVIDERS,
-      defaultProvider: "ollama",
+      defaultProvider: "local",
       defaultModel: MEDIUM_MODEL,
       anthropicAvailable: !!ANTHROPIC_KEY,
     }));
+    return;
+  }
+
+  // List models installed in the local Ollama instance. The frontend uses this
+  // to populate the model picker when the reader wires up Ollama.
+  if (req.method === "GET" && req.url === "/api/ollama/models") {
+    (async () => {
+      try {
+        const resp = await safeFetch(`${TARGET}/api/tags`, {}, 10000);
+        if (!resp.ok) throw new Error("upstream returned " + resp.status);
+        const data = await resp.json();
+        const models = (data.models || []).map(m => ({
+          name: m.name,
+          size: m.size,
+          modified: m.modified_at || null,
+        }));
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ models }));
+      } catch (err) {
+        res.writeHead(502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Could not reach Ollama: " + err.message }));
+      }
+    })();
     return;
   }
 

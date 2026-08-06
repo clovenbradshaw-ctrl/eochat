@@ -780,18 +780,45 @@
           </sc-if>
           <sc-if value="{{ modelMenuOpen }}">
             <div style="position:absolute; bottom:44px; right:6px; width:220px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:10px; z-index:30; display:flex; flex-direction:column; gap:8px;">
-              <div style="display:flex; flex-direction:column; gap:4px;">
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Provider</span>
-                <select value="{{ provider }}" onChange="{{ onProviderChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; cursor:pointer;">
-                  <sc-for list="{{ modelOptions }}" as="opt">
-                    <option value="{{ opt.id }}">{{ opt.label }}</option>
-                  </sc-for>
-                </select>
-              </div>
-              <div style="display:flex; flex-direction:column; gap:4px;">
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Model</span>
-                <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ model }}" onChange="{{ onModelChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; outline:none;" />
-              </div>
+              <sc-if value="{{ !localModel }}">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Provider</span>
+                  <select value="{{ provider }}" onChange="{{ onProviderChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; cursor:pointer;">
+                    <sc-for list="{{ modelOptions }}" as="opt">
+                      <option value="{{ opt.id }}">{{ opt.label }}</option>
+                    </sc-for>
+                  </select>
+                </div>
+                <sc-if value="{{ ollamaNotAuthorized }}">
+                  <button type="button" onClick="{{ requestOllamaConnect }}" style="border:1px solid #1F5A4C; border-radius:8px; background:#1F5A4C; color:#FFFDFA; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:7px 9px; cursor:pointer;">Connect Ollama</button>
+                </sc-if>
+                <sc-if value="{{ ollamaFetching }}">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;"><i class="ph ph-spinner eo-spin" style="font-size:10px;"></i> Fetching models from Ollama…</span>
+                </sc-if>
+                <sc-if value="{{ ollamaError }}">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:10px; color:#c0341a;">{{ ollamaError }}</span>
+                    <button type="button" onClick="{{ retryOllamaFetch }}" style="align-self:flex-start; border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ ollamaReady }}">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Model · {{ ollamaModelCount }}</span>
+                    <select value="{{ model }}" onChange="{{ onModelChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; cursor:pointer;">
+                      <sc-for list="{{ ollamaModelList }}" as="om">
+                        <option value="{{ om.name }}">{{ om.label }}</option>
+                      </sc-for>
+                    </select>
+                  </div>
+                  <button type="button" onClick="{{ disconnectOllama }}" style="align-self:flex-start; border:0; background:none; color:#A39D91; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 0; cursor:pointer; text-decoration:underline;">disconnect</button>
+                </sc-if>
+                <sc-if value="{{ ollamaNotInPlay }}">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Model</span>
+                    <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ model }}" onChange="{{ onModelChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; outline:none;" />
+                  </div>
+                </sc-if>
+              </sc-if>
               <button type="button" onClick="{{ closeModelMenu }}" style="align-self:flex-end; border:0; background:none; color:#8C877C; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:2px 4px; cursor:pointer;">done</button>
             </div>
           </sc-if>
@@ -2036,6 +2063,22 @@
     </div>
   </div>
   </sc-if>
+
+  <sc-if value="{{ ollamaShowPermission }}">
+  <div onClick="{{ cancelOllamaConnect }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:10vh 24px 24px; z-index:60;">
+    <div onClick="{{ stopOllamaPermClick }}" class="eo-fade-in" style="width:100%; max-width:400px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:14px;">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#6E6A60;">Connect Ollama</span>
+        <button type="button" aria-label="Cancel" onClick="{{ cancelOllamaConnect }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
+      </div>
+      <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">EOChat will connect to a local Ollama instance to list your installed models and use them for generation. No data is sent anywhere except to the Ollama server running on your machine.</span>
+      <div style="display:flex; justify-content:flex-end; gap:8px; padding-top:4px;">
+        <button type="button" onClick="{{ cancelOllamaConnect }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Cancel</button>
+        <button type="button" onClick="{{ connectOllama }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Connect</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
 </div>
 </div>
 </x-dc>
@@ -2204,7 +2247,8 @@ class Component extends DCLogic {
     projects: [], activeProjectId: null,
     tab: 'chat', draft: '',
     webSearch: false,
-    provider: ON_GH_PAGES ? 'local' : 'ollama', model: null, _availableModels: [], modelMenuOpen: false,
+    provider: 'local', model: null, _availableModels: [], modelMenuOpen: false,
+    _ollamaModels: [], _ollamaFetching: false, _ollamaError: null, _ollamaAuthorized: false, _ollamaShowPermission: false, _ollamaUrl: '',
     // Local mode: answer entirely in this tab via WebLLM (see
     // webllm-client.js / window.EOWebLLM), no proxy generation call.
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
@@ -2713,7 +2757,7 @@ class Component extends DCLogic {
         const data = await res.json();
         this.setState(s => ({
           _availableModels: data.providers || [],
-          provider: s.provider || data.defaultProvider || 'ollama',
+          provider: s.provider || data.defaultProvider || 'local',
           model: s.model || data.defaultModel || null,
         }));
         return;
@@ -2721,19 +2765,84 @@ class Component extends DCLogic {
     } catch {}
     // Static build: no proxy to ask, so the model picker is synthesized from
     // what this page itself can answer with — the in-browser WebLLM model
-    // (auto-downloaded) and the Anthropic API (direct browser call). Ollama
-    // is deliberately absent: there is no engine to reach on this build.
+    // (auto-downloaded), the Anthropic API (direct browser call), and Ollama
+    // (direct connection to the reader's local instance).
     if (ON_GH_PAGES) {
       const localId = window.EOWebLLM ? window.EOWebLLM.modelId : 'Llama-3.2-3B-Instruct-q4f16_1-MLC';
       this.setState(s => ({
         _availableModels: [
           { id: 'local', label: 'Local (WebLLM)', defaultModel: localId },
+          { id: 'ollama', label: 'Ollama', defaultModel: '' },
           { id: 'anthropic', label: 'Anthropic', defaultModel: 'claude-sonnet-4-20250514' },
         ],
         provider: s.provider || 'local',
         model: s.model || localId,
       }));
     }
+  }
+
+  // Called when the reader picks "Ollama" from the provider dropdown.
+  requestOllamaConnect() {
+    if (ON_GH_PAGES) {
+      const url = prompt('Enter your Ollama host URL (e.g. http://localhost:11434):', this.state._ollamaUrl || 'http://localhost:11434');
+      if (!url) return;
+      this.setState({ _ollamaUrl: url, _ollamaShowPermission: true });
+    } else {
+      this.setState({ _ollamaShowPermission: true });
+    }
+  }
+
+  connectOllama() {
+    this.setState({ _ollamaShowPermission: false, _ollamaAuthorized: true, _ollamaFetching: true, _ollamaError: null });
+    this._doFetchOllamaModels();
+  }
+
+  cancelOllamaConnect() {
+    this.setState({ _ollamaShowPermission: false });
+    if (this.state.provider === 'ollama') this.setState({ provider: 'local' });
+  }
+
+  async _doFetchOllamaModels() {
+    try {
+      let models = [];
+      if (ON_GH_PAGES) {
+        const resp = await fetch((this.state._ollamaUrl || 'http://localhost:11434') + '/api/tags', { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) throw new Error('upstream returned ' + resp.status);
+        const data = await resp.json();
+        models = (data.models || []).map(m => ({ name: m.name, size: m.size }));
+      } else {
+        const resp = await fetch(this.proxyUrl() + '/api/ollama/models', { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.error || 'upstream returned ' + resp.status);
+        }
+        const data = await resp.json();
+        models = data.models || [];
+      }
+      this.setState({ _ollamaModels: models, _ollamaFetching: false, _ollamaError: null });
+      if (models.length && !this.state.model) {
+        this.setState({ model: models[0].name });
+      }
+    } catch (err) {
+      this.setState({ _ollamaModels: [], _ollamaFetching: false, _ollamaError: err.message });
+    }
+  }
+
+  disconnectOllama() {
+    this.setState({ _ollamaAuthorized: false, _ollamaModels: [], _ollamaError: null, _ollamaFetching: false, _ollamaUrl: '' });
+    if (this.state.provider === 'ollama') this.setState({ provider: 'local' });
+  }
+
+  selectOllamaModel(name) {
+    this.setState({ model: name });
+  }
+
+  _formatOllamaSize(bytes) {
+    if (bytes == null) return '';
+    if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+    if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
+    if (bytes >= 1e3) return (bytes / 1e3).toFixed(1) + ' KB';
+    return bytes + ' B';
   }
 
   // The priors catalog is a separate pool from /api/sources. A proxy too old
@@ -4678,6 +4787,7 @@ class Component extends DCLogic {
     if (this.composerEl) { this.composerEl.style.height = 'auto'; }
     this.logAdd('→', `Sending ${mode !== 'chat' ? mode + ' ' : ''}question…`, 'chat');
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
+    const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
     const localReady = this.state.localModel && this.state.localModelStatus === 'ready';
     if (anthropic) {
       // Static build, Anthropic selected: generation happens in this tab via a
@@ -4687,6 +4797,10 @@ class Component extends DCLogic {
       } else {
         await this.localUnavailableTurn(q, mode, 'no-anthropic-key', attachments);
       }
+    } else if (ollamaDirect) {
+      // Static build, Ollama connected: generation happens in this tab via a
+      // direct browser call to the reader's Ollama instance.
+      await this.localAskConversation(q, attachments);
     } else if (localReady) {
       await this.localAskConversation(q, attachments);
     } else if (ON_GH_PAGES) {
@@ -5004,6 +5118,41 @@ class Component extends DCLogic {
     }
   }
 
+  // Direct browser call to the Ollama API (newline-delimited JSON streaming).
+  // Used on static builds when the reader wires up their local Ollama instance.
+  async *_streamOllama(messages, ollamaUrl) {
+    const url = ollamaUrl || this.state._ollamaUrl || 'http://localhost:11434';
+    const model = this.state.model || 'llama3.2:latest';
+    const res = await fetch(url + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, stream: true }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => res.statusText);
+      throw new Error(`Ollama ${res.status}: ${String(errText).slice(0, 300)}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        let j;
+        try { j = JSON.parse(t); } catch { continue; }
+        if (j.message && j.message.content) {
+          yield j.message.content;
+        }
+      }
+    }
+  }
+
   // Local mode: retrieval only through the proxy — either POST /api/ground
   // (engineGroundQuery against the local corpus) or, when the reader's "Web"
   // toggle is on, POST /api/web-ground (a live web search + fetch, see
@@ -5015,6 +5164,7 @@ class Component extends DCLogic {
     const localId = 'local-' + Date.now();
     const useWeb = !!this.state.webSearch;
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
+    const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
     this.updateActiveSpace(sp => ({
       ...sp,
       turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
@@ -5023,8 +5173,9 @@ class Component extends DCLogic {
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
     }));
 
-    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: useWeb ? 'searching the web...' : 'surfing...', thinkingMeta: anthropic ? 'anthropic api' : 'local model' });
-    this.logAdd('◱', `Asked (${anthropic ? 'Anthropic API' : 'local model'}${useWeb ? ', web search' : ''}): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
+    const engineLabel = anthropic ? 'anthropic api' : ollamaDirect ? 'ollama' : 'local model';
+    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: useWeb ? 'searching the web...' : 'surfing...', thinkingMeta: engineLabel });
+    this.logAdd('◱', `Asked (${anthropic ? 'Anthropic API' : ollamaDirect ? 'Ollama' : 'local model'}${useWeb ? ', web search' : ''}): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
 
     let groundData;
     let groundFailed = null;
@@ -5093,9 +5244,16 @@ class Component extends DCLogic {
     messages.push({ role: 'user', content: question });
 
     let answer = '';
-    const engineName = anthropic ? 'Anthropic API' : 'Local model';
+    const engineName = anthropic ? 'Anthropic API' : ollamaDirect ? 'Ollama' : 'Local model';
     try {
-      const stream = anthropic ? this._streamAnthropic(messages) : window.EOWebLLM.stream(messages);
+      let stream;
+      if (anthropic) {
+        stream = this._streamAnthropic(messages);
+      } else if (ollamaDirect) {
+        stream = this._streamOllama(messages);
+      } else {
+        stream = window.EOWebLLM.stream(messages);
+      }
       for await (const delta of stream) {
         answer += delta;
         patchTurn({ a: answer });
@@ -7556,8 +7714,16 @@ class Component extends DCLogic {
         ? `local · ${window.EOWebLLM.modelLabel()}`
         : `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`,
       onProviderChange: (e) => {
-        const p = S._availableModels.find(m => m.id === e.target.value);
-        this.setState({ provider: e.target.value, model: p ? p.defaultModel : S.model });
+        const id = e.target.value;
+        if (id === 'ollama' && !S._ollamaAuthorized) {
+          this.requestOllamaConnect();
+          return;
+        }
+        if (id === 'ollama' && S._ollamaAuthorized && !S._ollamaModels.length && !S._ollamaFetching) {
+          this.connectOllama();
+        }
+        const p = S._availableModels.find(m => m.id === id);
+        this.setState({ provider: id, model: p ? p.defaultModel : S.model });
       },
       onModelChange: (e) => this.setState({ model: e.target.value }),
       hasModels: S._availableModels.length > 0,
@@ -7565,6 +7731,25 @@ class Component extends DCLogic {
       modelMenuOpen: S.modelMenuOpen,
       toggleModelMenu: () => this.setState(s => ({ modelMenuOpen: !s.modelMenuOpen })),
       closeModelMenu: () => this.setState({ modelMenuOpen: false }),
+      // ── Ollama connection state ──
+      _ollamaAuthorized: S._ollamaAuthorized,
+      _ollamaModels: S._ollamaModels,
+      _ollamaFetching: S._ollamaFetching,
+      _ollamaError: S._ollamaError,
+      ollamaShowPermission: S._ollamaShowPermission,
+      ollamaNotAuthorized: S.provider === 'ollama' && !S._ollamaAuthorized,
+      ollamaFetching: S.provider === 'ollama' && S._ollamaFetching,
+      ollamaError: S.provider === 'ollama' && S._ollamaError,
+      ollamaReady: S.provider === 'ollama' && S._ollamaAuthorized && !S._ollamaFetching && !S._ollamaError && S._ollamaModels.length > 0,
+      ollamaNotInPlay: (S.provider !== 'ollama' && !S._ollamaAuthorized) || (S.provider === 'ollama' && S._ollamaAuthorized && !S._ollamaFetching && !S._ollamaError && !S._ollamaModels.length),
+      ollamaModelCount: S._ollamaModels.length,
+      ollamaModelList: S._ollamaModels.map(m => ({ name: m.name, label: m.name + (m.size ? ' · ' + this._formatOllamaSize(m.size) : '') })),
+      requestOllamaConnect: () => this.requestOllamaConnect(),
+      connectOllama: () => this.connectOllama(),
+      cancelOllamaConnect: () => this.cancelOllamaConnect(),
+      disconnectOllama: () => this.disconnectOllama(),
+      retryOllamaFetch: () => this.connectOllama(),
+      stopOllamaPermClick: (e) => e.stopPropagation(),
       ...this._localModelProps(S),
       settingsOpen: S.settingsOpen,
       toggleSettings: () => this.toggleSettings(),
