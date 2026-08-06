@@ -11,6 +11,12 @@
 //          has a clean markdown surface to match on.
 //
 // Both live in the "priors" POOL, never the corpus pool.
+//
+// CHROME — live_priors records what is default-off in each source
+// (manifests/chrome/<source>.json, produced by scripts/pipeline-chrome.mjs).
+// Chrome is a LAYER, not a wall: the corpus view is the default (chrome OFF),
+// and readPrior(id, { chrome: true }) surfaces the archived raw with chrome
+// back in. Nothing was ever deleted — the ledger says what is off and where.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -21,6 +27,8 @@ import { isPriorDisabled, setPriorDisabled } from "./priors-state.js";
 
 export const PRIORS_POOL = "priors";
 const CARDS_DIR = path.join(REPO_ROOT, ".derived", "prior-cards");
+const CHROME_DIR = path.join(PRIORS_ROOT, "manifests", "chrome");
+const RAW_ROOT = path.join(PRIORS_ROOT, "raw");
 
 const INGESTIBLE_EXTENSIONS = new Set([
   ".txt", ".md", ".json", ".xml", ".csv",
@@ -64,6 +72,10 @@ function walkFiles(dir, base = "") {
   }
   for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (e.name.startsWith(".")) continue;
+    // manifests/ and raw/ are the pipeline's bookkeeping, not priors:
+    // manifests are fetch/pipeline metadata, raw/ is the verbatim chrome-surf
+    // mirror of files already in the catalog. Neither belongs in the pool.
+    if (e.name === "manifests" || e.name === "raw") continue;
     const abs = path.join(dir, e.name);
     const rel = base ? `${base}/${e.name}` : e.name;
     if (e.isDirectory()) out.push(...walkFiles(abs, rel));
@@ -73,6 +85,65 @@ function walkFiles(dir, base = "") {
     }
   }
   return out;
+}
+
+function sourceOf(rel) {
+  const seg = rel.split("/");
+  return seg.length > 1 ? seg[1] : seg[0];
+}
+
+// ─── chrome layer ─────────────────────────────────────────────────────────
+// Per-source chrome ledgers recorded by live_priors' pipeline. Read once,
+// cached; a missing ledger means "chrome not yet recorded" — never an error.
+
+let chromeCache = null;
+
+function loadChromeLedgers() {
+  if (chromeCache) return chromeCache;
+  const cache = new Map();
+  if (fs.existsSync(CHROME_DIR)) {
+    for (const f of fs.readdirSync(CHROME_DIR)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(CHROME_DIR, f), "utf8"));
+        if (parsed?.source && parsed?.regions) {
+          cache.set(parsed.source, parsed);
+        }
+      } catch {
+        // skip corrupt ledger; surf layer degrades to "chrome not recorded"
+      }
+    }
+  }
+  chromeCache = cache;
+  return cache;
+}
+
+export function chromeFor(rel, { includeRegions = false } = {}) {
+  const ledger = loadChromeLedgers().get(sourceOf(rel));
+  if (!ledger) return null;
+  const entry = ledger.regions[rel];
+  const regions = (entry && entry.regions) || [];
+  const rawAbs = path.join(RAW_ROOT, rel);
+  const base = {
+    source: ledger.source,
+    sourceDocs: ledger.docs,
+    sourceChromeFraction: ledger.chromeFraction,
+    regionsByKind: ledger.regionsByKind || null,
+    regionCount: regions.length,
+    hasRaw: fs.existsSync(rawAbs),
+    defaultOff: true,
+  };
+  if (!includeRegions) return base;
+  return {
+    ...base,
+    regions: regions.slice(0, 12).map((r) => ({
+      kind: r.kind,
+      startLine: r.startLine,
+      endLine: r.endLine,
+      members: r.membershipSize,
+      sources: r.sources,
+    })),
+  };
 }
 
 function hashOf(buf) {
@@ -102,6 +173,7 @@ export function priorsCatalog({ refresh = false } = {}) {
       gap: stat.size > RAW_INGEST_MAX_BYTES
         ? `raw not admitted to the engine (${(stat.size / 1048576).toFixed(1)}MB > ${RAW_INGEST_MAX_BYTES / 1048576}MB cap); card is indexed, raw is readable by byte range`
         : null,
+      chrome: chromeFor(rel),
     });
   }
   catalogCache = items;
@@ -127,6 +199,19 @@ export function renderCard(item) {
     `- **github**: https://github.com/clovenbradshaw-ctrl/live_priors/blob/main/${item.rel}`,
     "",
   );
+
+  const chrome = chromeFor(item.rel);
+  if (chrome) {
+    const kinds = chrome.regionsByKind && Object.keys(chrome.regionsByKind).length
+      ? Object.entries(chrome.regionsByKind).map(([k, v]) => `${v} ${k}`).join(", ")
+      : "none recorded";
+    body.push(
+      `- **chrome**: ${(chrome.sourceChromeFraction * 100).toFixed(1)}% of this source is recurrent (default OFF, recorded in \`manifests/chrome/${chrome.source}.json\`)`,
+      `- **chrome regions here**: ${chrome.regionCount} (${kinds})`,
+      `- **surf chrome**: \`readPrior("${item.id}", { chrome: true })\`${chrome.hasRaw ? " — raw archived, full text surfable" : " — raw not archived yet (stripped at fetch); re-run the source fetcher to make it surfable"}`,
+      "",
+    );
+  }
 
   let content = "";
   try {
@@ -250,10 +335,13 @@ export function setPriorEnabled(id, enabled) {
   return { id: item.id, disabled: !enabled, changed: true, gaps };
 }
 
-export function readPrior(id, { layer = "raw", byteStart = 0, maxBytes = 40000 } = {}) {
+export function readPrior(id, { layer = "raw", byteStart = 0, maxBytes = 40000, chrome = false } = {}) {
   const item = findPrior(id);
   if (!item) return { error: `unknown prior "${id}"` };
-  const target = layer === "card" ? item.cardPath : item.path;
+
+  const chromeInfo = chromeFor(item.rel, { includeRegions: true });
+  const surfChrome = chrome && chromeInfo?.hasRaw;
+  const target = layer === "card" ? item.cardPath : surfChrome ? path.join(RAW_ROOT, item.rel) : item.path;
   if (!fs.existsSync(target)) return { error: `${layer} not built for "${item.id}" (${target})` };
   const stat = fs.statSync(target);
   const start = Math.max(0, Math.min(byteStart, stat.size));
@@ -267,7 +355,7 @@ export function readPrior(id, { layer = "raw", byteStart = 0, maxBytes = 40000 }
   }
   return {
     id: item.id,
-    layer,
+    layer: surfChrome ? "raw-with-chrome" : layer,
     path: target,
     category: item.category,
     byte_start: start,
@@ -276,6 +364,18 @@ export function readPrior(id, { layer = "raw", byteStart = 0, maxBytes = 40000 }
     truncated: start + length < stat.size,
     gap: item.gap,
     text: buf.toString("utf8"),
+    chrome: {
+      defaultOff: true,
+      requested: !!chrome,
+      surfed: surfChrome,
+      // When the chrome was destroyed at fetch (before raw archiving), the
+      // ledger documents what is off but cannot conjure it. Re-fetch the
+      // source to archive raw and make it surfable.
+      notSurfableReason: chrome && chromeInfo && !chromeInfo.hasRaw
+        ? `raw was not archived for this source (stripped at fetch before raw/ existed) — re-run the source fetcher to archive it; ledger still records ${chromeInfo.regionCount} chrome region(s)`
+        : null,
+      ...chromeInfo,
+    },
   };
 }
 

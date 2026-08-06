@@ -16,7 +16,7 @@ Separate the layers, visibly:
 2. What it does. Structure, rhetoric, technique — observable moves.
 3. What it means. Your reading, argued from 1 and 2.
 
-The discipline of the fold is that layer 3 must be argued from layers 1 and 2,
+The discipline of this rule is that layer 3 must be argued from layers 1 and 2,
 not asserted on top of them. Every interpretive claim points to the passage
 that supports it, or is marked as a reading you cannot fully ground. An
 interpretation with no textual anchor is a reaction; give it as a reaction,

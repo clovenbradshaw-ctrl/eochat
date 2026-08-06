@@ -203,39 +203,41 @@ function scoreFold(fold, cueWords, cueLower, historyWords, historyLower, evidenc
 // The static framing that surrounds the fold list, plus per-fold renderers, so
 // the budget can be an honest ceiling on the WHOLE instruction block the model
 // receives — not just the fold bodies.
-const DEFAULT_LABEL = "EO INSTRUCTION GATE";
-const gateHeader = (label) => `===== ${label} =====
-The full instruction set is folded. Only the ACTIVE folds below are in force this turn — they are the complete set of rules you follow now. The FOLDED folds listed at the end exist but are NOT active: do not follow them, do not apply them, and do not mention them.`;
+//
+// The model-facing block carries only what the model must follow: the rules in
+// force this turn, verbatim, with no account of how they were chosen. The gate
+// machinery (folded folds, fingerprints, budgets) is an audit concern and stays
+// server-side — the talking model never sees it and never hears the word.
+const DEFAULT_LABEL = "RULES IN FORCE THIS TURN";
+const gateHeader = (label) => `${"=".repeat(label.length + 8)}
+===== ${label} =====
+The rules below are the complete set of additional rules in force for this turn. Follow them, and no others.`;
 const gateFooter = (label) => `===== END ${label} =====`;
 const GATE_HEADER = gateHeader(DEFAULT_LABEL);
 const GATE_FOOTER = gateFooter(DEFAULT_LABEL);
 
-// R2 — a missing fold is a named gap, never a silence. When no conditional
-// fold matched this turn, the block says so in its own section: the model must
+// R2 — a missing rule is a named gap, never a silence. When no conditional
+// rule matched this turn, the block says so in its own section: the model must
 // not answer from general knowledge as if it were this manual's policy.
-const GAP_MARKER = `=== NO FOLD SURFACED THIS TURN ===
-No conditional fold matched this turn. The ACTIVE folds above are the complete and only rules in force — nothing else in this manual applies. If the reader's subject is one the active folds do not cover, do not supply the answer from general knowledge or habit: say honestly that you do not have that specific rule in front of you and will confirm it. Never present an improvised answer as policy.`;
+const GAP_MARKER = `=== NO ADDITIONAL RULES FOR THIS TURN ===
+No additional rules apply this turn beyond the ones above. If the reader's subject is not one they cover, do not supply the answer from general knowledge or habit: say honestly that you do not have that specific rule in front of you and will confirm it. Never present an improvised answer as policy.`;
 
-function activeLine(fold) { return `\n### ${fold.id} — ${fold.title}\n${fold.body}`; }
+function activeLine(fold) { return `\n### ${fold.title}\n${fold.body}`; }
 function foldedLine(fold) { return `- ${fold.id}: ${fold.fingerprint || fold.title}`; }
 
 function framingTokens(nActive, nFolded, gap, label = DEFAULT_LABEL) {
-  const text = `${gateHeader(label)}\n--- ACTIVE FOLDS (${nActive}) ---\n--- FOLDED FOLDS (${nFolded}) — fingerprints only, NOT active ---\n${gap ? GAP_MARKER + "\n" : ""}${gateFooter(label)}`;
+  const text = `${gateHeader(label)}\n--- RULES (${nActive}) ---\n${gap ? GAP_MARKER + "\n" : ""}${gateFooter(label)}`;
   return countTokens(text);
 }
 
 // Compose the gate block for the model. Active folds are given verbatim under
-// the gate header; folded folds are listed by id + fingerprint with an
-// explicit NOT-ACTIVE marker. A gap turn (no conditional fold matched) carries
-// the R2 marker naming the absence. The core-gate fold (always-on) explains
-// this frame to the model itself.
+// a plain rules header; the folded index is NOT included — the model only ever
+// sees the rules in force. A gap turn (no conditional fold matched) carries
+// the R2 marker naming the absence.
 function buildSystemBlock(surfaced, folded, gap, label = DEFAULT_LABEL) {
   const parts = [gateHeader(label)];
-  parts.push(`--- ACTIVE FOLDS (${surfaced.length}) ---`);
+  parts.push(`--- RULES (${surfaced.length}) ---`);
   for (const fold of surfaced) parts.push(activeLine(fold));
-  parts.push("");
-  parts.push(`--- FOLDED FOLDS (${folded.length}) — fingerprints only, NOT active ---`);
-  for (const fold of folded) parts.push(foldedLine(fold));
   if (gap) parts.push(GAP_MARKER);
   parts.push(gateFooter(label));
   return parts.join("\n");
@@ -312,30 +314,27 @@ export function createInstructionGate({ dir = INSTRUCTION_DIR, folds: providedFo
       const gap = folds.length > 0 && !scored.some((s) => s.score > 0);
 
       // Budget accounting is honest: the budget is a ceiling on the WHOLE
-      // instruction block (framing + active bodies + folded index), not just
-      // the surfaced bodies. Surfacing a fold moves it from the index (cheap)
-      // to an active body (expensive), so its net cost is body − index line.
+      // instruction block (framing + active bodies). The folded index is no
+      // longer part of the model-facing message (the talking model never sees
+      // the fold machinery), so surfacing a fold costs exactly its active
+      // body; the folded index is still counted below as an audit figure.
       const surfaced = [...alwaysOn];
       let used = countTokens(surfaced.map(activeLine).join(""));
-      let folded = folds.filter((f) => !surfaced.some((s) => s.id === f.id));
-      let indexTokens = countTokens(folded.map(foldedLine).join(""));
-      let blockTokens = framingTokens(surfaced.length, folded.length, gap, label) + used + indexTokens;
+      let blockTokens = framingTokens(surfaced.length, 0, gap, label) + used;
 
       for (const { fold, score } of scored) {
         if (score <= 0) break; // sorted desc — the rest are all irrelevant this turn
-        const delta = countTokens(activeLine(fold)) - countTokens(foldedLine(fold));
+        const delta = countTokens(activeLine(fold));
         if (blockTokens + delta > budget) continue; // too big now — a smaller fold may still fit
         surfaced.push(fold);
-        used += countTokens(activeLine(fold));
-        indexTokens -= countTokens(foldedLine(fold));
-        folded = folds.filter((f) => !surfaced.some((s) => s.id === f.id));
+        used += delta;
         blockTokens += delta;
       }
 
       const activeIds = new Set(surfaced.map((f) => f.id));
-      folded = folds.filter((f) => !activeIds.has(f.id));
-      indexTokens = countTokens(folded.map(foldedLine).join(""));
-      const blockTokensFinal = framingTokens(surfaced.length, folded.length, gap, label) + used + indexTokens;
+      const folded = folds.filter((f) => !activeIds.has(f.id));
+      const indexTokens = countTokens(folded.map(foldedLine).join(""));
+      const blockTokensFinal = framingTokens(surfaced.length, 0, gap, label) + used;
       // Folds that WERE relevant this turn and were crowded out by the budget.
       // This is a different fact from "nothing matched", and the two must not
       // read alike: a rule the reader wrote, which the gate agreed applied,

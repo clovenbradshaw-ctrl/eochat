@@ -3547,10 +3547,24 @@ const server = http.createServer((req, res) => {
           numResults: data.numResults ?? 5,
           maxFetchChars: data.maxFetchChars ?? 5000,
         });
+
+        // Same deterministic trigger /api/ground computes above — the browser-
+        // local WebLLM path decides whether a turn runs the deliberate long-form
+        // pipeline from this flag, whichever retrieval source fed the evidence.
+        const gateInfo = groundInstructionGate.folds.length
+          ? groundInstructionGate.gate({
+              question: query,
+              history: Array.isArray(data.history) ? data.history : [],
+              evidence: webResults.map((r) => r.text || r.snippet || ""),
+            })
+          : null;
+        const deliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id));
+
         const { message } = buildWebSystemMessage(webResults);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           grounded: webResults.length > 0,
+          deliberate,
           systemPrompt: message.content,
           total: webResults.length,
           citations: webResults.map((r, i) => ({
@@ -4097,6 +4111,7 @@ const server = http.createServer((req, res) => {
           layer: url.searchParams.get("layer") === "raw" ? "raw" : "card",
           byteStart: parseInt(url.searchParams.get("start") || "0", 10),
           maxBytes: parseInt(url.searchParams.get("max") || "40000", 10),
+          chrome: url.searchParams.get("chrome") === "true",
         });
         res.writeHead(result.error ? 404 : 200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(result));

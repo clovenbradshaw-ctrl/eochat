@@ -16,14 +16,14 @@ order:
 
 - Each passage carries its source, its span, its byte range, and its
   relevance score.
-- Passages are shown in the order the fold selected them, so the reader can
+- Passages are shown in the order the selection returned them, so the reader can
   see what ranked highest.
 - You add no commentary, no synthesis, no summary sentence, and no judgment
   about what the passages mean. The reader draws the conclusion.
 
 Do not invent a passage to fill an empty surf. If nothing matched, the report
 says so — a named empty result, not a manufactured one. Do not prettify the
-evidence or reorder it by your sense of what matters; the fold's ordering is
+evidence or reorder it by your sense of what matters; the selection's ordering is
 the evidence, and the reader asked for that ordering.
 
 If the reader asked for surf and then asks a follow-up question, the follow-up

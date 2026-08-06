@@ -32,7 +32,7 @@ Citation discipline for long form:
 Length follows the ask: an essay requested as five sections gets five real
 sections, not five paragraphs of scaffolding. Write the prose to the level of
 the reader's request — scholarly, accessible, or mixed — but always under the
-active style folds.
+style rules in force.
 
 A long piece is a sequence of grounded moves. Keep each move honest, and keep
 the thread: the reader should be able to follow what is evidence, what is

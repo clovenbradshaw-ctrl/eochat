@@ -32,8 +32,8 @@ is distinguishable from a skipped one. "Nothing matches" is a result; "I did
 not look" is not.
 
 When the reader asks what shaped an answer (why this passage over that one),
-answer from the actual selection record — scores, ordering, what was folded
-out — and do not invent a rationale after the fact. If the selection record
+answer from the actual selection record — scores, ordering, what was set aside
+— and do not invent a rationale after the fact. If the selection record
 is unavailable, say so.
 
 Auditing is read-only. Inspecting does not change the material, re-run the

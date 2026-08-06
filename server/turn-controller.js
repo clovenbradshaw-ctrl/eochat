@@ -36,6 +36,8 @@ import {
 } from "./project-memory.js";
 import { createConversationHolon, recordTurn } from "./conversation-holon.js";
 import { generateAnswer } from "./turn-generation.js";
+import { planChatTurn, runHolonicEssay } from "./holonic-chat.js";
+import { researchTopic } from "./web-search.js";
 
 // Every blink can be longform — these are ceilings, not targets; the model
 // still decides when to stop. DEFAULT is generous headroom for the common
@@ -664,7 +666,7 @@ export function createTurnController(deps) {
   //
   // Order matters: citations/brackets/fidelity are resolved on the final text,
   // whether that text is the original or a correction.
-  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel }) {
+  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel, skipCorrection = false }) {
     // Mechanical pass before anything else touches the text: any sentence the
     // model left uncited gets a bracket (plus a verbatim clause as proof) when
     // — and only when — its own vocabulary is concentrated enough in one
@@ -701,50 +703,58 @@ export function createTurnController(deps) {
     const needCorrection = () => review.verdict === "FLAGGED" || denial.verdict === "FLAGGED";
 
     if (gate || facts.length) {
-      // The correction pass regenerates the answer, so it must see the same
-      // numbered passages the first pass saw — a [3] it writes is meaningless
-      // if it never saw passage 3. Rebuilt from the turn's own citation table
-      // so the bracket numbers agree with resolveCitationBrackets.
-      const correctionPassages = lastCitations?.length
-        ? "CITED PASSAGES — the bracket numbers in your answer must reference these passages:\n\n" +
-          lastCitations.map((c, i) => `[${i + 1}] ${c.text || ""}`).join("\n\n")
-        : "";
-      // Correction model: when a draft model was used, correction uses the
-      // standard model (router pick or override) — a better model that can fix
-      // what the fast draft got wrong. When no draft model, correction uses the
-      // same model as the draft (the default behavior).
-      const correctionModel = draftModel ? modelOverride : undefined;
-      while (needCorrection() && iterations < 2) {
-        const correction = buildCorrectionSystemContent(allFlags(), gate?.activeIds);
-        let next;
-        try {
-          // The correction directive goes LAST, as the final user content — the
-          // same convention narrative/code/svg-longform use. A bare question as
-          // the final turn re-rolls the original dice (which already failed);
-          // the flagged-violations frame must be the most recent thing the
-          // model reads before generating.
-          next = await callModelNonStreaming([
-            ...(gate?.systemMessage ? [{ role: "system", content: gate.systemMessage }] : []),
-            ...(memory?.message ? [{ role: "system", content: memory.message }] : []),
-            ...(correctionPassages ? [{ role: "system", content: correctionPassages }] : []),
-            // Show the model the exact text that was flagged, so "fix ONLY the
-            // flagged violations" means something it can act on — a blind
-            // regeneration from the question alone re-rolls the same dice.
-            ...(finalText ? [{ role: "system", content: `Your previous answer (rewrite it to fix ONLY the flagged violations):\n\n${finalText.slice(0, 4000)}` }] : []),
-            { role: "user", content: `${question}\n\n${correction}` },
-          ], { provider, modelOverride: correctionModel });
-        } catch {
-          break; // keep the flagged text; the report will show correction was not achieved
+      // The essay path deliberately skips the correction loop: a sectioned
+      // essay assembled from per-section folded windows must not be flattened
+      // into one single-shot rewrite. The review still runs mechanically and
+      // its flags are still reported; only the auto-rewrite is skipped.
+      if (skipCorrection) {
+        // mark corrected=false, iterations=0 — the review below is unchanged
+      } else {
+        // The correction pass regenerates the answer, so it must see the same
+        // numbered passages the first pass saw — a [3] it writes is meaningless
+        // if it never saw passage 3. Rebuilt from the turn's own citation table
+        // so the bracket numbers agree with resolveCitationBrackets.
+        const correctionPassages = lastCitations?.length
+          ? "CITED PASSAGES — the bracket numbers in your answer must reference these passages:\n\n" +
+            lastCitations.map((c, i) => `[${i + 1}] ${c.text || ""}`).join("\n\n")
+          : "";
+        // Correction model: when a draft model was used, correction uses the
+        // standard model (router pick or override) — a better model that can fix
+        // what the fast draft got wrong. When no draft model, correction uses the
+        // same model as the draft (the default behavior).
+        const correctionModel = draftModel ? modelOverride : undefined;
+        while (needCorrection() && iterations < 2) {
+          const correction = buildCorrectionSystemContent(allFlags(), gate?.activeIds);
+          let next;
+          try {
+            // The correction directive goes LAST, as the final user content — the
+            // same convention narrative/code/svg-longform use. A bare question as
+            // the final turn re-rolls the original dice (which already failed);
+            // the flagged-violations frame must be the most recent thing the
+            // model reads before generating.
+            next = await callModelNonStreaming([
+              ...(gate?.systemMessage ? [{ role: "system", content: gate.systemMessage }] : []),
+              ...(memory?.message ? [{ role: "system", content: memory.message }] : []),
+              ...(correctionPassages ? [{ role: "system", content: correctionPassages }] : []),
+              // Show the model the exact text that was flagged, so "fix ONLY the
+              // flagged violations" means something it can act on — a blind
+              // regeneration from the question alone re-rolls the same dice.
+              ...(finalText ? [{ role: "system", content: `Your previous answer (rewrite it to fix ONLY the flagged violations):\n\n${finalText.slice(0, 4000)}` }] : []),
+              { role: "user", content: `${question}\n\n${correction}` },
+            ], { provider, modelOverride: correctionModel });
+          } catch {
+            break; // keep the flagged text; the report will show correction was not achieved
+          }
+          if (!next) break;
+          text = maxCitation > 0 ? autoAttachCitations(next, lastCitations) : next;
+          corrected = true;
+          iterations++;
+          display = formatOutput(text);
+          brackets = resolveCitationBrackets(text, lastCitations).citations;
+          finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
+          ({ review, denial } = runReviews());
+          if (!denialSeen && denial.verdict === "FLAGGED") denialSeen = denial;
         }
-        if (!next) break;
-        text = maxCitation > 0 ? autoAttachCitations(next, lastCitations) : next;
-        corrected = true;
-        iterations++;
-        display = formatOutput(text);
-        brackets = resolveCitationBrackets(text, lastCitations).citations;
-        finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
-        ({ review, denial } = runReviews());
-        if (!denialSeen && denial.verdict === "FLAGGED") denialSeen = denial;
       }
     }
 
@@ -966,6 +976,167 @@ export function createTurnController(deps) {
     }
   }
 
+  // ── Essay depth (holonic chat planning) ──
+  // The planner already decided this turn is an essay. Each planned section is
+  // researched on its own (local engine grounding, plus Wikipedia/primary-source
+  // research automatically when local evidence is thin and the Web toggle is on)
+  // and written with a small folded context window — the writer sees ONLY that
+  // section's material, never the planner output, the evidence tables of the
+  // other sections, or any internal machinery. Citations are attached
+  // mechanically after writing (n-gram match, verbatim clause as proof); the
+  // assembled essay then flows through the SAME finalize/review pipeline as a
+  // single-shot answer, minus the auto-correction loop (a sectioned essay must
+  // not be flattened into one rewrite).
+  async function runEssayAnswer({ conv, turn, answerId, question, originalQuestion, sourceScope, pool, provider, model: modelOverride, draftModel, webSearch, planning }, sendEvent) {
+    const key = newAnswerEventKey(conv.id, turn.id);
+    const controller = new AbortController();
+    activeControllers.set(key, controller);
+    const userQuestionForMemory = originalQuestion || question;
+    const generate = (system, user, maxTokens) => callModelNonStreaming(
+      [{ role: "system", content: system }, { role: "user", content: user }],
+      { provider, modelOverride, maxTokens },
+    );
+
+    try {
+      const localRetrieve = async (topic) => {
+        const g = groundQuery(topic, { budget: 2000, maxUnits: 3, limit: 12, source: sourceScope, pool: pool || "corpus" });
+        return (g.citations || []).map((c) => ({
+          span_id: c.span_id, source_id: c.source_id,
+          byte_start: c.byte_start, byte_end: c.byte_end, score: c.score, text: c.text,
+        }));
+      };
+      // The Web toggle is the ONLY thing that gates web research — an essay
+      // never searches the web behind the reader's back.
+      const webResearch = webSearch ? (topic) => researchTopic(topic, { numResults: 1, maxFetchChars: 3500, primarySourcesPerArticle: 1 }) : null;
+
+      const holonicEvents = [];
+      const result = await runHolonicEssay({
+        question,
+        sections: planning.sections,
+        generate,
+        localRetrieve,
+        webResearch,
+        webEnabled: !!webSearch,
+        onProgress: (ev) => {
+          holonicEvents.push(ev);
+          sendEvent(`holonic_${ev.phase}`, { turnId: turn.id, answerId, ...ev });
+        },
+      });
+
+      // The essay's own citations (mechanically attached per section) become
+      // the turn's citation table — the exact shape resolveCitationBrackets /
+      // autoAttachCitations / the review all expect.
+      const lastCitations = result.citations.map((c, i) => ({
+        index: i + 1, span_id: c.span_id, source_id: c.source_id, text: c.text,
+      }));
+      const maxCitation = lastCitations.length;
+      const groundText = lastCitations.map((c) => c.text).join("\n\n");
+
+      const discourse = await loadDiscourseBlocks({ question, conv, pool });
+      const cueResult = await prosifyCue({
+        question, history: recentUserQuestions(conv, turn.id),
+        hot: discourse.state.hot, facts: discourse.state.facts,
+      });
+      const gateInfo = gateInstructionBlock({
+        question: cueResult.cue, conv, turnId: turn.id,
+        evidence: lastCitations.map((c) => c.text),
+      });
+      emitGateReport(sendEvent, turn.id, answerId, gateInfo);
+
+      const allWeb = result.references.filter((r) => r.url).length;
+      sendEvent("witnesses_selected", {
+        turnId: turn.id, answerId,
+        empty: maxCitation === 0 && allWeb === 0,
+        sourceCount: new Set(lastCitations.map((c) => c.source_id)).size,
+        foldedCount: lastCitations.length,
+        citations: lastCitations,
+        webSources: allWeb,
+        gaps: result.gaps,
+        holonic: { depth: "essay", sections: planning.sections.length },
+      });
+
+      await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+        grounding: {
+          sourceCount: lastCitations.length,
+          foldedCount: lastCitations.length,
+          empty: maxCitation === 0,
+          citations: lastCitations,
+          holonic: true,
+        },
+      });
+
+      const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
+        rawText: result.text, lastCitations, maxCitation, question,
+        gate: gateInfo, groundText, memory: discourse,
+        sendEvent, turnId: turn.id, answerId, provider, modelOverride, draftModel,
+        skipCorrection: true,
+      });
+
+      for (const c of brackets) sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
+      for (const s of snippets) sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
+      sendEvent("grounding_checked", { turnId: turn.id, answerId, ...groundingCheck, annotatedText });
+
+      const gaps = [...result.gaps, ...groundingGaps(groundingCheck)];
+      for (const u of fidelity.unverified) {
+        gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited source." });
+      }
+      for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
+
+      const summary = `${result.sections.length} sections · ${maxCitation} mechanical citations · ${result.references.length} sources`;
+      await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+        text: finalText, annotatedText, model: modelOverride || draftModel || null,
+        citations: brackets, gaps, snippets, fidelity, grounding_check: groundingCheck,
+        review, status: "completed", completedAt: new Date().toISOString(),
+        mode: "chat", holonic: {
+          depth: "essay",
+          plan: planning.sections.map((s) => s.title),
+          sections: result.sections.map((s) => ({ title: s.title, ungrounded: s.ungrounded, cited: s.cited })),
+          references: result.references,
+          events: holonicEvents,
+        },
+        webSearch: !!webSearch,
+        draftModel: draftModel || null,
+        correctionModel: null,
+        instructionGate: gateInfo ? {
+          activeIds: gateInfo.activeIds, foldedIds: gateInfo.foldedIds,
+          blockTokens: gateInfo.blockTokens, budget: gateInfo.budget, overflow: gateInfo.overflow,
+          gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
+          corpora: gateInfo.corpora,
+        } : null,
+        prosify: { raw: cueResult.raw, cue: cueResult.cue, changed: cueResult.changed, reason: cueResult.reason },
+      });
+      sendEvent("completed", {
+        turnId: turn.id, answerId, status: "completed", text: finalText,
+        annotatedText, groundingCheck, citations: brackets, gaps, snippets,
+        model: modelOverride || draftModel || null,
+        holonic: { depth: "essay", sections: result.sections, references: result.references, events: holonicEvents },
+        summary,
+      });
+      await persistTurnMemory({
+        conv, turn, question: userQuestionForMemory, answerText: finalText, denial,
+        discourse, answerId, sendEvent,
+      });
+      await persistTurnSummary({
+        conv, question: userQuestionForMemory, answerText: finalText,
+      });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        const partial = "(essay interrupted)";
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          text: partial, status: "interrupted", completedAt: new Date().toISOString(),
+        }).catch(() => {});
+        sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
+      } else {
+        await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
+          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+        }).catch(() => {});
+        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+      }
+    } finally {
+      activeControllers.delete(key);
+    }
+  }
+
   // Records this turn in the conversation's holon log against the sources its
   // OWN retrieval actually grounded on, and returns the section-count ceiling
   // this blink earned — DEFAULT unless the log discovers this turn depends on
@@ -1001,6 +1172,32 @@ export function createTurnController(deps) {
 
     try {
       sendEvent("retrieval_started", { turnId: turn.id, answerId, webSearch: !!webSearch });
+
+      // ── Holonic planning: one small model call decides depth for this ask ──
+      // riff (short, direct, marked ungrounded when nothing backs it) vs
+      // essay (multi-section, researched and written per section). The plan is
+      // consumed here and by runEssayAnswer; the talker model never sees it.
+      const cheapProbe = groundQuery(question, {
+        budget: 600, maxUnits: 2, limit: 8, source: sourceScope, pool: pool || "corpus",
+      });
+      const planning = await planChatTurn({
+        question,
+        history: recentUserQuestions(conv, turn.id),
+        localEvidence: { count: cheapProbe.total || 0 },
+        webEnabled: !!webSearch,
+        generate: (system, user, maxTokens) => callModelNonStreaming(
+          [{ role: "system", content: system }, { role: "user", content: user }],
+          { provider, modelOverride, maxTokens },
+        ),
+      });
+      sendEvent("holonic_plan", {
+        turnId: turn.id, answerId,
+        depth: planning.depth, reason: planning.reason,
+        sections: planning.sections.map((s) => s.title),
+      });
+      if (planning.depth === "essay") {
+        return runEssayAnswer({ conv, turn, answerId, question, originalQuestion, sourceScope, pool, provider, model: modelOverride, draftModel, webSearch, planning }, sendEvent);
+      }
 
       if (webSearch && webSearchFn) {
         // ── Web search path: retrieved carries web results, no engine grounding ──

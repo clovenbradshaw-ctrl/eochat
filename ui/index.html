@@ -21,8 +21,16 @@
      since the dc-runtime Component below is eval'd as a plain script and
      cannot `import` this module directly. Defining the class here costs
      nothing at load — the model itself is only fetched once init() is
-     called (toggling "Local" on). -->
+      called (toggling "Local" on). -->
 <script type="module" src="./webllm-client.js"></script>
+<!-- The deliberate long-form bridge for the in-browser model: wraps the
+     orchestrator (served byte-identical from the proxy's /shared/ route) so
+     the local WebLLM path earns an outline, drafts per section, and checks
+     each against its passages — the same pipeline the server runs. Exposes
+     window.EOWebLLMLongform. On a static build with no proxy the /shared/
+     import cannot resolve and this module stays inert; the UI guards on the
+     global being present before ever using it. -->
+<script type="module" src="./webllm-longform.js"></script>
 <!-- Senses that install: Hugging Face vision models downloaded into this
      browser and run here via Transformers.js, wired through window.EOSenses
      for the same reason as above. Nothing is fetched at load — the weights
@@ -557,7 +565,6 @@
         <button type="button" onClick="{{ tabOutline }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOutlineColor }}; box-shadow: {{ tabOutlineUnderline }}; cursor:pointer;">Outline</button>
         <button type="button" onClick="{{ tabOrbit }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOrbitColor }}; box-shadow: {{ tabOrbitUnderline }}; cursor:pointer;">Orbit</button>
         <button type="button" onClick="{{ tabPriors }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabPriorsColor }}; box-shadow: {{ tabPriorsUnderline }}; cursor:pointer;">Priors</button>
-        <button type="button" onClick="{{ tabCompose }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabComposeColor }}; box-shadow: {{ tabComposeUnderline }}; cursor:pointer;">Compose</button>
         <button type="button" onClick="{{ tabGlassBox }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabGlassBoxColor }}; box-shadow: {{ tabGlassBoxUnderline }}; cursor:pointer;">Glass box</button>
         <button type="button" onClick="{{ tabSenses }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabSensesColor }}; box-shadow: {{ tabSensesUnderline }}; cursor:pointer;">Senses</button>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
@@ -661,6 +668,9 @@
 
                   <div style="display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-top:2px;">
                     <button type="button" aria-label="Copy" onClick="{{ turn.copy }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-copy"></i>copy</button>
+                    <sc-if value="{{ turn.hasHolonic }}">
+                      <button type="button" onClick="{{ turn.toggleHolonic }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.holonicColor }}; cursor:pointer; padding:0;"><i class="{{ turn.holonicChevron }}"></i>{{ turn.holonicLabel }}</button>
+                    </sc-if>
                     <sc-if value="{{ turn.hasPassages }}">
                       <button type="button" onClick="{{ turn.togglePassages }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.passagesColor }}; cursor:pointer; padding:0;"><i class="{{ turn.passagesChevron }}"></i>{{ turn.passagesLabel }}</button>
                     </sc-if>
@@ -703,6 +713,33 @@
                         <span style="font-size:11.5px; color:#7A5A38; line-height:1.55;">{{ gap.text }}</span>
                       </div>
                     </sc-for>
+                  </div>
+                  </sc-if>
+
+                  <sc-if value="{{ turn.holonicOpen }}">
+                  <div class="eo-fade-in" style="background:#F6F9F5; border:1px solid #DCE6DF; border-radius:9px; padding:11px 12px; display:flex; flex-direction:column; gap:9px;">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C;">{{ turn.holonicHeading }}</span>
+                    <sc-for list="{{ turn.holonicSections }}" as="sec">
+                      <div style="display:flex; gap:8px; align-items:flex-start;">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ sec.numColor }}; flex:none;">{{ sec.index }}.</span>
+                        <div style="display:flex; flex-direction:column; gap:2px; min-width:0;">
+                          <span style="font-size:12.5px; color:#3A372F; line-height:1.5;">{{ sec.title }}</span>
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91;">{{ sec.cited }} citation{{ sec.citationSuffix }} attached</span>
+                          <sc-if value="{{ sec.badge }}">
+                            <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A3592B; background:#FBF1E9; border-radius:4px; padding:1px 5px; align-self:flex-start;">{{ sec.badge }}</span>
+                          </sc-if>
+                        </div>
+                      </div>
+                    </sc-for>
+                    <sc-if value="{{ turn.hasHolonicReferences }}">
+                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91; margin-top:3px;">provenance</span>
+                      <sc-for list="{{ turn.holonicReferences }}" as="ref">
+                        <div style="display:flex; gap:7px; align-items:flex-start;">
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:{{ ref.color }}; flex:none;">[{{ ref.kind }}]</span>
+                          <button type="button" onClick="{{ ref.open }}" title="{{ ref.url }}" style="border:0; background:none; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:{{ ref.cursor }}; text-align:left; padding:0; line-height:1.5; word-break:break-word;">{{ ref.title }}</button>
+                        </div>
+                      </sc-for>
+                    </sc-if>
                   </div>
                   </sc-if>
 
@@ -1079,69 +1116,6 @@
               <span style="font-size:11.5px; color:#A39D91; line-height:1.5;">{{ discoverEmptyMessage }}</span>
             </sc-if>
           </div>
-        </div>
-      </div>
-      </sc-if>
-
-      <sc-if value="{{ isCompose }}">
-      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
-        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Compose</span>
-        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A deliberate long-form generation, not a chat reply — each section is drafted, mechanically checked against the source, and revised before moving on.</span>
-
-        <div style="display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 12px; background:#FFFDFA;">
-          <input type="text" class="eo-input-text" placeholder="e.g. write a 3-page essay about the Creature's intellectual development" value="{{ composeTask }}" onChange="{{ onComposeTask }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
-          <button type="button" onClick="{{ runCompose }}" style="border:0; border-radius:8px; padding:8px 14px; font-family:inherit; font-size:12.5px; font-weight:500; background: {{ composeButtonBg }}; color:#FFFDFA; cursor:pointer; flex:none;">{{ composeButtonLabel }}</button>
-        </div>
-
-        <sc-if value="{{ hasComposeError }}">
-          <div style="display:flex; align-items:flex-start; gap:7px; background:#FBF0EC; border:1px solid #E8C9BC; border-radius:8px; padding:8px 10px;">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#c0341a;">⊘</span>
-            <span style="font-size:11.5px; color:#8a3a26; line-height:1.55;">{{ composeError }}</span>
-          </div>
-        </sc-if>
-
-        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:12px;" class="eo-scrollbar">
-          <sc-if value="{{ hasComposePlan }}">
-            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">plan: {{ composePlanCount }} section(s)</span>
-          </sc-if>
-
-          <sc-if value="{{ composeReplanNotice }}">
-            <div style="display:flex; align-items:flex-start; gap:7px; background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px;">
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C;">⊚</span>
-              <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ composeReplanNotice }}</span>
-            </div>
-          </sc-if>
-
-          <sc-for list="{{ composeSectionRows }}" as="sec">
-            <div style="border:1px solid #E7E2D8; border-radius:9px; background:#FAF8F4; padding:10px 12px; display:flex; flex-direction:column; gap:4px;">
-              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-                <span style="font-size:13px; font-weight:500; color:#26241F;">{{ sec.label }}</span>
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color: {{ sec.statusColor }};">{{ sec.statusLabel }}</span>
-              </div>
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">grounding: {{ sec.groundingTrail }}</span>
-            </div>
-          </sc-for>
-
-          <sc-if value="{{ composeDone }}">
-            <div style="display:flex; flex-direction:column; gap:14px; padding-top:10px; border-top:1px solid #EBE6DC;">
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ composeSummary }}</span>
-              <sc-for list="{{ composeResultSections }}" as="rs">
-                <div style="display:flex; flex-direction:column; gap:8px;">
-                  <span style="font-size:13.5px; font-weight:500; color:#26241F;">{{ rs.label }}</span>
-                  <div class="eo-md" style="font-size:13.5px; color:#1B1A17;">{{{ rs.contentHtml }}}</div>
-                  <sc-for list="{{ rs.citations }}" as="cit">
-                    <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
-                      <div style="display:flex; align-items:center; gap:8px;">
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">mechanical · {{ cit.jaccard }}</span>
-                        <span style="font-size:11.5px; color:#4A463E;">{{ cit.source }}</span>
-                      </div>
-                      <span style="font-size:12px; color:#3A372F; line-height:1.6; font-style:italic;">{{ cit.quote }}</span>
-                    </div>
-                  </sc-for>
-                </div>
-              </sc-for>
-            </div>
-          </sc-if>
         </div>
       </div>
       </sc-if>
@@ -2254,7 +2228,7 @@ class Component extends DCLogic {
     view: 'projects', // 'projects' | 'chat'
     projects: [], activeProjectId: null,
     tab: 'chat', draft: '',
-    webSearch: false,
+    webSearch: true,
     provider: 'local', model: null, _availableModels: [], modelMenuOpen: false,
     _ollamaModels: [], _ollamaFetching: false, _ollamaError: null, _ollamaAuthorized: false, _ollamaShowPermission: false, _ollamaUrl: '',
     // Local mode: answer entirely in this tab via WebLLM (see
@@ -2323,15 +2297,6 @@ class Component extends DCLogic {
     // place of text. Keyed by source name, same as readerContent.
     readerFileInfo: {},
     readerBinaryView: 'hex',
-    // Compose tab: a deliberate long-form generation action, distinct from
-    // ambient chat — always runs holonic_task directly via /api/holonic
-    // rather than waiting for the model to choose to call it. `composeSections`
-    // is keyed by sub-task id; each entry accumulates its own iteration trace
-    // live as SSE events arrive, so the correction loop is visible while it
-    // runs, not just in the final assembled output.
-    composeTask: '', composeRunning: false, composeError: null,
-    composePlan: null, composeSections: {}, composeOrder: [],
-    composeReplan: null, composeResult: null,
     // Priors catalog from /api/priors — the witness-tier pool, kept separate
     // from `_proxySources` (the corpus pool) because asking about the priors
     // and asking about the texts are different questions. null = not fetched.
@@ -4321,6 +4286,7 @@ class Component extends DCLogic {
         trace: answer ? this._answerTrace(answer) : [],
         model: answer ? answer.model : null,
         answerStatus: answer ? answer.status : null,
+        holonic: answer ? answer.holonic : null,
         streaming: false,
       };
     });
@@ -4495,6 +4461,37 @@ class Component extends DCLogic {
     if (type === 'writing_started') return { phase: `thinking...`, meta: null };
     if (type === 'citation_verified') return { phase: 'folding...', meta: null };
     if (type === 'gap') return { phase: 'folding...', meta: null };
+    // Holonic essay turns narrate their own build: plan → research each
+    // section → write → assemble. These phases drive the same top-of-chat
+    // thinking indicator, so a multi-minute essay reads as a sequence of
+    // real steps instead of one frozen "surfing..." pill.
+    if (type === 'holonic_plan') return {
+      phase: data.depth === 'essay' ? 'planning the essay…' : 'planning the answer…',
+      meta: data.sections && data.sections.length ? `${data.sections.length} section${data.sections.length === 1 ? '' : 's'} planned` : null,
+    };
+    if (type === 'holonic_section_start') return { phase: 'researching section…', meta: `${data.index}/${data.total} · ${data.id}` };
+    if (type === 'holonic_section_research') return {
+      phase: 'researching section…',
+      meta: data.id + (data.web !== undefined ? ` · local ${data.local} · web ${data.web}` : ''),
+    };
+    if (type === 'holonic_section_written') return { phase: 'writing section…', meta: data.id };
+    if (type === 'holonic_section_ungrounded') return { phase: 'writing from general knowledge…', meta: data.id };
+    if (type === 'holonic_assemble') return { phase: 'assembling…', meta: `${data.sections || 0} sections · ${data.references || 0} sources` };
+    return null;
+  }
+
+  // A one-line account of each holonic essay step for the thinking log — the
+  // modal's running history of what the answer actually did, the same events
+  // that drive the phase pill. Null for events with nothing worth logging.
+  _holonicLogEntry(type, data) {
+    if (type === 'holonic_plan') return `Plan: ${data.depth} · ${(data.sections || []).join(' / ')}`;
+    if (type === 'holonic_section_research') {
+      const web = data.web !== undefined ? ` · ${data.web} web` : '';
+      return `Section "${data.id}": ${data.local} local${web}`;
+    }
+    if (type === 'holonic_section_ungrounded') return `Section "${data.id}" had no evidence — written uncited`;
+    if (type === 'holonic_section_written') return `Section "${data.id}" written (${data.words} words)`;
+    if (type === 'holonic_assemble') return `Assembled ${data.sections} sections · ${data.references} sources`;
     return null;
   }
 
@@ -4575,6 +4572,10 @@ class Component extends DCLogic {
           if (type === 'gap') {
             this.logAdd('⊘', `Gap: ${data.reason || data.type}`, 'sources');
           }
+          if (type === 'holonic_plan' || type === 'holonic_section_research' || type === 'holonic_section_written' || type === 'holonic_section_ungrounded' || type === 'holonic_assemble') {
+            const log = this._holonicLogEntry(type, data);
+            if (log) this.setState(s => ({ thinkingLog: (s.thinkingLog || []).concat([{ glyph: type === 'holonic_section_ungrounded' ? '⊘' : '⊸', text: log }]) }));
+          }
           if (type === 'failed') {
             throw new Error(data.message || 'turn failed');
           }
@@ -4586,6 +4587,7 @@ class Component extends DCLogic {
               snippets: (data.snippets || []).map(s => this._clientSnippet(s)),
               model: data.model, retrieval, answerStatus: data.status,
               trace: this._answerTrace({ grounding, gaps: data.gaps, model: data.model }),
+              holonic: data.holonic || null,
             });
             if (retrieval) {
               this.updateActiveSpace(sp => ({
@@ -4608,11 +4610,18 @@ class Component extends DCLogic {
   }
 
   // Stop leaves the partial answer already visible in place — the server
-  // persists it as an "interrupted" turn, never as an error.
+  // persists it as an "interrupted" turn, never as an error. Local-mode turns
+  // (id prefixed "local-") have no server turn to stop: the in-tab
+  // AbortController cuts the WebLLM gate, the deliberate pipeline, and the
+  // plain stream where they currently sit.
   stopGeneration() {
-    const conversationId = this.state.activeSpaceId;
     const turnId = this.state.streamingTurnId;
     if (!turnId) return;
+    if (turnId.startsWith('local-')) {
+      if (this._localAbort) this._localAbort.abort();
+      return;
+    }
+    const conversationId = this.state.activeSpaceId;
     fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(conversationId) + '/turns/' + encodeURIComponent(turnId) + '/stop', { method: 'POST' }).catch(() => {});
   }
 
@@ -4663,6 +4672,7 @@ class Component extends DCLogic {
               a: data.text, citations: citations.length ? citations.slice() : null,
               snippets: (data.snippets || []).map(s => this._clientSnippet(s)),
               model: data.model, retrieval, answerStatus: data.status,
+              holonic: data.holonic || null,
             });
             this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
           }
@@ -4685,114 +4695,6 @@ class Component extends DCLogic {
     const file = (m ? m[1] : String(id)).replace(/^.*[/\\]/, '') || String(id);
     const chunk = m && m[2] ? m[2].slice(1) : '';
     return chunk ? `${file} · ${chunk}` : file;
-  }
-
-  onComposeTask(e) { this.setState({ composeTask: e.target.value }); }
-
-  // Runs holonic_task directly via the dedicated /api/holonic endpoint (not
-  // the LLM tool-choice loop) and renders each SSE event as it arrives —
-  // per-section iteration scores, replan decisions, and the final assembled
-  // sections with their real mechanical citations. The live iteration trace
-  // IS the point: it's the only place a user can actually see the model
-  // correct itself against the source rather than just reading a finished
-  // essay with no evidence anything was checked.
-  async runCompose() {
-    const task = this.state.composeTask.trim();
-    if (!task || this.state.composeRunning) return;
-
-    this.setState({
-      composeRunning: true, composeError: null, composePlan: null,
-      composeSections: {}, composeOrder: [], composeReplan: null, composeResult: null,
-    });
-    this.logAdd('⊨', `Compose: "${task.slice(0, 60)}${task.length > 60 ? '…' : ''}"`, 'chat');
-
-    try {
-      const res = await fetch(this.proxyUrl() + '/api/holonic', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task }),
-      });
-      if (!res.ok) throw new Error('Proxy returned ' + res.status);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.trim() || !line.startsWith('data: ')) continue;
-          let data;
-          try { data = JSON.parse(line.slice(6)); } catch { continue; }
-          this._applyComposeEvent(data);
-        }
-      }
-    } catch (err) {
-      this.setState({ composeError: err.message, composeRunning: false });
-      this.logAdd('⊘', `Compose failed: ${err.message}`, 'chat');
-      return;
-    }
-    this.setState({ composeRunning: false });
-  }
-
-  // Each holonic_* payload carries enough of its own shape (msg + phase-
-  // specific fields) to route on without needing the SSE `event:` line.
-  _applyComposeEvent(data) {
-    if (data.subTasks) {
-      // holonic_plan
-      this.setState({ composePlan: data.subTasks });
-      this.logAdd('⊚', `Compose plan: ${data.subTasks.length} section(s)`, 'chat');
-      return;
-    }
-    if (data.id && data.label !== undefined && data.iteration === undefined && data.groundingScore === undefined) {
-      // holonic_subtask_start
-      this.setState(s => ({
-        composeSections: { ...s.composeSections, [data.id]: { id: data.id, label: data.label, iterations: [], done: false } },
-        composeOrder: s.composeOrder.includes(data.id) ? s.composeOrder : [...s.composeOrder, data.id],
-      }));
-      return;
-    }
-    if (data.id && data.iteration !== undefined && data.groundingScore !== undefined && data.citationsCount === undefined) {
-      // holonic_subtask_iteration
-      this.setState(s => {
-        const existing = s.composeSections[data.id] || { id: data.id, label: data.id, iterations: [], done: false };
-        return { composeSections: { ...s.composeSections, [data.id]: { ...existing, iterations: [...existing.iterations, data] } } };
-      });
-      return;
-    }
-    if (data.id && data.citationsCount !== undefined) {
-      // holonic_subtask_done
-      this.setState(s => {
-        const existing = s.composeSections[data.id] || { id: data.id, label: data.label, iterations: [], done: false };
-        return { composeSections: { ...s.composeSections, [data.id]: { ...existing, done: true, groundingScore: data.groundingScore, citationsCount: data.citationsCount } } };
-      });
-      return;
-    }
-    if (data.unresolvedIds || data.redundantPairs) {
-      // holonic_replan_start
-      this.setState({ composeReplan: { status: 'running', unresolvedIds: data.unresolvedIds || [], redundantPairs: data.redundantPairs || [] } });
-      this.logAdd('⊚', `Replanning: ${(data.unresolvedIds || []).length} unresolved, ${(data.redundantPairs || []).length} redundant`, 'chat');
-      return;
-    }
-    if (data.changes) {
-      // holonic_replan_done
-      this.setState({ composeReplan: { status: 'done', changes: data.changes } });
-      return;
-    }
-    if (data.sections !== undefined && data.output !== undefined) {
-      // final `done` event
-      this.setState({ composeResult: data });
-      this.logAdd('⊨', `Compose done: ${data.sections} section(s), ${data.mechanicalCitations} citations`, 'chat');
-      return;
-    }
-    if (data.message && !data.msg) {
-      // error event
-      this.setState({ composeError: data.message });
-    }
   }
 
   // draftAttachments carries a File object (needed for the upload) that a
@@ -5183,16 +5085,114 @@ class Component extends DCLogic {
     }
   }
 
-  // Local mode: retrieval only through the proxy — either POST /api/ground
-  // (engineGroundQuery against the local corpus) or, when the reader's "Web"
-  // toggle is on, POST /api/web-ground (a live web search + fetch, see
-  // server/web-search.js) — with no generation step either way. Generation
-  // itself happens entirely in this tab: via window.EOWebLLM on the server
-  // path, or via a direct browser call to the Anthropic API on the static
-  // build when the reader has selected the Anthropic provider and set a key.
+  // The web gate — a semantic check, not a regex. A small call to the in-tab
+  // model decides whether this turn's discourse actually requires live web
+  // research, and writes the DuckDuckGo query the search will run against.
+  // The verdict is informed by the recent discourse so a follow-up like "and
+  // cite a source for that" inherits the thread's weight. Returns
+  // { needsWeb: boolean|null, query } — null means no verdict (no local model,
+  // or the call failed), in which case the discourse weight decides alone.
+  // The discourse weight (a deliberate essay-shaped request the corpus cannot
+  // ground) can also override a model's "no" — see localAskConversation.
+  async _webGate(question, priorTurns) {
+    const webllm = window.EOWebLLM;
+    if (!webllm || webllm.status !== 'ready' || !webllm.engine) {
+      return { needsWeb: null, query: question };
+    }
+    const history = priorTurns
+      .filter(t => t.q && t.a && !t.streaming)
+      .slice(-2)
+      .map(t => `Q: ${t.q}\nA: ${String(t.a).slice(0, 300)}`)
+      .join('\n\n');
+    const system = 'You decide whether a question needs LIVE web research to be answered properly. It needs the web when the answer is factual or current, must cite outside sources, is an essay or long-form piece expected to draw on sources, or the reader explicitly asked for research or searching online. It does NOT need the web for definitions, opinions, or things the reader likely already has in their own materials. Reply with ONLY a single JSON object, no markdown, no preamble: {"needsWeb": true or false, "query": "a short focused web-search query of 3 to 8 words, no quotes"}.';
+    const user = (history ? 'Earlier in this conversation:\n' + history + '\n\n' : '') + 'Decide for this question:\n' + question;
+    const gateCtrl = new AbortController();
+    const onLocalAbort = () => gateCtrl.abort();
+    if (this._localAbort) this._localAbort.signal.addEventListener('abort', onLocalAbort);
+    const timer = setTimeout(() => gateCtrl.abort(), 20000);
+    try {
+      const text = await this._drainWebLLM(system, user, gateCtrl.signal);
+      const m = text.match(/\{[^}]*\}/s);
+      if (!m) return { needsWeb: null, query: question };
+      const parsed = JSON.parse(m[0]);
+      const needsWeb = typeof parsed.needsWeb === 'boolean' ? parsed.needsWeb : null;
+      const query = String(parsed.query || '').trim().slice(0, 200);
+      return { needsWeb, query: query || question };
+    } catch {
+      return { needsWeb: null, query: question };
+    } finally {
+      clearTimeout(timer);
+      if (this._localAbort) this._localAbort.signal.removeEventListener('abort', onLocalAbort);
+    }
+  }
+
+  async _drainWebLLM(system, user, signal) {
+    const webllm = window.EOWebLLM;
+    if (!webllm || webllm.status !== 'ready' || !webllm.engine) throw new Error('no local model');
+    const stream = webllm.stream([{ role: 'system', content: system }, { role: 'user', content: user }], { signal });
+    let text = '';
+    for await (const delta of stream) {
+      if (signal && signal.aborted) break;
+      text += delta;
+    }
+    return text;
+  }
+
+  // How far the earned outline is ALLOWED to split — a ceiling, not a target;
+  // the outline still only splits as far as the evidence itself earns. An
+  // explicit length ask ("5 pages", "a long essay") gets the longform
+  // ceiling; an ordinary turn stays at the deliberate default.
+  _deliberateMaxSections(question) {
+    return /(\d+)\s*(pages?|paragraphs?)|five\s+pages?|long(er|est)?\s+(essay|answer|piece)|in-depth|deep\s+dive|comprehensive/.test(question) ? 8 : 5;
+  }
+
+  // Mirrors the server's deliberate streaming experience: every section that
+  // survives its fidelity check is appended to the visible answer the moment
+  // it closes, and the phase line narrates outline → drafting → revising →
+  // assembly as it happens.
+  _applyLocalDeliberateEvent(appendAnswer, e) {
+    switch (e.phase) {
+      case 'outline':
+        this.setState({ thinkingPhase: 'earning an outline...', thinkingMeta: `${e.sections} section(s)` + (e.withheld ? `, ${e.withheld} withheld` : '') });
+        break;
+      case 'section_start':
+        this.setState({ thinkingPhase: 'writing...', thinkingMeta: `section ${e.id}` });
+        break;
+      case 'section_titled':
+        this.setState({ thinkingMeta: e.title });
+        break;
+      case 'section_drafted':
+        this.setState({ thinkingMeta: `${e.words} word(s) drafted` });
+        break;
+      case 'section_revising':
+        this.setState({ thinkingPhase: 'revising...', thinkingMeta: `round ${e.round} — residual ${Number(e.residual).toFixed(3)}` });
+        break;
+      case 'section_closed':
+        appendAnswer(`## ${e.title}\n\n${e.text}`);
+        this.setState({ thinkingPhase: 'writing...', thinkingMeta: null });
+        break;
+      case 'assembled':
+        this.setState({ thinkingPhase: null, thinkingMeta: null });
+        break;
+    }
+    this.logAdd('→', `Deliberate: ${e.phase}${e.title ? ' — ' + e.title : ''}${e.sections !== undefined ? ' · ' + e.sections + ' section(s)' : ''}`, 'chat');
+  }
+
+  // Local mode: retrieval only through the proxy — POST /api/ground (against
+  // the local corpus) or POST /api/web-ground (a live web search + fetch, see
+  // server/web-search.js) — with no generation step either way. Whether the
+  // web fires is a semantic gate, not the reader's toggle alone: a small
+  // local-model call votes, and the discourse's own weight (an essay-shaped
+  // request the corpus cannot ground) can override that vote. Generation
+  // happens entirely in this tab: via window.EOWebLLM on the server path, or
+  // via a direct browser call to the Anthropic API on the static build when
+  // the reader has selected the Anthropic provider and set a key. When the
+  // server's instruction gate says the turn deserves deliberate treatment,
+  // the answer runs through the SAME outline-earned, per-section,
+  // fidelity-checked pipeline the server uses (window.EOWebLLMLongform).
   async localAskConversation(question, attachments) {
     const localId = 'local-' + Date.now();
-    const useWeb = !!this.state.webSearch;
+    const webAllowed = !!this.state.webSearch;
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
     const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
     // Snapshot before this turn is appended. Every earlier local-mode turn
@@ -5200,6 +5200,7 @@ class Component extends DCLogic {
     // "reformat it into bullet points" reached the model as its entire
     // conversation, with no referent for "it" and nothing to reformat.
     const priorTurns = this.activeSpace().turns || [];
+    this._localAbort = new AbortController();
     this.updateActiveSpace(sp => ({
       ...sp,
       turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
@@ -5207,17 +5208,40 @@ class Component extends DCLogic {
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
     }));
+    const appendAnswer = (chunk) => this.updateActiveSpace(sp => ({
+      ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, a: (t.a || '') + (t.a ? '\n\n' : '') + chunk } : t)),
+    }));
 
     const engineLabel = anthropic ? 'anthropic api' : ollamaDirect ? 'ollama' : 'local model';
-    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: useWeb ? 'searching the web...' : 'surfing...', thinkingMeta: engineLabel });
-    this.logAdd('◱', `Asked (${anthropic ? 'Anthropic API' : ollamaDirect ? 'Ollama' : 'local model'}${useWeb ? ', web search' : ''}): "${question.slice(0, 44)}${question.length > 44 ? '…' : ''}" — answered in this tab, not saved to this conversation`, 'chat');
+    this.setState({ streamingLoading: true, streamingTurnId: localId, thinkingPhase: 'judging whether this needs the web...', thinkingMeta: engineLabel });
+
+    // ── The web gate. Runs on every local turn, whatever the toggle says: the
+    // reader's toggle is the CAPABILITY (off = the reader overrides everything
+    // below), the model's verdict is the push, and the discourse weight below
+    // can override the model. Not a regex on the question — a semantic call.
+    const gate = await this._webGate(question, priorTurns);
+    let useWeb = false;
+    let webReason = null;
+    let webSupplemented = false;
+    if (!webAllowed) {
+      webReason = 'the reader switched web search off';
+    } else if (gate.needsWeb === true) {
+      useWeb = true;
+      webReason = 'the local model judged this needs live research';
+    } else if (gate.needsWeb === false) {
+      webReason = 'the local model judged this needs no web call';
+    }
+    this.setState({ thinkingPhase: useWeb ? 'searching the web...' : 'surfing...' });
+    this.logAdd(useWeb ? '→' : '◱', useWeb
+      ? `Web gate: on — ${webReason}.`
+      : `Web gate: off — ${webReason || 'no discourse weight required it'}.`, 'chat');
 
     let groundData;
     let groundFailed = null;
     try {
       const gres = await fetch(this.proxyUrl() + (useWeb ? '/api/web-ground' : '/api/ground'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(useWeb ? { query: question } : { query: question, groundSource: this.groundSourceFilter() }),
+        body: JSON.stringify(useWeb ? { query: gate.query } : { query: question, groundSource: this.groundSourceFilter() }),
       });
       if (!gres.ok) throw new Error('proxy returned ' + gres.status);
       groundData = await gres.json();
@@ -5245,6 +5269,31 @@ class Component extends DCLogic {
       }
     }
 
+    // ── Discourse override. The model may have voted "no web call" — but an
+    // essay-shaped request that the local corpus cannot ground is exactly the
+    // case web research exists to rescue. The weight of that situation
+    // overrides the model's verdict, so a deliberate ask never silently falls
+    // back to answering from pretrained memory when the web is reachable.
+    if (!groundFailed && !useWeb && groundData.deliberate && !groundData.grounded && webAllowed) {
+      useWeb = true;
+      webSupplemented = true;
+      webReason = 'the discourse demanded research the corpus could not carry — overriding the model verdict';
+      this.logAdd('→', 'Discourse override: essay-shaped request with no local evidence — web research pushing in.', 'chat');
+      try {
+        const wres = await fetch(this.proxyUrl() + '/api/web-ground', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: gate.query }),
+        });
+        if (wres.ok) {
+          const wdata = await wres.json();
+          if (wdata.error) throw new Error(wdata.error);
+          if ((wdata.citations || []).length) {
+            groundData = { ...groundData, grounded: true, citations: wdata.citations, total: wdata.total, systemPrompt: wdata.systemPrompt, gaps: wdata.gaps || [], deliberate: groundData.deliberate || wdata.deliberate };
+          }
+        }
+      } catch {}
+    }
+
     if (groundFailed) {
       // No retrieval path answered. The reader chose the local model; with the
       // engine gone that model is all this tab has, so answer from the
@@ -5255,7 +5304,7 @@ class Component extends DCLogic {
       this.logAdd('◱', `Local ${useWeb ? 'web search' : 'ground'} unavailable (${groundFailed.message}) — answering from project instructions and general knowledge only`, 'chat');
       groundData = {
         grounded: false, warming: false, citations: [], gaps: [],
-        total: 0, folded: 0, tokens: 0, budget: 0, dropped: 0,
+        total: 0, folded: 0, tokens: 0, budget: 0, dropped: 0, deliberate: false,
         systemPrompt: 'No sources were reachable from this tab, so there are no documents or web results to cite. Answer from the project instructions and general knowledge only. Never fabricate source citations: if you would otherwise reference a source, say so plainly instead of inventing a bracket number.',
       };
     }
@@ -5270,108 +5319,182 @@ class Component extends DCLogic {
     };
     patchTurn({ grounding });
 
-    const messages = [
-      { role: 'system', content: groundData.systemPrompt },
-    ];
-    if (projectRules.trim()) {
-      messages.push({ role: 'system', content: 'PROJECT INSTRUCTIONS — the reader wrote these rules for this project; obey them.\n\n' + projectRules });
-    }
-    // The always-running discourse summary — folded at the top of every turn
-    // so that long-range thread survives past the verbatim recency window.
-    // Shaped like the proxy's buildSummarySystemMessage; the model can name
-    // the thread (topic/flow/entities/language) without any source text.
-    // The verbatim history fold re-presents the last LOCAL_HISTORY_TURNS
-    // exchanges, so the summary adds nothing until those have fallen out of
-    // the window — and injecting it earlier repeats the same old topic, which
-    // anchors a fresh question to the thread it left. Same guard as the proxy.
-    const runningSummary = priorTurns.length > LOCAL_HISTORY_TURNS ? this.activeSpace().summary : null;
-    if (runningSummary && (runningSummary.topic || runningSummary.flow)) {
-      const parts = [
-        'PAST DISCOURSE — context from earlier turns ONLY. It is background for threads that started earlier, not the subject of the current turn. Answer the user\'s current question as a fresh request; use this only to follow along when it clearly refers to something already discussed.',
-        'Topic: ' + (runningSummary.topic || '(none yet)'),
-        'Flow: ' + (runningSummary.flow || '(none yet)'),
-        'Entities: ' + ((runningSummary.entities && runningSummary.entities.length ? runningSummary.entities.join(', ') : '(none)')),
-        'Carried context: ' + (runningSummary.context || '(none)'),
-        'Language: ' + (runningSummary.language || 'unknown'),
-      ];
-      messages.push({ role: 'system', content: parts.join('\n') });
-    }
-    // Fold the recent back-and-forth in as real turns — not a summary, the
-    // same question/answer text the reader and model actually exchanged —
-    // so a pronoun or "reformat it" in `question` has something to resolve
-    // against. Only turns that finished with an answer count as history; a
-    // turn still streaming or one that errored out contributes nothing.
-    const history = priorTurns
-      .filter(t => t.q && t.a && !t.streaming)
-      .slice(-LOCAL_HISTORY_TURNS)
-      .flatMap(t => [{ role: 'user', content: t.q }, { role: 'assistant', content: t.a }]);
-    messages.push(...history, { role: 'user', content: question });
+    const deliberate = !!groundData.deliberate
+      && !!window.EOWebLLMLongform
+      && !anthropic && !ollamaDirect
+      && (groundData.citations || []).length > 0;
 
     let answer = '';
+    let citations = [];
+    let deliberateRan = false;
     const engineName = anthropic ? 'Anthropic API' : ollamaDirect ? 'Ollama' : 'Local model';
-    try {
-      let stream;
-      if (anthropic) {
-        stream = this._streamAnthropic(messages);
-      } else if (ollamaDirect) {
-        stream = this._streamOllama(messages);
-      } else {
-        stream = window.EOWebLLM.stream(messages);
+
+    if (deliberate) {
+      deliberateRan = true;
+      try {
+        const cited = (groundData.citations || []).map((c, i) => ({
+          index: c.index ?? i + 1,
+          span_id: c.span_id || c.url || c.source_id || String(i + 1),
+          source_id: c.source_id, title: c.title, url: c.url,
+          byte_start: c.byte_start, byte_end: c.byte_end, score: c.score,
+          text: c.text,
+        }));
+        const maxSections = this._deliberateMaxSections(question);
+        this.setState({ thinkingPhase: 'earning an outline...', thinkingMeta: `${maxSections} section(s) ceiling` });
+        this.logAdd('→', `Deliberate long-form: ${cited.length} passage(s), up to ${maxSections} section(s)`, 'chat');
+        const result = await window.EOWebLLMLongform.runWebLLMAnswer({
+          proxyUrl: this.proxyUrl(), question, citations: cited, maxSections,
+          signal: this._localAbort ? this._localAbort.signal : null,
+          onProgress: (e) => this._applyLocalDeliberateEvent(appendAnswer, e),
+        });
+        answer = result.text;
+        citations = result.citations.map((c, i) => ({
+          num: String(i + 1), resolved: true,
+          source: useWeb ? (c.title || c.source_id) : this._shortSource(c.source_id),
+          sourceId: c.source_id, url: useWeb ? c.url : undefined,
+          byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
+          quote: String(c.text || '').slice(0, 300),
+        }));
+        const gapEntries = result.gaps || [];
+        patchTurn({ grounding: { ...grounding, gaps: [...(groundData.gaps || []), ...gapEntries] } });
+        patchTurn({
+          a: answer, citations: citations.length ? citations : null, streaming: false,
+          prompt: `Deliberate long-form — outline earned from ${cited.length} passage(s), sections capped at ${maxSections}; each drafted from its own passages, fidelity-checked, and revised before assembly.`,
+          model: `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only) — deliberate long-form`,
+          trace: [
+            { kind: 'ground', name: useWeb ? 'Web research' : 'Retrieval', detail: groundFailed
+              ? `Unavailable — ${groundFailed.message}.`
+              : useWeb
+                ? `${grounding.sourceCount} web source(s) found${webReason ? ` — ${webReason}.` : '.'}`
+                : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}.` },
+            { kind: 'ground', name: 'Deliberate long-form', detail: `${result.sectionsKept} section(s) kept, ${result.sectionsDropped} dropped, ${result.withheld || 0} withheld — every section drafted from its own passages, fidelity-checked, and revised before assembly.` },
+            { kind: 'model', name: 'Model', detail: `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only) — deliberate pipeline, per-section generation` },
+            ...(webSupplemented ? [{ kind: 'call', name: 'Discourse override', detail: 'The corpus carried no evidence for an essay-shaped request — web research supplied it despite the model verdict.' }] : []),
+            ...(gapEntries.length ? [{ kind: 'gap', name: 'Withheld & dropped', detail: gapEntries.map(g => g.reason).join(' · ') }] : []),
+            { kind: 'gap', name: 'Persistence', detail: 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
+          ],
+        });
+      } catch (err) {
+        if (this._localAbort && this._localAbort.signal.aborted) {
+          // The reader stopped the turn mid-pipeline. The partial answer is
+          // already rendered; end the turn here rather than falling through to
+          // the normal path, which would start streaming and abort immediately.
+          patchTurn({ streaming: false });
+          this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
+          this.logAdd('◱', 'Deliberate long-form stopped by the reader', 'chat');
+          return;
+        }
+        deliberateRan = false;
+        this.setState({ thinkingPhase: null, thinkingMeta: null });
+        this.logAdd('⊘', `Deliberate long-form failed (${err.message}) — answering as a normal turn`, 'chat');
       }
-      for await (const delta of stream) {
-        answer += delta;
-        patchTurn({ a: answer });
-      }
-    } catch (err) {
-      this.setState({ streamingLoading: false, streamingTurnId: null });
-      patchTurn({ a: answer || (`(${engineName} failed — ` + err.message + ')'), streaming: false });
-      this.logAdd('⊘', `${engineName} generation failed — ${err.message}`, 'chat');
-      return;
     }
 
-    // "resolved" here means only "this bracket number matches a passage/result
-    // the engine or web search retrieved" — the same check server turns run
-    // before the mechanical fidelity pass, never the fidelity pass itself.
-    // That gap is named explicitly in the trace row below, not left for the
-    // reader to notice on their own.
-    const citedNums = [...new Set((answer.match(/\[(\d+)\]/g) || []).map(m => Number(m.slice(1, -1))))];
-    const citations = citedNums.map(num => {
-      const gc = (groundData.citations || []).find(c => c.index === num);
-      return {
-        num: String(num), resolved: !!gc,
-        source: gc ? (useWeb ? gc.title : this._shortSource(gc.source_id)) : ('⊘ unresolved — no ' + (useWeb ? 'web result' : 'engine passage') + ' for [' + num + ']'),
-        sourceId: gc ? gc.source_id : null,
-        url: gc && useWeb ? gc.url : undefined,
-        byteStart: gc ? gc.byte_start : undefined, byteEnd: gc ? gc.byte_end : undefined, score: gc ? gc.score : undefined,
-        quote: gc ? String(gc.text || '').slice(0, 300) : '',
-      };
-    });
+    if (!deliberateRan) {
+      const messages = [
+        { role: 'system', content: groundData.systemPrompt },
+      ];
+      if (projectRules.trim()) {
+        messages.push({ role: 'system', content: 'PROJECT INSTRUCTIONS — the reader wrote these rules for this project; obey them.\n\n' + projectRules });
+      }
+      // The always-running discourse summary — folded at the top of every turn
+      // so that long-range thread survives past the verbatim recency window.
+      // Shaped like the proxy's buildSummarySystemMessage; the model can name
+      // the thread (topic/flow/entities/language) without any source text.
+      // The verbatim history fold re-presents the last LOCAL_HISTORY_TURNS
+      // exchanges, so the summary adds nothing until those have fallen out of
+      // the window — and injecting it earlier repeats the same old topic, which
+      // anchors a fresh question to the thread it left. Same guard as the proxy.
+      const runningSummary = priorTurns.length > LOCAL_HISTORY_TURNS ? this.activeSpace().summary : null;
+      if (runningSummary && (runningSummary.topic || runningSummary.flow)) {
+        const parts = [
+          'PAST DISCOURSE — context from earlier turns ONLY. It is background for threads that started earlier, not the subject of the current turn. Answer the user\'s current question as a fresh request; use this only to follow along when it clearly refers to something already discussed.',
+          'Topic: ' + (runningSummary.topic || '(none yet)'),
+          'Flow: ' + (runningSummary.flow || '(none yet)'),
+          'Entities: ' + ((runningSummary.entities && runningSummary.entities.length ? runningSummary.entities.join(', ') : '(none)')),
+          'Carried context: ' + (runningSummary.context || '(none)'),
+          'Language: ' + (runningSummary.language || 'unknown'),
+        ];
+        messages.push({ role: 'system', content: parts.join('\n') });
+      }
+      // Fold the recent back-and-forth in as real turns — not a summary, the
+      // same question/answer text the reader and model actually exchanged —
+      // so a pronoun or "reformat it" in `question` has something to resolve
+      // against. Only turns that finished with an answer count as history; a
+      // turn still streaming or one that errored out contributes nothing.
+      const history = priorTurns
+        .filter(t => t.q && t.a && !t.streaming)
+        .slice(-LOCAL_HISTORY_TURNS)
+        .flatMap(t => [{ role: 'user', content: t.q }, { role: 'assistant', content: t.a }]);
+      messages.push(...history, { role: 'user', content: question });
 
-    patchTurn({
-      a: answer, citations: citations.length ? citations : null, streaming: false,
-      model: anthropic
-        ? `anthropic: ${this.state.model || 'claude'} (API, browser-direct)`
-        : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
-      trace: [
-        { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: groundFailed
-          ? `Unavailable — ${groundFailed.message}. Answered offline from the project's own rules and general knowledge, without retrieval.`
-          : grounding.empty
-            ? (grounding.warming ? 'Corpus still warming — no evidence yet.' : (useWeb ? 'No web search results matched this question.' : 'No matching passage found.'))
-            : useWeb
-            ? `${grounding.sourceCount} web source(s) found.`
-            : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}` },
-        { kind: 'model', name: 'Model', detail: anthropic
-          ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
-          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
-        { kind: 'gap', name: 'Citation check', detail: useWeb
-          ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
-          : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
-        { kind: 'gap', name: 'Persistence', detail: anthropic
-          ? 'This reply lives only in this tab — it was never sent to the proxy and will not survive a reload.'
-          : 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
-      ],
-    });
-    this.setState({ streamingLoading: false, streamingTurnId: null });
+      try {
+        let stream;
+        if (anthropic) {
+          stream = this._streamAnthropic(messages);
+        } else if (ollamaDirect) {
+          stream = this._streamOllama(messages);
+        } else {
+          stream = window.EOWebLLM.stream(messages, { signal: this._localAbort ? this._localAbort.signal : null });
+        }
+        for await (const delta of stream) {
+          answer += delta;
+          patchTurn({ a: answer });
+        }
+      } catch (err) {
+        this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
+        patchTurn({ a: answer || (`(${engineName} failed — ` + err.message + ')'), streaming: false });
+        this.logAdd('⊘', `${engineName} generation failed — ${err.message}`, 'chat');
+        return;
+      }
+
+      // "resolved" here means only "this bracket number matches a passage/result
+      // the engine or web search retrieved" — the same check server turns run
+      // before the mechanical fidelity pass, never the fidelity pass itself.
+      // That gap is named explicitly in the trace row below, not left for the
+      // reader to notice on their own.
+      const citedNums = [...new Set((answer.match(/\[(\d+)\]/g) || []).map(m => Number(m.slice(1, -1))))];
+      citations = citedNums.map(num => {
+        const gc = (groundData.citations || []).find(c => c.index === num);
+        return {
+          num: String(num), resolved: !!gc,
+          source: gc ? (useWeb ? gc.title : this._shortSource(gc.source_id)) : ('⊘ unresolved — no ' + (useWeb ? 'web result' : 'engine passage') + ' for [' + num + ']'),
+          sourceId: gc ? gc.source_id : null,
+          url: gc && useWeb ? gc.url : undefined,
+          byteStart: gc ? gc.byte_start : undefined, byteEnd: gc ? gc.byte_end : undefined, score: gc ? gc.score : undefined,
+          quote: gc ? String(gc.text || '').slice(0, 300) : '',
+        };
+      });
+
+      patchTurn({
+        a: answer, citations: citations.length ? citations : null, streaming: false,
+        model: anthropic
+          ? `anthropic: ${this.state.model || 'claude'} (API, browser-direct)`
+          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
+        trace: [
+          { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: groundFailed
+            ? `Unavailable — ${groundFailed.message}. Answered offline from the project's own rules and general knowledge, without retrieval.`
+            : grounding.empty
+              ? (grounding.warming ? 'Corpus still warming — no evidence yet.' : (useWeb ? 'No web search results matched this question.' : 'No matching passage found.'))
+              : useWeb
+              ? `${grounding.sourceCount} web source(s) found.`
+              : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}` },
+          ...(webReason ? [{ kind: 'ground', name: 'Web gate', detail: webReason }] : []),
+          ...(webSupplemented ? [{ kind: 'call', name: 'Discourse override', detail: 'The corpus carried no evidence for an essay-shaped request — web research supplied it despite the model verdict.' }] : []),
+          { kind: 'model', name: 'Model', detail: anthropic
+            ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
+            : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
+          { kind: 'gap', name: 'Citation check', detail: useWeb
+            ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
+            : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
+          { kind: 'gap', name: 'Persistence', detail: anthropic
+            ? 'This reply lives only in this tab — it was never sent to the proxy and will not survive a reload.'
+            : 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
+        ],
+      });
+    }
+
+    this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
     // Fold this finished turn into the running discourse summary, server-side.
     // Fired without await so the answer renders immediately; the next turn
     // reads the refreshed summary from the space if this lands in time and the
@@ -6744,6 +6867,36 @@ class Component extends DCLogic {
       turnPanels: { ...s.turnPanels, [turn.id]: { ...(s.turnPanels[turn.id] || {}), [key]: !((s.turnPanels[turn.id] || {})[key]) } }
     }));
 
+    // The holonic essay's own build narration — the "thinking" the answer
+    // actually did. plan → per-section research → write → assemble, with an
+    // explicit badge wherever a section had no evidence at all and had to
+    // write uncited from general knowledge. Provenance shows the reference
+    // chain ([primary] = a source the Wikipedia article cited, [secondary] =
+    // the Wikipedia page itself, [local] = a passage from this room's own
+    // corpus).
+    const holonic = turn.holonic || null;
+    const holonicSections = (holonic && holonic.sections || []).map((s, i) => ({
+      index: i + 1,
+      title: s.title || s.id || `section ${i + 1}`,
+      ungrounded: !!s.ungrounded,
+      cited: s.cited || 0,
+      numColor: s.ungrounded ? '#A3592B' : '#8C877C',
+      citationSuffix: (s.cited || 0) === 1 ? '' : 's',
+      badge: s.ungrounded ? '⊘ no evidence found — written uncited from general knowledge' : null,
+    }));
+    const holonicUngrounded = holonicSections.filter(s => s.ungrounded).length;
+    const holonicReferences = (holonic && holonic.references || []).map(r => {
+      const kind = r.kind || (r.url ? 'secondary' : 'local');
+      return {
+        kind,
+        title: r.title || r.source_id || '(unnamed source)',
+        url: r.url || '',
+        color: kind === 'primary' ? '#1F5A4C' : (r.url ? '#4A463E' : '#A39D91'),
+        open: r.url ? () => window.open(r.url, '_blank', 'noopener') : null,
+        cursor: r.url ? 'pointer' : 'default',
+      };
+    });
+
     const gaps = (g && g.gaps || []).map(x => ({ text: x.reason || x.note || x.type || JSON.stringify(x) }));
 
     // Show every passage the engine retrieved, not just the ones the model
@@ -6934,6 +7087,25 @@ class Component extends DCLogic {
         detail: (t.detail || '').slice(0, 600)
       })),
 
+      // The Claude-style collapsible Thinking block: the essay's own plan and
+      // build steps, plus where its citations actually came from. Distinct
+      // from trace — this is the answer's authorship (which sections it wrote,
+      // what grounded them), not the engine's retrieval diagnostics.
+      hasHolonic: !!(holonic && (holonic.sections && holonic.sections.length || (holonic.references && holonic.references.length))),
+      holonicOpen: !!panels.holonic,
+      toggleHolonic: toggle('holonic'),
+      holonicChevron: chevron(panels.holonic),
+      holonicColor: panels.holonic ? '#1F5A4C' : '#8C877C',
+      holonicLabel: holonicSections.length
+        ? `thinking (${holonicSections.length} section${holonicSections.length === 1 ? '' : 's'}${holonicUngrounded ? ` · ${holonicUngrounded} ungrounded` : ''})`
+        : 'thinking',
+      holonicHeading: holonic && holonic.plan && holonic.plan.length
+        ? `essay plan · ${holonic.plan.length} section${holonic.plan.length === 1 ? '' : 's'}`
+        : 'essay plan',
+      holonicSections,
+      holonicReferences,
+      hasHolonicReferences: holonicReferences.length > 0,
+
       hasRaw: !!turn.prompt || !!turn.a,
       rawOpen: !!panels.raw,
       toggleRaw: toggle('raw'),
@@ -6955,7 +7127,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose'), se = tabStyle('senses');
+    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // The proxy being unreachable only means "no engine" if the in-browser
@@ -7789,7 +7961,7 @@ class Component extends DCLogic {
 
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose', isSenses: t === 'senses',
+      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses',
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
       webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
@@ -8076,7 +8248,7 @@ class Component extends DCLogic {
       tabDocuments: () => this.setState({ tab: 'documents' }),
       tabChat: () => this.setState({ tab: 'chat' }), tabOutline: () => this.setState({ tab: 'outline' }),
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
-      tabPriors: () => this.setState({ tab: 'priors' }), tabCompose: () => this.setState({ tab: 'compose' }),
+      tabPriors: () => this.setState({ tab: 'priors' }),
       tabSenses: () => this.setState({ tab: 'senses' }),
       tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
       tabChatColor: c.color, tabChatUnderline: c.underline,
@@ -8085,55 +8257,6 @@ class Component extends DCLogic {
       tabGlassBoxColor: g.color, tabGlassBoxUnderline: g.underline,
       tabPriorsColor: pr.color, tabPriorsUnderline: pr.underline,
       tabSensesColor: se.color, tabSensesUnderline: se.underline,
-      tabComposeColor: cp.color, tabComposeUnderline: cp.underline,
-      composeTask: S.composeTask,
-      onComposeTask: (e) => this.onComposeTask(e),
-      composeRunning: S.composeRunning,
-      composeCanRun: S.composeTask.trim().length > 0 && !S.composeRunning,
-      composeButtonBg: (S.composeTask.trim().length > 0 && !S.composeRunning) ? '#1F5A4C' : '#E0DACE',
-      runCompose: () => this.runCompose(),
-      composeButtonLabel: S.composeRunning ? 'Generating…' : 'Generate',
-      hasComposePlan: !!S.composePlan,
-      composePlanCount: S.composePlan ? S.composePlan.length : 0,
-      composeSectionRows: S.composeOrder.map(id => {
-        const sec = S.composeSections[id] || { id, label: id, iterations: [], done: false };
-        const trail = sec.iterations.map(it => it.groundingScore.toFixed(2)).join(' → ') || '…';
-        return {
-          id: sec.id,
-          label: sec.label,
-          groundingTrail: trail,
-          statusLabel: sec.done
-            ? `done — ${sec.citationsCount || 0} citation${sec.citationsCount === 1 ? '' : 's'}`
-            : (sec.iterations.length > 1 ? 'correcting…' : 'writing…'),
-          statusColor: sec.done ? '#1F5A4C' : '#A39D91',
-        };
-      }),
-      hasComposeSections: S.composeOrder.length > 0,
-      composeReplanNotice: S.composeReplan
-        ? (S.composeReplan.status === 'done'
-            ? (S.composeReplan.changes || []).map(c => `${c.action}: ${c.justification}`).join(' · ') || null
-            : 'Replanning — a section never grounded well or two sections turned out redundant…')
-        : null,
-      hasComposeError: !!S.composeError,
-      composeError: S.composeError,
-      composeDone: !!S.composeResult,
-      composeSummary: S.composeResult
-        ? `${S.composeResult.sections} section(s), ${S.composeResult.mechanicalCitations} mechanical citation(s), ${S.composeResult.gaps} gap(s)`
-        : '',
-        composeResultSections: (S.composeResult && S.composeResult.results || []).map(r => ({
-        id: r.id,
-        label: r.label,
-        content: r.content,
-        contentHtml: this.renderMarkdown(r.content),
-        citations: (r.citations || []).map(cit => {
-          const s = (r.surf || [])[cit.surfIndex];
-          return {
-            jaccard: cit.evidence.jaccard.toFixed(3),
-            source: this._shortSource(s ? s.source : ''),
-            quote: (s ? s.text : '').slice(0, 240),
-          };
-        }),
-      })),
       draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
       inputDisabled: S.streamingLoading,
       stopButtonAnim: S.streamingLoading ? 'animation: eoPulse 1.8s ease-in-out infinite;' : '',
