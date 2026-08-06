@@ -109,7 +109,6 @@ const SHARED_FILE_ALLOWLIST = new Set([
   "vendor/eoreader5/packages/def/attribution.js",
   "vendor/eoreader5/packages/def/svo.js",
   "vendor/eoreader5/packages/def/morphology.js",
-  "vendor/eoPriors/priors/morphology-eng.json",
 ]);
 
 // Tracks a background corpus ingest so "still loading" stays distinguishable
@@ -1311,7 +1310,7 @@ const TOOL_DEFINITIONS = [
         properties: {
           query: { type: "string", description: "Search query (terms or phrase)" },
           limit: { type: "number", description: "Max results (default 20)" },
-          repo: { type: "string", description: "Filter by repo name (e.g. 'eoreader5', 'eoPriors')" },
+          repo: { type: "string", description: "Filter by repo name (e.g. 'eoreader5', 'live_priors')" },
         },
         required: ["query"],
       },
@@ -4017,7 +4016,7 @@ const server = http.createServer((req, res) => {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // Priors — eoPriors artifacts as a browsable, searchable source.
+  // Priors — live_priors as a browsable, searchable source.
   // Separate pool: these are never returned by corpus grounding.
   // ══════════════════════════════════════════════════════════════
   if (req.method === "GET" && req.url.startsWith("/api/priors")) {
@@ -5455,7 +5454,7 @@ async function start() {
   // corpus nobody chose and every ungrounded answer had three books to be
   // wrong about. The corpus now holds exactly what this reader attached.
   //
-  // Priors are unaffected: eoPriors lives in its own pool (see
+  // Priors are unaffected: live_priors lives in its own pool (see
   // priors-source.js) and is deliberately excluded from the sources rail, so
   // wiping the corpus does not thin what steers retrieval.
   //

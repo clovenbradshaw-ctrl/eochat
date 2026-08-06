@@ -116,7 +116,7 @@ export function parseJSON(text) {
  * choice, and two independent choices are not the same choice.
  *
  * The actual fix is the one this whole session has applied to every other
- * naming problem (word order in conventions.js, coref in eoPriors): a name
+ * naming problem (word order in conventions.js, coref in live_priors): a name
  * is a DECLARED, received fact, never independently re-derived by whichever
  * file happens to need it. `sharedVocabulary` is exactly that — decided
  * ONCE, here, and handed to EVERY file verbatim, so index.html and

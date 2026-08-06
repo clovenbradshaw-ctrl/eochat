@@ -1,5 +1,6 @@
 node_modules/
 memory/
+.derived/
 chats/
 audit-output/
 

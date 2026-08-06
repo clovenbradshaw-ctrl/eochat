@@ -1,61 +1,60 @@
-// priors-source.js — makes eoPriors browsable, searchable, and citable in
-// eochat as a first-class source, WITHOUT letting priors leak into corpus
-// grounding.
+// priors-source.js — makes live_priors (github.com/clovenbradshaw-ctrl/live_priors)
+// browsable, searchable, and citable in eochat as a first-class source,
+// WITHOUT letting priors leak into corpus grounding.
 //
-// Two layers per prior, both real files on disk so every citation carries a
-// verifiable byte range (engine-ground.js's read paths fs.readFileSync the
-// resolved path — a synthetic in-memory document would make /api/verbatim/
-// context and /segment unresolvable, and citations unfalsifiable):
+// Each file in the live_priors category tree is one prior. Two layers:
 //
-//   RAW  — the prior's own .json, ingested unmodified. Cite this and the
-//          byte range opens the actual artifact.
-//   CARD — a rendered markdown projection under .derived/prior-cards/,
-//          ingested alongside. JSON tokenizes badly (keys, braces, and
-//          numerics dominate the signal), so the card is what retrieval
-//          actually matches on; it links back to the raw path.
+//   RAW  — the file itself, ingested unmodified. Citations carry a verifiable
+//          byte range into the actual source text.
+//   CARD — a generated markdown wrapper under .derived/prior-cards/ with
+//          metadata header + content preview. Ingested alongside so retrieval
+//          has a clean markdown surface to match on.
 //
-// Both live in the "priors" POOL, never the corpus pool. That boundary is the
-// point: a prior is witness-tier knowledge ABOUT a corpus, not evidence FROM
-// one. If lens-ledger.json could be returned as a grounding passage for "what
-// happens to the creature," the engine/model tier distinction the codebase is
-// built on would be gone. Priors are retrieved only when explicitly asked for.
-//
-// The card RENDERS structure; it never interprets it. Every line is a
-// mechanical projection of a JSON node — no summary sentences, no inferred
-// significance. Anything a card omits (oversized raw files, truncated tables)
-// is stated in the card as an explicit gap with the path to read instead,
-// never silently dropped.
+// Both live in the "priors" POOL, never the corpus pool.
 
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { engineIngestFile, engineDeleteSource, engineSearch, DEFAULT_POOL } from "./engine-ground.js";
-// Resolved centrally in paths.js rather than by walking out of this directory.
-import { PRIORS_ROOT } from "./paths.js";
+import { PRIORS_ROOT, REPO_ROOT } from "./paths.js";
 import { isPriorDisabled, setPriorDisabled } from "./priors-state.js";
 
 export const PRIORS_POOL = "priors";
-const PRIORS_DIR = path.join(PRIORS_ROOT, "priors");
-const CARDS_DIR = path.join(PRIORS_ROOT, ".derived", "prior-cards");
+const CARDS_DIR = path.join(REPO_ROOT, ".derived", "prior-cards");
 
-// Above this, the raw JSON is catalogued and readable by byte range but not
-// admitted to the engine. corpus-prior-cube.json is 7.8MB — ~3,900 chunks of
-// mostly-numeric cells that would swamp the pool's retrieval for no gain. The
-// card still carries its structure, and the omission is reported as a gap.
+const INGESTIBLE_EXTENSIONS = new Set([
+  ".txt", ".md", ".json", ".xml", ".csv",
+  ".scala", ".go", ".py", ".ts", ".c", ".rst",
+  ".toml", ".mjs", ".js",
+]);
+
 const RAW_INGEST_MAX_BYTES = 2 * 1024 * 1024;
+const CARD_PREVIEW_BYTES = 4000;
 
-// Table rows rendered per array before truncating. Cards are for finding your
-// way to the right artifact, not for replacing it.
-const MAX_TABLE_ROWS = 40;
-const MAX_LIST_ITEMS = 30;
-// Object keys are the same kind of "finding your way" surface as table rows:
-// an artifact keyed by surface form (e.g. morphology-eng's `irregular` has
-// ~45k entries) must not render itself into a card as large as the source.
-const MAX_OBJECT_KEYS = 200;
+const CATEGORY_LABELS = {
+  "01-literature-books": "Literature & Books",
+  "02-encyclopedic": "Encyclopedic",
+  "04-pre-aggregated-bulk": "Pre-aggregated Bulk",
+  "05-academic-papers": "Academic Papers",
+  "06-government-legal": "Government & Legal",
+  "07-images-media": "Images & Media",
+  "08-news-current": "News & Current",
+  "09-source-code": "Source Code",
+  "10-audio-music": "Audio & Music",
+  "11-multi-language": "Multi-language",
+  "13-mysticism": "Mysticism",
+  "14-holy-texts": "Holy Texts",
+  "15-western-canon": "Western Canon",
+  "16-organic-community": "Organic Community",
+  "17-formal-algebraic": "Formal & Algebraic",
+};
 
-// ── Catalog ──
+function categoryOf(rel) {
+  const top = rel.split("/")[0];
+  return CATEGORY_LABELS[top] || top;
+}
 
-function walkJson(dir, base = "") {
+function walkFiles(dir, base = "") {
   const out = [];
   let entries;
   try {
@@ -67,71 +66,13 @@ function walkJson(dir, base = "") {
     if (e.name.startsWith(".")) continue;
     const abs = path.join(dir, e.name);
     const rel = base ? `${base}/${e.name}` : e.name;
-    if (e.isDirectory()) out.push(...walkJson(abs, rel));
-    else if (e.name.endsWith(".json")) out.push({ id: rel.replace(/\.json$/, ""), rel, abs });
+    if (e.isDirectory()) out.push(...walkFiles(abs, rel));
+    else {
+      const ext = path.extname(e.name).toLowerCase();
+      if (INGESTIBLE_EXTENSIONS.has(ext)) out.push({ rel, abs });
+    }
   }
   return out;
-}
-
-// A prior's "family" is its declared schema when it has one, else its version
-// key. Declared, not guessed from the filename — a name is not an identity.
-function familyOf(json) {
-  if (!json || typeof json !== "object") return "unknown";
-  if (typeof json.schema === "string") return json.schema;
-  const versionKey = Object.keys(json).find((k) => /_version$/.test(k));
-  if (versionKey && typeof json[versionKey] === "string") return json[versionKey];
-  return "unstructured";
-}
-
-// What a prior is ABOUT, read off what it declares — never inferred from its
-// filename or its schema. A prior scoped to one text is a different kind of
-// evidence from one folded over a corpus: the first applies only while reading
-// that text, the second conditions any reading. That distinction is the useful
-// one at the surface, and both artifacts state it themselves.
-//
-// `kind` is one of:
-//   text   — declares a single source text (`source: "… pg84 — Frankenstein …"`)
-//   prior  — declares another prior as its source (holons-L2 ← holons-L1.json)
-//   corpus — declares the corpus it was generated from, or the texts it covers
-//   none   — declares no subject. A typed gap, not a guess: it groups under
-//            "scope not declared" rather than being quietly filed as corpus-wide.
-function scopeOf(json) {
-  if (!json || typeof json !== "object") return { kind: "none", label: "scope not declared" };
-
-  const src = json.source;
-  if (typeof src === "string" && src.trim()) {
-    // A `source` naming another artifact is a derivation, not a subject.
-    if (/\.json$/i.test(src.trim())) {
-      return { kind: "prior", label: "derived from another prior", detail: src.trim() };
-    }
-    return { kind: "text", label: src.trim() };
-  }
-
-  const gen = json.generated_from;
-  if (gen && typeof gen === "object") {
-    const corpus = gen.corpus_dir_basename || gen.corpus_dir;
-    const books = typeof gen.books === "number" ? gen.books : null;
-    if (corpus) {
-      return {
-        kind: "corpus",
-        label: "corpus-wide",
-        detail: books != null ? `${corpus} · ${books} books` : String(corpus),
-      };
-    }
-  }
-
-  if (Array.isArray(json.texts) && json.texts.length) {
-    return { kind: "corpus", label: "corpus-wide", detail: `${json.texts.length} texts` };
-  }
-
-  // An artifact that states WHY it has no scope has said something real, and
-  // the reason travels with the gap. Undeclared-and-explained beats
-  // undeclared-and-silent: the reader can tell "nobody got to it yet" from
-  // "there is genuinely no corpus behind this one".
-  const why = typeof json.provenance_gap === "string" && json.provenance_gap.trim()
-    ? json.provenance_gap.trim()
-    : null;
-  return { kind: "none", label: "scope not declared", gap: why };
 }
 
 function hashOf(buf) {
@@ -140,60 +81,35 @@ function hashOf(buf) {
 
 let catalogCache = null;
 
-// Parse a prior's JSON on demand. Deliberately NOT cached: the catalog is a
-// long-lived module singleton, and holding every parsed artifact in it
-// retained ~33MB — most of it corpus-prior-cube.json (7.7MB of text becoming
-// a far larger object graph) — for the entire life of the proxy, to serve a
-// listing that only needs each file's size, family, scope and key names.
-// Cards are rebuilt only when a file's hash changes, so this parses rarely.
-export function readPriorJson(item) {
-  try {
-    return { json: JSON.parse(fs.readFileSync(item.path, "utf8")), gap: null };
-  } catch (err) {
-    return { json: null, gap: `unparseable JSON: ${err.message}` };
-  }
-}
-
 export function priorsCatalog({ refresh = false } = {}) {
   if (catalogCache && !refresh) return catalogCache;
   const items = [];
-  for (const { id, rel, abs } of walkJson(PRIORS_DIR)) {
+  for (const { rel, abs } of walkFiles(PRIORS_ROOT)) {
     const stat = fs.statSync(abs);
-    let json = null;
-    let parseGap = null;
-    try {
-      json = JSON.parse(fs.readFileSync(abs, "utf8"));
-    } catch (err) {
-      parseGap = `unparseable JSON: ${err.message}`;
-    }
+    const ext = path.extname(abs).toLowerCase();
+    const id = rel.replace(/\.[^.]+$/, "");
+    const cardPath = path.join(CARDS_DIR, `${id}.md`);
     items.push({
       id,
       rel,
       path: abs,
       bytes: stat.size,
-      family: parseGap ? "unreadable" : familyOf(json),
-      scope: parseGap ? { kind: "none", label: "scope not declared" } : scopeOf(json),
-      keys: json && typeof json === "object" ? Object.keys(json) : [],
-      cardPath: path.join(CARDS_DIR, `${id}.md`),
-      // User-facing on/off, independent of `gap` — a prior can be perfectly
-      // readable and still switched off, and switching it off is never itself
-      // a gap (it's a choice, not a failure to ingest).
+      ext,
+      category: categoryOf(rel),
+      cardPath,
       disabled: isPriorDisabled(id),
       rawIngestable: stat.size <= RAW_INGEST_MAX_BYTES,
-      gap: parseGap
-        || (stat.size > RAW_INGEST_MAX_BYTES
-          ? `raw not admitted to the engine (${(stat.size / 1048576).toFixed(1)}MB > ${RAW_INGEST_MAX_BYTES / 1048576}MB cap); card is indexed, raw is readable by byte range`
-          : null),
+      gap: stat.size > RAW_INGEST_MAX_BYTES
+        ? `raw not admitted to the engine (${(stat.size / 1048576).toFixed(1)}MB > ${RAW_INGEST_MAX_BYTES / 1048576}MB cap); card is indexed, raw is readable by byte range`
+        : null,
     });
-    // `json` goes out of scope here rather than onto the cached entry — see
-    // readPriorJson above. Card rendering re-reads it when it actually needs it.
   }
   catalogCache = items;
   return items;
 }
 
 export function findPrior(id) {
-  const wanted = String(id || "").replace(/\.json$/, "");
+  const wanted = String(id || "");
   const cat = priorsCatalog();
   return cat.find((p) => p.id === wanted)
     || cat.find((p) => p.id.endsWith(`/${wanted}`))
@@ -201,223 +117,59 @@ export function findPrior(id) {
     || null;
 }
 
-// ── Card rendering ──
-//
-// A mechanical JSON → markdown projection. Three shapes get special handling
-// because they carry the signal: scalars (inline), arrays of uniform objects
-// (tables), and everything else (nested sections). Nothing is summarized.
-
-const isScalar = (v) => v === null || ["string", "number", "boolean"].includes(typeof v);
-
-// Slicing a JSON blob mid-token leaves the reader unable to tell a truncation
-// from the artifact genuinely ending there. Always mark the cut.
-function jsonExcerpt(value, maxChars) {
-  const full = JSON.stringify(value, null, 2);
-  if (full.length <= maxChars) return full;
-  return `${full.slice(0, maxChars)}\n… truncated at ${maxChars} of ${full.length} chars`;
-}
-
-function fmtScalar(v) {
-  if (v === null) return "—";
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(6).replace(/0+$/, "");
-  const s = String(v);
-  // Long hex digests are provenance, not prose: keep them findable but short.
-  if (/^[0-9a-f]{32,}$/i.test(s)) return `${s.slice(0, 12)}… (${s.length} hex)`;
-  return s.length > 300 ? `${s.slice(0, 300)}…` : s;
-}
-
-function cellFor(v) {
-  if (v === undefined || v === null) return "—";
-  if (isScalar(v)) return fmtScalar(v).replace(/\|/g, "\\|").replace(/\n/g, " ");
-  if (Array.isArray(v)) return `[${v.length} items]`;
-  return `{${Object.keys(v).slice(0, 4).join(", ")}}`;
-}
-
-// Columns are the union of keys across sampled rows, so a field present on
-// only some rows still gets a column rather than vanishing.
-function columnsOf(rows) {
-  const cols = [];
-  const seen = new Set();
-  for (const r of rows.slice(0, 50)) {
-    for (const k of Object.keys(r)) {
-      if (!seen.has(k)) { seen.add(k); cols.push(k); }
-    }
-  }
-  return cols.slice(0, 10);
-}
-
-function renderArray(key, arr, depth, ctx) {
-  const out = [];
-  const heading = "#".repeat(Math.min(depth + 2, 6));
-  out.push(`${heading} ${key} — ${arr.length} ${arr.length === 1 ? "entry" : "entries"}`, "");
-
-  if (arr.length === 0) { out.push("_(empty)_", ""); return out; }
-
-  if (arr.every(isScalar)) {
-    const shown = arr.slice(0, MAX_LIST_ITEMS).map(fmtScalar);
-    out.push(shown.map((s) => `- ${s}`).join("\n"));
-    if (arr.length > MAX_LIST_ITEMS) {
-      const dropped = arr.length - MAX_LIST_ITEMS;
-      out.push(`- _… ${dropped} more not rendered — read \`${ctx.rel}\` for all ${arr.length}_`);
-      ctx.truncations.push(`${key}: ${dropped} of ${arr.length} items not rendered`);
-    }
-    out.push("");
-    return out;
-  }
-
-  if (arr.every((v) => v && typeof v === "object" && !Array.isArray(v))) {
-    const cols = columnsOf(arr);
-    const rows = arr.slice(0, MAX_TABLE_ROWS);
-    out.push(`| ${cols.join(" | ")} |`, `| ${cols.map(() => "---").join(" | ")} |`);
-    for (const r of rows) out.push(`| ${cols.map((c) => cellFor(r[c])).join(" | ")} |`);
-    out.push("");
-    if (arr.length > MAX_TABLE_ROWS) {
-      const dropped = arr.length - MAX_TABLE_ROWS;
-      out.push(`_… ${dropped} more rows not rendered — read \`${ctx.rel}\` for all ${arr.length}._`, "");
-      ctx.truncations.push(`${key}: ${dropped} of ${arr.length} rows not rendered`);
-    }
-    // One expanded exemplar, so nested structure the table flattened to
-    // "{a, b}" is still visible somewhere in the card.
-    const nested = cols.filter((c) => arr[0][c] && typeof arr[0][c] === "object");
-    if (nested.length) {
-      out.push(`First entry expanded:`, "", "```json", jsonExcerpt(arr[0], 1400), "```", "");
-    }
-    return out;
-  }
-
-  out.push("```json", jsonExcerpt(arr.slice(0, 5), 1600), "```", "");
-  if (arr.length > 5) {
-    out.push(`_… ${arr.length - 5} more of ${arr.length} mixed-shape entries not rendered — read \`${ctx.rel}\`._`, "");
-    ctx.truncations.push(`${key}: ${arr.length - 5} of ${arr.length} mixed-shape entries not rendered`);
-  }
-  return out;
-}
-
-function renderNode(key, value, depth, ctx) {
-  if (isScalar(value)) return [`- **${key}**: ${fmtScalar(value)}`];
-  if (Array.isArray(value)) return renderArray(key, value, depth, ctx);
-
-  const entries = Object.entries(value);
-  const scalars = entries.filter(([, v]) => isScalar(v));
-  const complex = entries.filter(([, v]) => !isScalar(v));
-  const out = [];
-  const heading = "#".repeat(Math.min(depth + 2, 6));
-  out.push(`${heading} ${key}`, "");
-  const scalarShown = scalars.slice(0, MAX_OBJECT_KEYS);
-  for (const [k, v] of scalarShown) out.push(`- **${k}**: ${fmtScalar(v)}`);
-  if (scalars.length > scalarShown.length) {
-    out.push(`- _… ${scalars.length - scalarShown.length} more scalar field(s) not rendered — read \`${ctx.rel}\`._`);
-    ctx.truncations.push(`${key}: ${scalars.length - scalarShown.length} of ${scalars.length} scalar fields not rendered`);
-  }
-  if (scalars.length) out.push("");
-  // Depth guard: past three levels the projection stops being readable and
-  // the raw file is the better artifact to send the reader to.
-  if (depth >= 3) {
-    if (complex.length) {
-      out.push(`_${complex.length} nested field(s) not expanded at this depth — read \`${ctx.rel}\`._`, "");
-      ctx.truncations.push(`${key}: ${complex.length} nested fields beyond depth 3`);
-    }
-    return out;
-  }
-  const complexShown = complex.slice(0, MAX_OBJECT_KEYS);
-  for (const [k, v] of complexShown) {
-    // Append by loop, never `body.push(...)`: a node with tens of thousands
-    // of sibling keys would otherwise blow the call stack on the spread.
-    for (const line of renderNode(k, v, depth + 1, ctx)) out.push(line);
-  }
-  if (complex.length > complexShown.length) {
-    out.push(`_… ${complex.length - complexShown.length} more nested field(s) not rendered — read \`${ctx.rel}\`._`, "");
-    ctx.truncations.push(`${key}: ${complex.length - complexShown.length} of ${complex.length} nested fields not rendered`);
-  }
-  return out;
-}
-
-// `json` is passed in rather than read off the catalog entry, so the parsed
-// artifact lives only as long as the render that needs it.
-export function renderCard(item, json = readPriorJson(item).json) {
-  const ctx = { rel: `eoPriors/priors/${item.rel}`, truncations: [] };
+export function renderCard(item) {
   const body = [];
-
-  if (!json) {
-    return [
-      `# ${item.id}`, "",
-      `- **source**: \`${ctx.rel}\``,
-      `- **bytes**: ${item.bytes}`,
-      "",
-      `## Gap`, "", item.gap || "prior could not be read", "",
-    ].join("\n");
-  }
-
-  const entries = Object.entries(json);
-  const scalars = entries.filter(([, v]) => isScalar(v));
-  const complex = entries.filter(([, v]) => !isScalar(v));
-
   body.push(`# ${item.id}`, "");
   body.push(
-    `- **family**: ${item.family}`,
-    `- **source**: \`${ctx.rel}\``,
+    `- **category**: ${item.category}`,
+    `- **source**: \`live_priors/${item.rel}\``,
     `- **bytes**: ${item.bytes}`,
-    `- **top-level keys**: ${entries.map(([k]) => k).join(", ")}`,
+    `- **github**: https://github.com/clovenbradshaw-ctrl/live_priors/blob/main/${item.rel}`,
     "",
   );
-  if (scalars.length) {
-    body.push(`## Declared`, "");
-    const shown = scalars.slice(0, MAX_OBJECT_KEYS);
-    for (const [k, v] of shown) body.push(`- **${k}**: ${fmtScalar(v)}`);
-    if (scalars.length > shown.length) {
-      body.push(`- _… ${scalars.length - shown.length} more top-level scalar field(s) not rendered — read \`${ctx.rel}\`._`);
-      ctx.truncations.push(`${scalars.length - shown.length} of ${scalars.length} top-level scalar fields not rendered`);
-    }
-    body.push("");
-  }
-  const complexShown = complex.slice(0, MAX_OBJECT_KEYS);
-  for (const [k, v] of complexShown) {
-    // Append by loop, never `body.push(...)`: a top-level field with tens of
-    // thousands of sibling keys would otherwise blow the call stack.
-    for (const line of renderNode(k, v, 1, ctx)) body.push(line);
-  }
-  if (complex.length > complexShown.length) {
-    body.push(`_… ${complex.length - complexShown.length} more top-level nested field(s) not rendered — read \`${ctx.rel}\`._`, "");
-    ctx.truncations.push(`${complex.length - complexShown.length} of ${complex.length} top-level nested fields not rendered`);
+
+  let content = "";
+  try {
+    content = fs.readFileSync(item.path, "utf8");
+  } catch {
+    body.push("## Gap", "", "file could not be read", "");
+    return body.join("\n");
   }
 
-  const gaps = [...ctx.truncations];
-  if (item.gap) gaps.unshift(item.gap);
-  body.push(
-    `## Gaps`, "",
-    gaps.length
-      ? gaps.map((g) => `- ${g}`).join("\n")
-      : `- none — this card renders every field of \`${ctx.rel}\``,
-    "",
-    `_This card is a mechanical projection of \`${ctx.rel}\`. It renders structure; it does not interpret it. The raw artifact is the authority._`,
-    "",
-  );
+  if (content.length > CARD_PREVIEW_BYTES) {
+    body.push(
+      `## Preview`, "",
+      content.slice(0, CARD_PREVIEW_BYTES),
+      "",
+      `_… truncated at ${CARD_PREVIEW_BYTES} of ${content.length} chars — read raw for full content._`,
+      "",
+    );
+  } else {
+    body.push("## Content", "", content, "");
+  }
+
+  if (item.gap) {
+    body.push("## Gaps", "", `- ${item.gap}`, "");
+  }
+
   return body.join("\n");
 }
 
-// Write cards for every catalogued prior. A card is rewritten only when the
-// raw artifact's hash changes, so cards are stable across restarts and their
-// byte offsets don't churn under previously-issued citations.
 export function buildCards({ force = false } = {}) {
   fs.mkdirSync(CARDS_DIR, { recursive: true });
   const written = [];
   for (const item of priorsCatalog()) {
-    // Hash the bytes without holding them: the stamp decides whether this card
-    // needs rebuilding at all, and most runs rebuild nothing.
     const stamp = `<!-- source-sha256: ${hashOf(fs.readFileSync(item.path))} -->`;
     fs.mkdirSync(path.dirname(item.cardPath), { recursive: true });
     if (!force && fs.existsSync(item.cardPath)) {
       const existing = fs.readFileSync(item.cardPath, "utf8");
       if (existing.startsWith(stamp)) continue;
     }
-    // Parsed here, dropped when the loop iteration ends.
-    fs.writeFileSync(item.cardPath, `${stamp}\n${renderCard(item, readPriorJson(item).json)}`, "utf8");
+    fs.writeFileSync(item.cardPath, `${stamp}\n${renderCard(item)}`, "utf8");
     written.push(item.id);
   }
   return written;
 }
-
-// ── Ingest ──
 
 let ingested = null;
 
@@ -428,9 +180,6 @@ export function ensurePriorsIngested({ force = false } = {}) {
   const sources = [];
   const gaps = [];
   for (const item of priorsCatalog()) {
-    // A prior the user switched off stays cataloged (still browsable, still
-    // readable by id) but never enters the priors pool — it must neither
-    // steer retrieval nor turn up in /api/priors/search while off.
     if (item.disabled) {
       gaps.push(`${item.id}: disabled by user — not ingested (toggle it on in the Priors tab)`);
       continue;
@@ -454,7 +203,7 @@ export function ensurePriorsIngested({ force = false } = {}) {
       const raw = engineIngestFile(item.path, {
         pool: PRIORS_POOL,
         kind: "prior-raw",
-        displayName: `${item.id}.json`,
+        displayName: item.rel,
       });
       sources.push({ id: item.id, layer: "raw", chunks: raw.chunks, path: item.path });
     } catch (err) {
@@ -466,29 +215,12 @@ export function ensurePriorsIngested({ force = false } = {}) {
   return ingested;
 }
 
-// Toggle one prior's on/off state — the mechanism behind the Priors tab's
-// per-item and per-bucket switches. `enabled: false` pulls its card+raw spans
-// out of the priors pool (engineDeleteSource) so it stops being searchable
-// and stops widening any per-text coref query (priors-bridge.js checks the
-// same flag independently); `enabled: true` re-ingests it. Both directions
-// are no-ops if the state didn't actually change, so flipping a whole bucket
-// that already has mixed on/off items never double-ingests the ones already
-// in the requested state.
-//
-// This never touches the shared corpus recycle bin's UI surface even though
-// it reuses engineDeleteSource under the hood — that function's recycle bin
-// is a plain Map keyed by source path and tagged with `pool`, so a prior's
-// entry sits there tagged `pool: "priors"` and the corpus Sources rail
-// filters recycle-bin rows to its own pool.
 export function setPriorEnabled(id, enabled) {
   const item = findPrior(id);
   if (!item) return { error: `unknown prior "${id}"` };
 
   const changed = setPriorDisabled(item.id, !enabled);
   if (!changed) return { id: item.id, disabled: !enabled, changed: false };
-  // The catalog cache carries `disabled` per item (read off priors-state.js
-  // at catalog-build time); force a rebuild so the next /api/priors response
-  // reflects this toggle instead of the state from whenever the cache warmed.
   catalogCache = null;
 
   const gaps = [];
@@ -500,7 +232,7 @@ export function setPriorEnabled(id, enabled) {
     }
     if (item.rawIngestable) {
       try {
-        engineIngestFile(item.path, { pool: PRIORS_POOL, kind: "prior-raw", displayName: `${item.id}.json` });
+        engineIngestFile(item.path, { pool: PRIORS_POOL, kind: "prior-raw", displayName: item.rel });
       } catch (err) {
         gaps.push(`raw ingest failed for ${item.id}: ${err.message}`);
       }
@@ -518,10 +250,6 @@ export function setPriorEnabled(id, enabled) {
   return { id: item.id, disabled: !enabled, changed: true, gaps };
 }
 
-// ── Read & search ──
-
-// Read a prior's bytes directly — the escape hatch for artifacts too large to
-// admit, and the way to verify any citation this module produced.
 export function readPrior(id, { layer = "raw", byteStart = 0, maxBytes = 40000 } = {}) {
   const item = findPrior(id);
   if (!item) return { error: `unknown prior "${id}"` };
@@ -541,7 +269,7 @@ export function readPrior(id, { layer = "raw", byteStart = 0, maxBytes = 40000 }
     id: item.id,
     layer,
     path: target,
-    family: item.family,
+    category: item.category,
     byte_start: start,
     byte_end: start + length,
     total_bytes: stat.size,
@@ -551,17 +279,9 @@ export function readPrior(id, { layer = "raw", byteStart = 0, maxBytes = 40000 }
   };
 }
 
-// Search the priors pool. Never touches the corpus pool — asking about the
-// priors and asking about the texts are different questions with different
-// evidence, and the caller has to say which one it means.
 export function searchPriors(query, limit = 8, { maxChars = 900, prior } = {}) {
   ensurePriorsIngested();
   if (DEFAULT_POOL === PRIORS_POOL) throw new Error("priors pool must not be the default pool");
-  // Filter by the prior's ID, not its path: engineSearch matches on the
-  // filter's basename, and the id (no extension) is the one string that
-  // matches BOTH layers — `lens-fold.json` and `lens-fold.md`. Passing the raw
-  // path would silently exclude the card, which is the layer retrieval is
-  // most likely to have hit.
   const source = prior ? (findPrior(prior)?.id ?? prior) : null;
   return engineSearch(query, limit, { maxChars, source, pool: PRIORS_POOL });
 }

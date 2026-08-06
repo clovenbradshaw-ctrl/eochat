@@ -1,7 +1,7 @@
 // Every path EOChat needs to reach outside its own repo, resolved in one place.
 //
 // The old proxy hardcoded seven `/Users/mlacy/Documents/Default Project/...`
-// absolute paths and reached for `../eoPriors` by walking up out of its own
+// absolute paths and reached for `../live_priors` by walking up out of its own
 // directory. Both assumed one developer's checkout: the first breaks on any
 // other machine, and the second breaks the moment the file moves. This repo
 // keeps its live engine and priors as sibling checkouts, so the defaults
@@ -26,9 +26,9 @@ export const ENGINE_ROOT = path.resolve(
   process.env.EOCHAT_ENGINE_PATH || path.resolve(REPO_ROOT, "..", "eoreader6")
 );
 
-/** Pinned priors checkout. Override with EOCHAT_PRIORS_PATH. */
+/** Live priors checkout. Override with EOCHAT_PRIORS_PATH. */
 export const PRIORS_ROOT = path.resolve(
-  process.env.EOCHAT_PRIORS_PATH || path.join(REPO_ROOT, "vendor", "eoPriors")
+  process.env.EOCHAT_PRIORS_PATH || path.join(REPO_ROOT, "vendor", "live_priors")
 );
 
 /** Per-text coref alias/narrator priors — witness-tier, injected never derived. */
@@ -89,7 +89,7 @@ export function assertDependencies() {
   if (!fs.existsSync(path.join(ENGINE_ROOT, "packages", "engine"))) {
     missing.push(`engine not found at ${ENGINE_ROOT}`);
   }
-  if (!fs.existsSync(path.join(PRIORS_ROOT, "priors"))) {
+  if (!fs.existsSync(path.join(PRIORS_ROOT, "01-literature-books"))) {
     missing.push(`priors not found at ${PRIORS_ROOT}`);
   }
   if (missing.length) {

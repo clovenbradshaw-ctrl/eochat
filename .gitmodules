@@ -2,6 +2,6 @@
 	path = vendor/eoreader5
 	url = https://github.com/clovenbradshaw-ctrl/eoreader5.git
 	branch = fix/retrieval-lexical-ranking
-[submodule "vendor/eoPriors"]
-	path = vendor/eoPriors
-	url = https://github.com/clovenbradshaw-ctrl/eoPriors.git
+[submodule "vendor/live_priors"]
+	path = vendor/live_priors
+	url = https://github.com/clovenbradshaw-ctrl/live_priors.git

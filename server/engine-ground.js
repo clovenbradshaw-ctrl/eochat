@@ -8,7 +8,7 @@
 //
 // A pool is a retrieval boundary, not a label: each pool owns its own engine
 // session and span registry, so searchSpans in one pool can never return a
-// span from another. That is what keeps the "priors" pool (eoPriors artifacts,
+// span from another. That is what keeps the "priors" pool (live_priors source texts,
 // see priors-source.js) out of corpus grounding — a question about the
 // creature must not be answered with lens-ledger JSON. Priors are witness-tier
 // knowledge about the corpus; corpus text is evidence from it. Mixing them in
@@ -36,7 +36,7 @@ import {
 // This way a v1 host still links and the fold path reports a typed gap.
 import * as corpusFacade from "@eoreader/host/corpus";
 import { INDIVIDUATION_TYPES } from "@eoreader/engine/referents";
-import { classify, classifyAmplitudes } from "@eoreader/engine/cube";
+import { classify, classifyAmplitudes } from "../vendor/eoreader5/packages/engine/cube/index.js";
 import { loadCorefPrior, surfaceMatcher, activatePriors } from "./priors-bridge.js";
 import { runIngestInWorker } from "./ingest-worker-client.js";
 import { contentTerms } from "./conversation-memory.js";

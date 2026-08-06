@@ -23,7 +23,7 @@
 //   words "letter" and "chapter", which this file never inspects.
 //
 // Which surfaces predicate one being is MODEL-tier knowledge, so it is injected
-// from eoPriors/priors/coref/pg84-frankenstein.json and never derived here.
+// from live_priors coref priors and never derived here.
 // Missing prior => typed gap, never a silently wrong nesting.
 
 import fs from "node:fs";

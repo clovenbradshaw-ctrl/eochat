@@ -4,7 +4,7 @@
 // Per CLAUDE.md / eoreader5's AGENTS.md: coref resolution is the #1
 // repeatedly-reinvented wheel. The canonical path is
 // perceiver/text/presence.js::admitReferent, fed by per-text priors at
-// eoPriors/priors/coref/*.json. This module is a thin bridge — it does not
+// live_priors/priors/coref/*.json. This module is a thin bridge — it does not
 // resolve "is this entity here" itself, it asks the engine.
 //
 // Priors activated here are NEVER shown to the model as text (see
@@ -17,7 +17,7 @@
 import { readFileSync, readdirSync, existsSync } from "fs";
 import path from "path";
 import { admitReferent } from "@eoreader/engine/perceiver/text/presence";
-// Resolved centrally in paths.js. This used to walk `../eoPriors` out of its
+// Resolved centrally in paths.js. This used to walk `../live_priors` out of its
 // own directory, which assumed one particular checkout layout and broke the
 // moment the file moved.
 import { COREF_DIR } from "./paths.js";
