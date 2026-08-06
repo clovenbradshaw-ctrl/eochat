@@ -20,7 +20,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { LEGACY_ENGINE_ROOT, UI_DIR } from "../server/paths.js";
+import { formatTerrainReport } from "../server/terrain-report-format.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -652,6 +654,111 @@ async function checkErrorsDoNotWearSuccess() {
   }
 }
 
+// ── L6: no implied completeness ─────────────────────────────────────────────
+//
+// Static, not live — the only real check the other laws' style would call
+// for is a browser rendering the fold panel against real ingested content,
+// which this script has no harness for. What IS checked here is real:
+// engine-ground.js's engineFoldSource computes withheld_total (the count
+// before its own `limit` truncates the withheld array) specifically so, in
+// its own words, "a truncated list cannot be mistaken for the whole one" —
+// this verifies that number actually reaches the UI's own "N shown" note
+// (ui/index.html's voidCandidateNote) rather than being computed and
+// dropped, which was the real, live gap found and fixed in this pass: the
+// UI already read withheld_total per-document (`d.withheldTotal`, shown in
+// a summary line) but the specific panel listing withheld candidates
+// compared only against its own already-engine-truncated array length.
+async function checkNoImpliedCompleteness() {
+  section("L6: no implied completeness");
+  const uiPath = path.join(UI_DIR, "index.html");
+  const src = fs.existsSync(uiPath) ? fs.readFileSync(uiPath, "utf8") : "";
+  if (!src) {
+    record("L6", "L6a", "SKIP", `ui/index.html not found at ${uiPath}`, {});
+    return;
+  }
+  const hasTrueTotal = /withheldTrueTotal\s*=\s*castDocs\.reduce/.test(src);
+  const reconciledInNote = hasTrueTotal && /voidCandidateNote\s*=\s*withheldTrueTotal\s*>\s*castWithheld\.length/.test(src);
+  record("L6", "L6a", reconciledInNote ? "PASS" : "VIOLATION",
+    reconciledInNote
+      ? "the withheld-candidates panel reconciles its own display note against the engine's true withheld_total, not just its own already-truncated array"
+      : "the withheld-candidates panel's \"N shown\" note does not check the engine's real withheld_total — a document where the ENGINE itself capped withheld candidates below the real count would show as complete when it is not",
+    { checked: uiPath, static_check: true });
+}
+
+// ── L7: no silent degradation across language or medium ────────────────────
+//
+// Real, not mocked: this imports formatTerrainReport directly (the exact
+// function server/proxy.js's terrain_report handler calls — extracted to
+// its own module specifically so it is unit-testable without a live proxy
+// or a model round-trip, see server/terrain-report-format.js's header) and
+// runs the REAL cube classifier (vendor/eoreader5, via buildReadingFromBytes)
+// against real Greek text and real English text, checking both directions:
+// the scope-ambiguity disclosure must appear when no signal is detected
+// (measured: real Greek scores exactly this) and must NOT appear when the
+// classifier does find real signal, so the check also catches the caveat
+// becoming permanently-on noise, not just permanently-off.
+async function checkNoSilentDegradation() {
+  section("L7: no silent degradation across language or medium");
+  const dispatchPath = path.join(LEGACY_ENGINE_ROOT, "packages", "engine", "perceiver", "dispatch.js");
+  if (!fs.existsSync(dispatchPath)) {
+    record("L7", "L7a", "SKIP", `eoreader5 perceiver not present at ${dispatchPath} — run git submodule update --init --recursive`, {});
+    return;
+  }
+  const { buildReadingFromBytes } = await import(pathToFileURL(dispatchPath).href);
+
+  // Real Greek (Odyssey, Book 1 opening line — no fetch needed, short enough
+  // to inline) — the cube classifier's English-only lexicon (cube/index.js,
+  // discloses its own scope) has no terms that fire on this at all.
+  const greekBytes = Buffer.from(
+    "ἄνδρα μοι ἔννεπε, μοῦσα, πολύτροπον, ὃς μάλα πολλὰ πλάγχθη, ἐπεὶ Τροίης ἱερὸν πτολίεθρον ἔπερσεν·",
+    "utf8"
+  );
+  const greekReading = await buildReadingFromBytes(greekBytes);
+  const greekText = formatTerrainReport(greekReading.terrain_report, greekReading.born_gate, "test:greek");
+  const greekHasCaveat = greekText.includes("this classifier's terrain lexicon is English-only");
+  record("L7", "L7a", greekHasCaveat ? "PASS" : "VIOLATION",
+    greekHasCaveat
+      ? "real Greek text (no signal detected) discloses the classifier's English-only scope rather than reading as a considered Void finding"
+      : "real Greek text scored no signal with NO scope disclosure — reads as \"this source has no structure\" rather than \"outside this classifier's competence\"",
+    { medium: greekReading.terrain_report?.medium, signal_detected: !!greekReading.born_gate?.signalDetected });
+
+  // Real English with real terrain-lexicon hits — the caveat must be absent
+  // here, or it has become noise attached to every result instead of a
+  // signal attached to the ambiguous ones.
+  const englishBytes = Buffer.from(
+    "She felt a deep and troubling grief, a sorrow that welled up like tears she could not explain, " +
+    "an atmosphere of sadness hanging over the empty house.",
+    "utf8"
+  );
+  const englishReading = await buildReadingFromBytes(englishBytes);
+  const englishText = formatTerrainReport(englishReading.terrain_report, englishReading.born_gate, "test:english");
+  const englishHasCaveat = englishText.includes("this classifier's terrain lexicon is English-only");
+  const englishSignal = !!englishReading.born_gate?.signalDetected;
+  record("L7", "L7b", (englishSignal && !englishHasCaveat) ? "PASS" : "VIOLATION",
+    (englishSignal && !englishHasCaveat)
+      ? "real English text with real terrain signal renders cleanly, without the scope caveat cluttering a genuine finding"
+      : `unexpected: signal_detected=${englishSignal}, caveat_present=${englishHasCaveat} — either the fixture stopped triggering real signal or the caveat is firing when it should not`,
+    { medium: englishReading.terrain_report?.medium, signal_detected: englishSignal });
+
+  // L7c — terrain_report was not the only place this conflation lived.
+  // ingest_file's terrain summary and search_memory's terrain hint both had
+  // the identical unqualified "Void" string. Both are small ternaries
+  // embedded inside large, stateful proxy.js handlers (store.ingest side
+  // effects, session state) — not pulled into their own pure module the way
+  // formatTerrainReport was, so this checks the real shipped source text
+  // directly rather than importing proxy.js (which starts a server as a
+  // side effect of module load; see terrain-report-format.js's header).
+  const proxyPath = path.join(REPO_ROOT, "server", "proxy.js");
+  const proxySrc = fs.existsSync(proxyPath) ? fs.readFileSync(proxyPath, "utf8") : "";
+  const ingestFixed = /Terrain: Void, or outside this English-only classifier's scope/.test(proxySrc);
+  const searchHintFixed = /\[terrain: Void\/out-of-scope\]/.test(proxySrc);
+  record("L7", "L7c", (ingestFixed && searchHintFixed) ? "PASS" : "VIOLATION",
+    (ingestFixed && searchHintFixed)
+      ? "ingest_file's terrain summary and search_memory's terrain hint both disclose the same scope ambiguity terrain_report does, not just the tool handler that was checked first"
+      : `unqualified "Void" still present: ingest summary fixed=${ingestFixed}, search hint fixed=${searchHintFixed}`,
+    { checked: proxyPath, static_check: true });
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────
 
 async function listSourceKeys() {
@@ -705,12 +812,21 @@ function section(title) {
 // ── main ───────────────────────────────────────────────────────────────────
 
 async function main() {
+  // L6 and L7 need neither a live proxy nor a model — one is a static source
+  // check, the other imports the real formatting function and the real
+  // vendored classifier directly. Run first, unconditionally, so they still
+  // report in any environment, including one with no proxy running at all.
+  await checkNoImpliedCompleteness();
+  await checkNoSilentDegradation();
+
   const up = await fetch(`${PROXY}/health`).then((r) => r.ok).catch(() => false);
   if (!up) {
-    console.error(`check-laws: no proxy at ${PROXY} — start it with \`npm start\``);
-    process.exit(2);
+    if (!AS_JSON) console.log(`\nno proxy at ${PROXY} — skipping L1/L2/L3 (live-proxy checks); start it with \`npm start\` to run those too`);
+    const violations = findings.filter((f) => f.status === "VIOLATION");
+    if (AS_JSON) console.log(JSON.stringify({ proxy: null, findings, summary: { pass: findings.filter((f) => f.status === "PASS").length, violation: violations.length, skip: findings.filter((f) => f.status === "SKIP").length } }, null, 2));
+    process.exit(sawViolation ? 1 : 0);
   }
-  if (!AS_JSON) console.log(`check-laws — proxy ${PROXY}\nbudget: first signal ≤ ${TTFS_BUDGET_MS}ms (instant ≤ ${TTFS_INSTANT_MS}ms)`);
+  if (!AS_JSON) console.log(`\ncheck-laws — proxy ${PROXY}\nbudget: first signal ≤ ${TTFS_BUDGET_MS}ms (instant ≤ ${TTFS_INSTANT_MS}ms)`);
 
   baseline = await listSourceKeys();
   if (!AS_JSON) console.log(`baseline: ${baseline.size} source(s) already loaded — these are left untouched`);

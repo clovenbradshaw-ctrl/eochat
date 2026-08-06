@@ -23,11 +23,6 @@
      nothing at load — the model itself is only fetched once init() is
      called (toggling "Local" on). -->
 <script type="module" src="./webllm-client.js"></script>
-<!-- Deliberate long-form answers driven by the local WebLLM engine instead
-     of Ollama — window.EOLongform, same reason as window.EOWebLLM above.
-     Fetches server/longform-orchestrator.js's exact bytes from the proxy's
-     /shared/ route on first use; nothing loads at page-load time. -->
-<script type="module" src="./webllm-longform.js"></script>
 <!-- Senses that install: Hugging Face vision models downloaded into this
      browser and run here via Transformers.js, wired through window.EOSenses
      for the same reason as above. Nothing is fetched at load — the weights
@@ -62,7 +57,7 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.3/dist/tesseract.min.js"></script>
 <!-- Renders markdown in AI answers. Falls through to plain text if the CDN is
       unreachable — same offline-degrade pattern as the other optional libs. -->
-<script src="https://unpkg.com/marked@15.0.7/marked.min.js"></script>
+<script src="https://unpkg.com/marked@15.0.7/lib/marked.umd.min.js"></script>
 <!-- Renders LaTeX math ($...$ / $$...$$) in AI answers via KaTeX.
      renderMarkdown() checks `typeof katex` and falls through to the literal
      $…$ text if this fails to load (offline, CDN blocked), the same offline-
@@ -205,16 +200,6 @@
     /* Touch targets: a 24px icon button is below every platform's minimum and
        is the difference between a control and a coin toss on a phone. */
     .eo-shell button { min-height: 32px; }
-    /* The composer's toolbar (Web toggle, model picker, send) is sized for a
-       desktop-width row and left almost nothing for the textarea on a phone
-       (~7px in testing) — narrow enough that the placeholder wrapped one
-       letter per line and autoGrowComposer's scrollHeight read then latched
-       the box at that inflated height. Wrapping the row and giving the
-       textarea the rest of line 1 (100% minus the attach button + gap) forces
-       the toolbar onto its own line instead, so the input always gets real
-       width to measure against. */
-    .eo-composer { flex-wrap: wrap !important; }
-    .eo-composer > .eo-input-text { flex-basis: calc(100% - 36px) !important; }
   }
 
   @media (max-width: 480px) {
@@ -235,7 +220,7 @@
       <sc-if value="{{ notShowingProjects }}">
         <span onClick="{{ goToApp }}" style="font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:#1F5A4C; cursor:pointer;">eochat</span>
         <button type="button" onClick="{{ goToProjects }}" style="display:flex; align-items:center; gap:5px; border:1px solid #E0DACE; background:#FFFDFA; border-radius:7px; padding:4px 9px; cursor:pointer; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#1F5A4C;"><i class="ph ph-arrow-left" style="font-size:11px;"></i>Back</button>
-        <span style="font-size:13px; color:#26241F; font-weight:500; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="{{ activeProjectName }}">{{ activeProjectName }}</span>
+        <span style="font-size:13px; color:#26241F; font-weight:500;">{{ activeProjectName }}</span>
         <span style="width:1px; height:16px; background:#E0DACE; flex:none;"></span>
         <button type="button" aria-label="Switch chat" aria-expanded="{{ spacesOpen }}" onClick="{{ toggleSpaces }}" style="display:flex; align-items:center; gap:6px; max-width:220px; border:0; background:none; border-radius:7px; padding:5px 6px; cursor:pointer; font-family:inherit;">
           <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; flex:none;">○</span>
@@ -281,7 +266,7 @@
       <sc-if value="{{ proxyDead }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#c0341a; letter-spacing:.04em;">proxy off</span>
       </sc-if>
-      <sc-if value="{{ showFallbackModelLabel }}">
+      <sc-if value="{{ model }}">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#8C877C;">{{ model }}</span>
       </sc-if>
       </div>
@@ -406,7 +391,7 @@
                   </button>
                   <button type="button" aria-label="Read" onClick="{{ src.open }}" style="border:0; background:none; color:#8C877C; cursor:pointer; padding:0 2px; display:flex; flex:none;"><i class="ph ph-book-open" style="font-size:14px;"></i></button>
                   <button type="button" aria-label="Delete source" onClick="{{ src.delete }}" style="border:0; background:none; color:#C0392B; cursor:pointer; padding:0 2px; display:flex; flex:none; opacity:0.4;"><i class="ph ph-trash" style="font-size:13px;"></i></button>
-                  <button type="button" aria-label="Toggle source" onClick="{{ src.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ src.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+                  <button type="button" aria-label="Toggle source" onClick="{{ src.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ src.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
                     <span style="position:absolute; top:2px; left: {{ src.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                   </button>
                 </div>
@@ -466,7 +451,7 @@
               <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#A39D91; flex:none;">{{ webHistoryCount }}</span>
               <i class="{{ webHistoryChevron }}" style="font-size:11px; color:#A39D91;"></i>
             </button>
-            <button type="button" aria-label="Toggle all web sources" onClick="{{ toggleAllWeb }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ webAllSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+            <button type="button" aria-label="Toggle all web sources" onClick="{{ toggleAllWeb }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ webAllSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
               <span style="position:absolute; top:2px; left: {{ webAllKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
             </button>
           </div>
@@ -477,7 +462,7 @@
                   <span style="max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; color:#26241F;">{{ w.host }}</span>
                   <span style="max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">{{ w.meta }}</span>
                 </button>
-                <button type="button" aria-label="{{ w.toggleLabel }}" onClick="{{ w.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ w.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
+                <button type="button" aria-label="{{ w.toggleLabel }}" onClick="{{ w.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ w.switchBg }}; position:relative; cursor:pointer; padding:0; margin-right:7px;">
                   <span style="position:absolute; top:2px; left: {{ w.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                 </button>
               </div>
@@ -542,14 +527,11 @@
 
       <sc-if value="{{ showingProjects }}">
       <div style="flex:1; padding:32px 28px; display:flex; flex-direction:column; gap:18px; min-height:0; overflow-y:auto;" class="eo-scrollbar">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
-          <span style="font-size:22px; font-weight:500; color:#26241F;">Projects</span>
-          <button type="button" onClick="{{ newProject }}" style="display:flex; align-items:center; gap:6px; flex:none; border:1px solid #1F5A4C; background:#1F5A4C; color:#FFFDFA; border-radius:9px; padding:8px 14px; font-family:inherit; font-size:13px; font-weight:500; cursor:pointer;"><i class="ph ph-plus" style="font-size:13px;"></i>New project</button>
-        </div>
+        <span style="font-size:22px; font-weight:500; color:#26241F;">Projects</span>
         <span style="font-size:13px; color:#8C877C; line-height:1.6; max-width:520px;">A project is a named collection with its own knowledge base — upload documents to a project and chat with the AI about them. Sources and conversations are scoped to each project.</span>
         <sc-if value="{{ noProjects }}">
           <div style="text-align:center; padding:40px 20px; background:#FAF8F4; border:1px dashed #E4DFD5; border-radius:12px;">
-            <span style="font-size:14px; color:#A39D91; line-height:1.6;">No projects yet.<br/>Tap "New project" above to create your first one.</span>
+            <span style="font-size:14px; color:#A39D91; line-height:1.6;">No projects yet.<br/>Click + in the sidebar to create your first project.</span>
           </div>
         </sc-if>
         <sc-for list="{{ projectList }}" as="p">
@@ -571,7 +553,9 @@
         <button type="button" onClick="{{ tabChat }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabChatColor }}; box-shadow: {{ tabChatUnderline }}; cursor:pointer;">Chat</button>
         <button type="button" onClick="{{ tabDocuments }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabDocumentsColor }}; box-shadow: {{ tabDocumentsUnderline }}; cursor:pointer;">Documents</button>
         <button type="button" onClick="{{ tabOutline }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOutlineColor }}; box-shadow: {{ tabOutlineUnderline }}; cursor:pointer;">Outline</button>
+        <button type="button" onClick="{{ tabOrbit }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabOrbitColor }}; box-shadow: {{ tabOrbitUnderline }}; cursor:pointer;">Orbit</button>
         <button type="button" onClick="{{ tabPriors }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabPriorsColor }}; box-shadow: {{ tabPriorsUnderline }}; cursor:pointer;">Priors</button>
+        <button type="button" onClick="{{ tabCompose }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabComposeColor }}; box-shadow: {{ tabComposeUnderline }}; cursor:pointer;">Compose</button>
         <button type="button" onClick="{{ tabGlassBox }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabGlassBoxColor }}; box-shadow: {{ tabGlassBoxUnderline }}; cursor:pointer;">Glass box</button>
         <button type="button" onClick="{{ tabSenses }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabSensesColor }}; box-shadow: {{ tabSensesUnderline }}; cursor:pointer;">Senses</button>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
@@ -655,35 +639,26 @@
 
                   <sc-if value="{{ turn.hasSnippets }}">
                     <div style="display:flex; flex-direction:column; gap:7px;">
-                      <div style="display:flex; align-items:center; gap:14px;">
-                        <button type="button" onClick="{{ turn.toggleSnippets }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.snippetsColor }}; cursor:pointer; padding:0;"><i class="{{ turn.snippetsChevron }}"></i>{{ turn.snippetsLabel }}</button>
-                        <sc-if value="{{ turn.snippetsOpen }}">
-                          <button type="button" aria-label="Open sources in a larger view" title="Open sources in a larger view" onClick="{{ turn.openSourcesModal }}" style="display:flex; align-items:center; gap:4px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91; cursor:pointer; padding:0;"><i class="ph ph-arrows-out-simple"></i>expand</button>
-                        </sc-if>
-                      </div>
-                      <sc-if value="{{ turn.snippetsOpen }}">
-                        <sc-for list="{{ turn.snippets }}" as="snip">
-                          <div onClick="{{ snip.open }}" style="display:flex; gap:9px; align-items:flex-start; background:#FBFAF5; border:1px solid #E7E2D4; border-left:3px solid #A6805A; border-radius:3px 8px 8px 3px; padding:9px 13px; cursor:{{ snip.cursor }};">
-                            <span style="font-family:Georgia, serif; font-size:19px; line-height:1; color:#C9A876; flex:none; margin-top:1px;">&ldquo;</span>
-                            <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
-                              <span style="font-family:Georgia, 'Iowan Old Style', serif; font-size:13px; font-style:italic; color:#3A372F; line-height:1.62; word-break:break-word;">{{ snip.quote }}{{ snip.ellipsis }}</span>
-                              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:7px;">
-                                <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ snip.num }}</span>
-                                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:#A39D91;">verbatim · {{ snip.source }}</span>
-                                <sc-if value="{{ snip.hasBytes }}">
-                                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">bytes {{ snip.byteStart }}–{{ snip.byteEnd }}</span>
-                                </sc-if>
-                              </div>
+                      <sc-for list="{{ turn.snippets }}" as="snip">
+                        <div onClick="{{ snip.open }}" style="display:flex; gap:9px; align-items:flex-start; background:#FBFAF5; border:1px solid #E7E2D4; border-left:3px solid #A6805A; border-radius:3px 8px 8px 3px; padding:9px 13px; cursor:{{ snip.cursor }};">
+                          <span style="font-family:Georgia, serif; font-size:19px; line-height:1; color:#C9A876; flex:none; margin-top:1px;">&ldquo;</span>
+                          <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
+                            <span style="font-family:Georgia, 'Iowan Old Style', serif; font-size:13px; font-style:italic; color:#3A372F; line-height:1.62; word-break:break-word;">{{ snip.quote }}{{ snip.ellipsis }}</span>
+                            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:7px;">
+                              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ snip.num }}</span>
+                              <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:#A39D91;">verbatim · {{ snip.source }}</span>
+                              <sc-if value="{{ snip.hasBytes }}">
+                                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">bytes {{ snip.byteStart }}–{{ snip.byteEnd }}</span>
+                              </sc-if>
                             </div>
                           </div>
-                        </sc-for>
-                      </sc-if>
+                        </div>
+                      </sc-for>
                     </div>
                   </sc-if>
 
                   <div style="display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding-top:2px;">
                     <button type="button" aria-label="Copy" onClick="{{ turn.copy }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-copy"></i>copy</button>
-                    <sc-if value="{{ isAdmin }}">
                     <sc-if value="{{ turn.hasPassages }}">
                       <button type="button" onClick="{{ turn.togglePassages }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.passagesColor }}; cursor:pointer; padding:0;"><i class="{{ turn.passagesChevron }}"></i>{{ turn.passagesLabel }}</button>
                     </sc-if>
@@ -698,20 +673,15 @@
                     <sc-if value="{{ turn.canRegenerate }}">
                       <button type="button" aria-label="Regenerate" onClick="{{ turn.regenerate }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C; cursor:pointer; padding:0;"><i class="ph ph-arrow-clockwise"></i>regenerate</button>
                     </sc-if>
-                    </sc-if>
-                    <sc-if value="{{ turn.hasUngroundedNotice }}">
-                      <button type="button" onClick="{{ turn.toggleUngrounded }}" style="display:flex; align-items:center; gap:5px; border:0; background:none; font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ turn.ungroundedColor }}; cursor:pointer; padding:0;"><i class="{{ turn.ungroundedChevron }}"></i>⊘ ungrounded</button>
-                    </sc-if>
                   </div>
 
-                  <sc-if value="{{ turn.ungroundedOpen }}">
+                  <sc-if value="{{ turn.ungroundedNotice }}">
                     <div style="display:flex; align-items:flex-start; gap:7px; background:#FBF6EF; border:1px solid #EADFCE; border-radius:8px; padding:8px 10px;">
                       <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#A3592B; line-height:1.5;">⊘</span>
                       <span style="font-size:11.5px; color:#7A5A38; line-height:1.55;">{{ turn.ungroundedNotice }}</span>
                     </div>
                   </sc-if>
 
-                  <sc-if value="{{ isAdmin }}">
                   <sc-if value="{{ turn.passagesOpen }}">
                   <div class="eo-fade-in" style="background:#FAF8F4; border:1px solid #EBE6DC; border-radius:9px; padding:11px 12px; display:flex; flex-direction:column; gap:11px;">
                     <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">{{ turn.passagesHeading }}</span>
@@ -758,7 +728,6 @@
                     <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#4A463E; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:340px; overflow-y:auto;" class="eo-scrollbar">{{ turn.rawPrompt }}</span>
                   </div>
                   </sc-if>
-                  </sc-if>
                 </div>
               </sc-if>
             </div>
@@ -800,7 +769,7 @@
           <button type="button" aria-label="Attach file" onClick="{{ openFileDialog }}" style="width:28px; height:28px; flex:none; display:flex; align-items:center; justify-content:center; border:0; border-radius:7px; background:none; color:#8C877C; cursor:pointer; align-self:flex-end;"><i class="ph ph-paperclip" style="font-size:15px;"></i></button>
           <input type="file" multiple="{{ true }}" ref="{{ setFileInput }}" onChange="{{ onFilesSelected }}" style="display:none;" />
           <sc-if value="{{ inputDisabled }}">
-            <input type="text" class="eo-input-text" placeholder="Waiting for response…" value="" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#8C877C; padding:6px 0; cursor:default;" readonly />
+            <input type="text" placeholder="Waiting for response…" value="" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#8C877C; padding:6px 0; cursor:default;" readonly />
           </sc-if>
           <sc-if value="{{ !inputDisabled }}">
             <textarea class="eo-input-text" aria-label="Ask across your sources" placeholder="{{ composerPlaceholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" ref="{{ setComposerInput }}" rows="{{ 1 }}" style="flex:1; min-width:0; box-sizing:border-box; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; line-height:1.5; color:#1B1A17; padding:6px 0; resize:none; overflow-y:auto; max-height:40vh;"></textarea>
@@ -810,42 +779,7 @@
             <button type="button" aria-label="Choose model" aria-pressed="{{ modelMenuOpen }}" title="{{ modelPickerLabel }}" onClick="{{ toggleModelMenu }}" style="flex:none; display:flex; align-items:center; gap:4px; max-width:150px; border:1px solid {{ modelMenuOpen ? '#1F5A4C' : '#E0DACE' }}; border-radius:8px; background:#FFFDFA; color:#4A463E; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="ph ph-cpu" style="font-size:12px;"></i><span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ modelPickerLabel }}</span><i class="ph ph-caret-down" style="font-size:8px;"></i></button>
           </sc-if>
           <sc-if value="{{ modelMenuOpen }}">
-            <div style="position:absolute; bottom:44px; right:6px; width:240px; max-height:320px; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:10px; z-index:30; display:flex; flex-direction:column; gap:6px;">
-              <!-- Local mode governs which engine actually answers (see
-                   send()/localReady) whenever it's on — which is the
-                   default now — so THIS is the real model picker in that
-                   case; the Provider/Model fields below are the dormant
-                   Ollama fallback path, shown only when Local is off. -->
-              <sc-if value="{{ localModel }}">
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">In-browser model</span>
-                <sc-for list="{{ localStarterCatalog }}" as="lm">
-                  <button type="button" onClick="{{ lm.pickAndClose }}" style="display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; text-align:left; border:1px solid {{ lm.border }}; border-radius:8px; background:{{ lm.bg }}; padding:7px 9px; cursor:pointer; font-family:inherit;">
-                    <span style="display:flex; flex-direction:column; gap:1px; min-width:0;">
-                      <span style="font-size:12px; color:#26241F; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ lm.starterLabel }} · {{ lm.label }}</span>
-                      <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#8C877C;">{{ lm.size }}</span>
-                    </span>
-                    <sc-if value="{{ lm.state }}">
-                      <span style="flex:none; font-family:'IBM Plex Mono', monospace; font-size:9px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ lm.state }}</span>
-                    </sc-if>
-                  </button>
-                </sc-for>
-                <sc-if value="{{ hasMoreLocalModels }}">
-                  <button type="button" onClick="{{ toggleMoreLocalModels }}" style="align-self:flex-start; border:0; background:none; color:#1F5A4C; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:2px 0; cursor:pointer;">{{ moreLocalModelsLabel }}</button>
-                </sc-if>
-                <sc-if value="{{ showMoreLocalModels }}">
-                  <sc-for list="{{ localMoreCatalog }}" as="lm">
-                    <button type="button" onClick="{{ lm.pickAndClose }}" style="display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; text-align:left; border:1px solid {{ lm.border }}; border-radius:8px; background:{{ lm.bg }}; padding:7px 9px; cursor:pointer; font-family:inherit;">
-                      <span style="display:flex; flex-direction:column; gap:1px; min-width:0;">
-                        <span style="font-size:12px; color:#26241F; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ lm.label }}</span>
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#8C877C;">{{ lm.size }}</span>
-                      </span>
-                      <sc-if value="{{ lm.state }}">
-                        <span style="flex:none; font-family:'IBM Plex Mono', monospace; font-size:9px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ lm.state }}</span>
-                      </sc-if>
-                    </button>
-                  </sc-for>
-                </sc-if>
-              </sc-if>
+            <div style="position:absolute; bottom:44px; right:6px; width:220px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 12px 28px -14px rgba(28,26,23,.35); padding:10px; z-index:30; display:flex; flex-direction:column; gap:8px;">
               <sc-if value="{{ !localModel }}">
                 <div style="display:flex; flex-direction:column; gap:4px;">
                   <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">Provider</span>
@@ -998,7 +932,7 @@
                   </span>
                   <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ genre.onCount }}</span>
                 </button>
-                <button type="button" aria-label="Toggle bucket" onClick="{{ genre.toggleBucket }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ genre.bucketSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:10px;">
+                <button type="button" aria-label="Toggle bucket" onClick="{{ genre.toggleBucket }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ genre.bucketSwitchBg }}; position:relative; cursor:pointer; padding:0; margin-right:10px;">
                   <span style="position:absolute; top:2px; left: {{ genre.bucketKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                 </button>
               </div>
@@ -1014,7 +948,7 @@
                         <sc-if value="{{ item.surprising }}">
                           <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; color:#8A5A22; background:#F3E7D3; border-radius:5px; padding:2px 7px; flex:none;">gap · {{ item.gapLabel }}</span>
                         </sc-if>
-                        <button type="button" aria-label="Toggle prior" onClick="{{ item.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ item.switchBg }}; position:relative; cursor:pointer; padding:0; margin-bottom:9px;">
+                        <button type="button" aria-label="Toggle prior" onClick="{{ item.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.switchBg }}; position:relative; cursor:pointer; padding:0; margin-bottom:9px;">
                           <span style="position:absolute; top:2px; left: {{ item.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                         </button>
                       </div>
@@ -1073,14 +1007,14 @@
                         <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.03em; color: {{ item.connectedColor }}; background: {{ item.connectedBg }}; border-radius:5px; padding:2px 7px; flex:none;">{{ item.connectedLabel }}</span>
                         <span style="display:flex; align-items:center; gap:4px; flex:none;">
                           <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">sub</span>
-                          <button type="button" aria-label="Subscribe" onClick="{{ item.toggleSubscribed }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ item.subSwitchBg }}; position:relative; cursor:pointer; padding:0;">
-                            <span style="position:absolute; top:50%; left: {{ item.subKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transform:translateY(-50%); transition:left .15s;"></span>
+                          <button type="button" aria-label="Subscribe" onClick="{{ item.toggleSubscribed }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.subSwitchBg }}; position:relative; cursor:pointer; padding:0;">
+                            <span style="position:absolute; top:2px; left: {{ item.subKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                           </button>
                         </span>
                         <span style="display:flex; align-items:center; gap:4px; flex:none;">
                           <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">active</span>
-                          <button type="button" aria-label="Activate on ingestion" onClick="{{ item.toggleActive }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ item.activeSwitchBg }}; opacity: {{ item.activeOpacity }}; position:relative; cursor: {{ item.activeCursor }}; padding:0;">
-                            <span style="position:absolute; top:50%; left: {{ item.activeKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transform:translateY(-50%); transition:left .15s;"></span>
+                          <button type="button" aria-label="Activate on ingestion" onClick="{{ item.toggleActive }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ item.activeSwitchBg }}; opacity: {{ item.activeOpacity }}; position:relative; cursor: {{ item.activeCursor }}; padding:0;">
+                            <span style="position:absolute; top:2px; left: {{ item.activeKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                           </button>
                         </span>
                       </div>
@@ -1147,6 +1081,69 @@
       </div>
       </sc-if>
 
+      <sc-if value="{{ isCompose }}">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Compose</span>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A deliberate long-form generation, not a chat reply — each section is drafted, mechanically checked against the source, and revised before moving on.</span>
+
+        <div style="display:flex; gap:8px; align-items:center; border:1px solid #E0DACE; border-radius:11px; padding:6px 6px 6px 12px; background:#FFFDFA;">
+          <input type="text" class="eo-input-text" placeholder="e.g. write a 3-page essay about the Creature's intellectual development" value="{{ composeTask }}" onChange="{{ onComposeTask }}" style="flex:1; min-width:0; border:0; outline:none; background:none; font-family:inherit; font-size:13.5px; color:#1B1A17; padding:6px 0;" />
+          <button type="button" onClick="{{ runCompose }}" style="border:0; border-radius:8px; padding:8px 14px; font-family:inherit; font-size:12.5px; font-weight:500; background: {{ composeButtonBg }}; color:#FFFDFA; cursor:pointer; flex:none;">{{ composeButtonLabel }}</button>
+        </div>
+
+        <sc-if value="{{ hasComposeError }}">
+          <div style="display:flex; align-items:flex-start; gap:7px; background:#FBF0EC; border:1px solid #E8C9BC; border-radius:8px; padding:8px 10px;">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#c0341a;">⊘</span>
+            <span style="font-size:11.5px; color:#8a3a26; line-height:1.55;">{{ composeError }}</span>
+          </div>
+        </sc-if>
+
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:12px;" class="eo-scrollbar">
+          <sc-if value="{{ hasComposePlan }}">
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">plan: {{ composePlanCount }} section(s)</span>
+          </sc-if>
+
+          <sc-if value="{{ composeReplanNotice }}">
+            <div style="display:flex; align-items:flex-start; gap:7px; background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C;">⊚</span>
+              <span style="font-size:11.5px; color:#4A463E; line-height:1.55;">{{ composeReplanNotice }}</span>
+            </div>
+          </sc-if>
+
+          <sc-for list="{{ composeSectionRows }}" as="sec">
+            <div style="border:1px solid #E7E2D8; border-radius:9px; background:#FAF8F4; padding:10px 12px; display:flex; flex-direction:column; gap:4px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <span style="font-size:13px; font-weight:500; color:#26241F;">{{ sec.label }}</span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color: {{ sec.statusColor }};">{{ sec.statusLabel }}</span>
+              </div>
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#8C877C;">grounding: {{ sec.groundingTrail }}</span>
+            </div>
+          </sc-for>
+
+          <sc-if value="{{ composeDone }}">
+            <div style="display:flex; flex-direction:column; gap:14px; padding-top:10px; border-top:1px solid #EBE6DC;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ composeSummary }}</span>
+              <sc-for list="{{ composeResultSections }}" as="rs">
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                  <span style="font-size:13.5px; font-weight:500; color:#26241F;">{{ rs.label }}</span>
+                  <div class="eo-md" style="font-size:13.5px; color:#1B1A17;">{{{ rs.contentHtml }}}</div>
+                  <sc-for list="{{ rs.citations }}" as="cit">
+                    <div style="background:#F1EEE7; border:1px solid #E7E2D8; border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:4px;">
+                      <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">mechanical · {{ cit.jaccard }}</span>
+                        <span style="font-size:11.5px; color:#4A463E;">{{ cit.source }}</span>
+                      </div>
+                      <span style="font-size:12px; color:#3A372F; line-height:1.6; font-style:italic;">{{ cit.quote }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+      </sc-if>
+
       <sc-if value="{{ isDocuments }}">
       <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:14px; min-height:0; overflow:hidden;">
         <div style="display:flex; align-items:center; justify-content:space-between;">
@@ -1178,7 +1175,7 @@
               </div>
               <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ doc.typeLabel }}</span>
               <button type="button" aria-label="Read" onClick="{{ doc.open }}" style="border:1px solid #E0DACE; border-radius:6px; background:#FFFDFA; color:#4A463E; cursor:pointer; padding:4px 8px; font-family:'IBM Plex Mono', monospace; font-size:9px; justify-self:center;">Open</button>
-              <button type="button" aria-label="{{ doc.toggleLabel }}" onClick="{{ doc.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background: {{ doc.switchBg }}; position:relative; cursor:pointer; padding:0; justify-self:center;">
+              <button type="button" aria-label="{{ doc.toggleLabel }}" onClick="{{ doc.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background: {{ doc.switchBg }}; position:relative; cursor:pointer; padding:0; justify-self:center;">
                 <span style="position:absolute; top:2px; left: {{ doc.knobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
               </button>
             </div>
@@ -1831,58 +1828,6 @@
   </div>
   </sc-if>
 
-  <sc-if value="{{ sourcesModalOpen }}">
-  <div onClick="{{ closeSourcesModal }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:8vh 24px 24px; z-index:60;">
-    <div onClick="{{ stopModalClick }}" class="eo-fade-in" style="width:100%; max-width:640px; max-height:84vh; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:17px 18px 15px; display:flex; flex-direction:column; gap:13px;">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex:none;">
-        <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#8C877C;">{{ sourcesModalTitle }}</span>
-        <button type="button" aria-label="Close" onClick="{{ closeSourcesModal }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
-      </div>
-      <div class="eo-scrollbar" style="display:flex; flex-direction:column; gap:9px; overflow-y:auto;">
-        <sc-for list="{{ sourcesModalSnippets }}" as="snip">
-          <div onClick="{{ snip.open }}" style="display:flex; gap:9px; align-items:flex-start; background:#FBFAF5; border:1px solid #E7E2D4; border-left:3px solid #A6805A; border-radius:3px 8px 8px 3px; padding:11px 14px; cursor:{{ snip.cursor }};">
-            <span style="font-family:Georgia, serif; font-size:20px; line-height:1; color:#C9A876; flex:none; margin-top:1px;">&ldquo;</span>
-            <div style="display:flex; flex-direction:column; gap:6px; min-width:0;">
-              <span style="font-family:Georgia, 'Iowan Old Style', serif; font-size:14px; font-style:italic; color:#3A372F; line-height:1.65; word-break:break-word;">{{ snip.quote }}{{ snip.ellipsis }}</span>
-              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:7px;">
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ snip.num }}</span>
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; color:#A39D91;">verbatim · {{ snip.source }}</span>
-                <sc-if value="{{ snip.hasBytes }}">
-                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#A39D91;">bytes {{ snip.byteStart }}–{{ snip.byteEnd }}</span>
-                </sc-if>
-              </div>
-            </div>
-          </div>
-        </sc-for>
-      </div>
-    </div>
-  </div>
-  </sc-if>
-
-  <sc-if value="{{ citeHoverOpen }}">
-  <div class="eo-cite-popover eo-fade-in eo-scrollbar" style="position:fixed; top:{{ citeHoverTop }}px; left:{{ citeHoverLeft }}px; width:340px; max-width:calc(100vw - 32px); max-height:50vh; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:10px; box-shadow:0 8px 24px rgba(27,26,23,.14); padding:12px 13px; display:flex; flex-direction:column; gap:9px; z-index:55;">
-      <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">{{ citeHoverTitle }}</span>
-      <sc-if value="{{ citeHoverEmpty }}">
-        <span style="font-size:12px; color:#A39D91; line-height:1.55;">No resolved source behind this bracket — it does not point at anything the engine or web search returned.</span>
-      </sc-if>
-      <sc-for list="{{ citeHoverSnippets }}" as="snip">
-        <div onClick="{{ snip.open }}" style="display:flex; gap:8px; align-items:flex-start; background:#FBFAF5; border:1px solid #E7E2D4; border-left:3px solid #A6805A; border-radius:3px 7px 7px 3px; padding:9px 11px; cursor:{{ snip.cursor }};">
-          <span style="font-family:Georgia, serif; font-size:17px; line-height:1; color:#C9A876; flex:none; margin-top:1px;">&ldquo;</span>
-          <div style="display:flex; flex-direction:column; gap:5px; min-width:0;">
-            <span style="font-family:Georgia, 'Iowan Old Style', serif; font-size:12.5px; font-style:italic; color:#3A372F; line-height:1.58; word-break:break-word;">{{ snip.quote }}{{ snip.ellipsis }}</span>
-            <div style="display:flex; align-items:center; flex-wrap:wrap; gap:6px;">
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 5px;">{{ snip.num }}</span>
-              <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; letter-spacing:.05em; text-transform:uppercase; color:#A39D91;">verbatim · {{ snip.source }}</span>
-              <sc-if value="{{ snip.hasBytes }}">
-                <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">bytes {{ snip.byteStart }}–{{ snip.byteEnd }}</span>
-              </sc-if>
-            </div>
-          </div>
-        </div>
-      </sc-for>
-  </div>
-  </sc-if>
-
   <sc-if value="{{ settingsOpen }}">
   <div onClick="{{ closeSettings }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:10vh 24px 24px; z-index:60;">
     <div onClick="{{ stopSettingsClick }}" class="eo-fade-in" style="width:100%; max-width:560px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:16px;">
@@ -1910,50 +1855,96 @@
 
         <div style="display:flex; flex-direction:column; gap:8px;">
           <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">Model</span>
-          <div style="display:flex; align-items:center; gap:8px;">
-            <button type="button" aria-pressed="{{ localModel }}" onClick="{{ settingsToggleLocal }}" style="display:flex; align-items:center; gap:4px; border:1px solid {{ settingsLocalBorder }}; border-radius:8px; background:{{ settingsLocalBg }}; color:{{ settingsLocalColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ settingsLocalIcon }}" style="font-size:12px;"></i>Local</button>
-            <span style="font-size:11px; color:#8C877C;">Answer in-browser via WebLLM (no proxy)</span>
-          </div>
+
+          <sc-if value="{{ isStaticBuild }}">
+            <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">This is the static build — there is no server here, so an answer comes either from a model running in this tab or from your own Anthropic key.</span>
+            <div style="display:flex; gap:6px;">
+              <button type="button" onClick="{{ staticSelectLocal }}" style="display:flex; align-items:center; gap:5px; border:1px solid {{ staticLocalBorder }}; background:{{ staticLocalBg }}; color:{{ staticLocalColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;"><i class="ph ph-cpu" style="font-size:12px;"></i>In-browser model</button>
+              <button type="button" onClick="{{ staticSelectAnthropic }}" style="border:1px solid {{ staticAnthropicBorder }}; background:{{ staticAnthropicBg }}; color:{{ staticAnthropicColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;">Anthropic API</button>
+            </div>
+            <sc-if value="{{ staticProviderIsAnthropic }}">
+              <div style="display:flex; flex-direction:column; gap:4px; padding-top:2px;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Model</span>
+                <input type="text" placeholder="claude-sonnet-4-20250514" value="{{ settingsModel }}" onChange="{{ onSettingsModelChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;" />
+                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Add your key above under API Keys — it is sent straight from this tab to Anthropic, never through a server.</span>
+              </div>
+            </sc-if>
+          </sc-if>
+
+          <sc-if value="{{ showServerProviderFields }}">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Default provider</span>
+              <select value="{{ settingsProvider }}" onChange="{{ onSettingsProviderChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:inherit; font-size:12.5px; color:#26241F; outline:none;">
+                <sc-for list="{{ settingsModelOptions }}" as="opt">
+                  <option value="{{ opt.id }}">{{ opt.label }}</option>
+                </sc-for>
+              </select>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Model name</span>
+              <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ settingsModel }}" onChange="{{ onSettingsModelChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;" />
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ !isStaticBuild }}">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <button type="button" aria-pressed="{{ localModel }}" onClick="{{ settingsToggleLocal }}" style="display:flex; align-items:center; gap:4px; border:1px solid {{ settingsLocalBorder }}; border-radius:8px; background:{{ settingsLocalBg }}; color:{{ settingsLocalColor }}; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:5px 8px; cursor:pointer;"><i class="{{ settingsLocalIcon }}" style="font-size:12px;"></i>Local</button>
+              <span style="font-size:11px; color:#8C877C;">Answer in-browser via WebLLM (no proxy) — stays on across reloads once turned on</span>
+            </div>
+          </sc-if>
+
           <sc-if value="{{ hasLocalCatalog }}">
             <div style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid #EBE6DC;">
               <div style="display:flex; flex-direction:column; gap:2px;">
                 <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">In-browser model</span>
-                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Weights download into this browser and stay cached. Only one is kept — installing another deletes the current one first to free the space.</span>
+                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Weights download into this browser and stay cached — closing or reloading the tab does not lose them. Only one is kept at a time; installing another deletes the current one first to free the space.</span>
               </div>
-              <sc-for list="{{ localStarterCatalog }}" as="lm">
-                <button type="button" onClick="{{ lm.pick }}" style="display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left; border:1px solid {{ lm.border }}; border-radius:9px; background:{{ lm.bg }}; padding:9px 11px; cursor:pointer; font-family:inherit;">
-                  <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
-                    <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                      <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 6px;">{{ lm.starterLabel }}</span>
-                      <span style="font-size:12.5px; font-weight:500; color:#26241F;">{{ lm.label }}</span>
-                      <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ lm.size }}</span>
-                      <sc-if value="{{ lm.state }}">
-                        <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.04em; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 6px;">{{ lm.state }}</span>
-                      </sc-if>
-                    </div>
-                    <span style="font-size:11px; color:#8C877C; line-height:1.5;">{{ lm.note }}</span>
+
+              <div style="display:flex; flex-direction:column; gap:6px; border:1px solid {{ localCardBorder }}; border-radius:9px; background:{{ localCardBg }}; padding:9px 11px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <i class="{{ localCardIcon }}" style="font-size:13px; color:{{ localCardIconColor }}; flex:none;"></i>
+                  <span style="font-size:12.5px; font-weight:500; color:#26241F; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ localCardModelName }}</span>
+                  <sc-if value="{{ localCardCanRename }}">
+                    <button type="button" onClick="{{ renameLocalModel }}" style="border:0; background:none; font-family:inherit; font-size:10.5px; color:#8C877C; text-decoration:underline; cursor:pointer; flex:none; padding:0;">rename</button>
+                  </sc-if>
+                </div>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:{{ localCardStatusColor }};">{{ localCardStatusText }}</span>
+                <sc-if value="{{ localCardShowProgress }}">
+                  <div style="height:4px; border-radius:2px; background:#EBE6DC; overflow:hidden;">
+                    <div style="height:100%; width:{{ localCardProgressWidth }}; background:#1F5A4C; transition:width .2s;"></div>
                   </div>
-                </button>
-              </sc-for>
-              <sc-if value="{{ hasMoreLocalModels }}">
-                <button type="button" onClick="{{ toggleMoreLocalModels }}" style="align-self:flex-start; border:0; background:none; color:#1F5A4C; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:2px 0; cursor:pointer;">{{ moreLocalModelsLabel }}</button>
-              </sc-if>
-              <sc-if value="{{ showMoreLocalModels }}">
-                <sc-for list="{{ localMoreCatalog }}" as="lm">
-                  <button type="button" onClick="{{ lm.pick }}" style="display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left; border:1px solid {{ lm.border }}; border-radius:9px; background:{{ lm.bg }}; padding:9px 11px; cursor:pointer; font-family:inherit;">
+                </sc-if>
+                <sc-if value="{{ localCardShowRetry }}">
+                  <button type="button" onClick="{{ retryLocalModel }}" style="align-self:flex-start; border:1px solid #A3592B; background:none; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:10.5px; color:#A3592B; cursor:pointer;">Retry download</button>
+                </sc-if>
+                <sc-if value="{{ localCardShowStart }}">
+                  <button type="button" onClick="{{ startLocalModel }}" style="align-self:flex-start; border:1px solid #1F5A4C; background:#1F5A4C; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:10.5px; color:#FFFDFA; cursor:pointer;">Download &amp; start</button>
+                </sc-if>
+              </div>
+
+              <sc-for list="{{ localCatalog }}" as="lm">
+                <div style="border:1px solid {{ lm.border }}; border-radius:9px; background:{{ lm.bg }}; overflow:hidden;">
+                  <button type="button" onClick="{{ lm.pick }}" style="display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left; border:0; background:none; padding:9px 11px; cursor:pointer; font-family:inherit;">
                     <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:3px;">
                       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                         <span style="font-size:12.5px; font-weight:500; color:#26241F;">{{ lm.label }}</span>
                         <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;">{{ lm.size }}</span>
                         <sc-if value="{{ lm.state }}">
-                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.04em; color:#1F5A4C; background:#E5EDE9; border-radius:4px; padding:1px 6px;">{{ lm.state }}</span>
+                          <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.04em; color:{{ lm.stateColor }}; background:{{ lm.stateBg }}; border-radius:4px; padding:1px 6px;">{{ lm.state }}</span>
                         </sc-if>
                       </div>
                       <span style="font-size:11px; color:#8C877C; line-height:1.5;">{{ lm.note }}</span>
                     </div>
                   </button>
-                </sc-for>
-              </sc-if>
+                  <sc-if value="{{ lm.busy }}">
+                    <div style="padding:0 11px 9px;">
+                      <div style="height:3px; border-radius:2px; background:#EBE6DC; overflow:hidden;">
+                        <div style="height:100%; width:{{ lm.progressWidth }}; background:#1F5A4C; transition:width .2s;"></div>
+                      </div>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
               <sc-if value="{{ localStorageText }}">
                 <span style="font-size:11px; color:#A39D91;">{{ localStorageText }}</span>
               </sc-if>
@@ -1995,7 +1986,7 @@
                       <button type="button" onClick="{{ bs.installAction }}" style="border:1px solid {{ bs.installBorder }}; background:none; border-radius:7px; padding:4px 9px; font-family:inherit; font-size:11px; color:{{ bs.installBorder }}; cursor:pointer; flex:none;">{{ bs.installLabel }}</button>
                       <span style="display:flex; align-items:center; gap:4px; flex:none;">
                         <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; color:#A39D91;">on</span>
-                        <button type="button" aria-label="Use this sense on ingestion" aria-pressed="{{ bs.enabled }}" onClick="{{ bs.toggleEnabled }}" style="width:26px; height:15px; min-height:15px; flex:none; border:0; border-radius:8px; background:{{ bs.enabledSwitchBg }}; opacity:{{ bs.enabledOpacity }}; position:relative; cursor:pointer; padding:0;">
+                        <button type="button" aria-label="Use this sense on ingestion" aria-pressed="{{ bs.enabled }}" onClick="{{ bs.toggleEnabled }}" style="width:26px; height:15px; flex:none; border:0; border-radius:8px; background:{{ bs.enabledSwitchBg }}; opacity:{{ bs.enabledOpacity }}; position:relative; cursor:pointer; padding:0;">
                           <span style="position:absolute; top:2px; left:{{ bs.enabledKnobLeft }}; width:11px; height:11px; border-radius:50%; background:#FFFDFA; transition:left .15s;"></span>
                         </button>
                       </span>
@@ -2231,19 +2222,31 @@ const PROJECTS_KEY = 'eochat.projects.v1';
 // see _defaultToLocalModelIfNoEngine below.
 const ON_GH_PAGES = typeof window !== 'undefined' && /(^|\.)github\.io$/.test(window.location.hostname);
 
-// A bare citation bracket in rendered prose — [1], [2, 3], [4-6] — never an
-// invented-citation void marker ("[⊘ ...]"), which starts with a symbol the
-// digit-only pattern can't match. Mirrors citation-check.js's bracket
-// grammar closely enough for click-wrapping (full range/list parsing happens
-// server-side; here only the raw numbers inside need extracting).
-const CITE_BRACKET_RE = /\[\s*(\d+(?:\s*(?:[,;]|-|–|—|to)\s*\d+)*)\s*\]/g;
+// On a deployment that DOES have a server, Local mode is the reader's own
+// choice rather than a forced default — but state.localModel is reset by
+// every component mount, so without this it silently reverted to off on
+// every refresh even after a model had already been downloaded and used.
+// Persisting the toggle's intent (not the model itself, which WebLLM's own
+// Cache API already keeps) is what makes "turn it on once" stick.
+const LOCAL_INTENT_KEY = 'eochat.localModel.intent';
+function readStoredLocalIntent() {
+  try {
+    const raw = localStorage.getItem(LOCAL_INTENT_KEY);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+  } catch { /* private mode / storage disabled */ }
+  return null; // no stored choice yet — let the existing defaults decide
+}
+function writeStoredLocalIntent(on) {
+  try { localStorage.setItem(LOCAL_INTENT_KEY, on ? '1' : '0'); } catch { /* not fatal */ }
+}
 
 class Component extends DCLogic {
   state = {
     view: 'projects', // 'projects' | 'chat'
     projects: [], activeProjectId: null,
     tab: 'chat', draft: '',
-    webSearch: true,
+    webSearch: false,
     provider: 'local', model: null, _availableModels: [], modelMenuOpen: false,
     _ollamaModels: [], _ollamaFetching: false, _ollamaError: null, _ollamaAuthorized: false, _ollamaShowPermission: false, _ollamaUrl: '',
     // Local mode: answer entirely in this tab via WebLLM (see
@@ -2251,23 +2254,16 @@ class Component extends DCLogic {
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
     // mirrors window.EOWebLLM's own state machine, so the toggle can want
     // local mode before the download is ready — or after it has failed —
-    // without those two facts being confused with each other. On by default
-    // everywhere, not just GitHub Pages: the in-browser model is the
-    // primary answer path now, with the proxy/Ollama route kept only as a
-    // manual fallback (see toggleLocalModel / send()).
-    localModel: true, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
-    // Settings leads with 3 starter tiers (Fast/Balanced/Best); the rest of
-    // the catalog stays collapsed behind this until the reader asks for it.
-    showMoreLocalModels: false,
+    // without those two facts being confused with each other. Defaults on
+    // for the GitHub Pages deployment (see ON_GH_PAGES above), and turns on
+    // for everyone else too once the first health check finds no engine at
+    // all (see _defaultToLocalModelIfNoEngine).
+    localModel: ON_GH_PAGES || readStoredLocalIntent() === true, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
     // Mirrors of window.EOWebLLM's catalog: which in-browser models can be
     // installed, which is active, which are already on disk, and how much
     // storage this origin is using. Only one model is ever kept — installing
     // another evicts the rest (see webllm-client.js selectModel).
     localModelId: null, localCatalog: [], localStorageEstimate: null,
-    // Background upgrade (fast tier -> reader's real target) mirrors — see
-    // webllm-client.js initSmart()/_upgradeInBackground.
-    localModelTier: null, localUpgrading: false, localUpgradeModelId: null,
-    localUpgradeProgress: { text: '', percent: 0 }, localUpgradeError: null,
     spacesOpen: false, activeSpaceId: 'default', chatMode: 'chat', leftCollapsed: false, selectedEntity: null, activeTurnId: null,
     // Mobile off-canvas drawers for the Sources (left) and Entities (right)
     // panels below 900px. The desktop layout never reads these — the CSS only
@@ -2299,15 +2295,6 @@ class Component extends DCLogic {
     readerPivotMode: false, readerPivotGroupCol: null, readerPivotValueCol: null, readerPivotAgg: 'count',
     glassBoxCategory: 'all', expandedGenres: {}, expandedSource: null,
     turnPanels: {},
-    // Which turn's sources are open in the full-view modal, if any — separate
-    // from turnPanels' per-turn inline collapse so the modal can be closed
-    // (Escape, backdrop click) without also collapsing the inline panel.
-    sourcesModalTurnId: null,
-    // The footnote hover popover: which turn, which specific citation
-    // number(s), and where to anchor it — set by bindCiteHover on
-    // mouseover/mouseout of an .eo-cite span. A reader hovering "[2]" in the
-    // prose sees only [2]'s span, not the whole source list sourcesModal above shows.
-    citeHover: null,
     // One reusable dialog. `modal` holds the shape the template renders
     // ({ title, label, placeholder, hint, submitLabel, onSubmit }); `modalValue`
     // is the live field. null ⇒ closed. Never a native browser dialog — that
@@ -2328,6 +2315,15 @@ class Component extends DCLogic {
     // place of text. Keyed by source name, same as readerContent.
     readerFileInfo: {},
     readerBinaryView: 'hex',
+    // Compose tab: a deliberate long-form generation action, distinct from
+    // ambient chat — always runs holonic_task directly via /api/holonic
+    // rather than waiting for the model to choose to call it. `composeSections`
+    // is keyed by sub-task id; each entry accumulates its own iteration trace
+    // live as SSE events arrive, so the correction loop is visible while it
+    // runs, not just in the final assembled output.
+    composeTask: '', composeRunning: false, composeError: null,
+    composePlan: null, composeSections: {}, composeOrder: [],
+    composeReplan: null, composeResult: null,
     // Priors catalog from /api/priors — the witness-tier pool, kept separate
     // from `_proxySources` (the corpus pool) because asking about the priors
     // and asking about the texts are different questions. null = not fetched.
@@ -2384,12 +2380,6 @@ class Component extends DCLogic {
     readerPDFNumPages: 0, readerPDFLayout: {}, readerEOT: {},
     readerOCRRunning: false, readerOCRProgress: '',
     settingsOpen: false,
-    _healthData: {},
-    // Admin review state
-    adminView: 'queue', adminReviewingId: null, adminEditDraft: '',
-    adminPendingSubmissions: [], adminResolvedSubmissions: [],
-    adminSubmissionsLoading: false, adminSubmissionStats: { pending: 0, resolved: 0, approved: 0, rejected: 0 },
-    adminSummary: {},
     _settingsApiKeys: {},
     settingsDraftKeys: {},
   };
@@ -2433,8 +2423,6 @@ class Component extends DCLogic {
       if (e.key === 'Escape') {
         if (this.state.modal) this.closeModal();
         else if (this.state.settingsOpen) this.setState({ settingsOpen: false });
-        else if (this.state.sourcesModalTurnId) this.setState({ sourcesModalTurnId: null });
-        else if (this.state.citeHover) this.setState({ citeHover: null });
         return;
       }
       // Kindle-style page turning while the reader is actually paginating —
@@ -2460,21 +2448,25 @@ class Component extends DCLogic {
     // runs, independent of React mount order — but guard anyway in case this
     // page is ever loaded without it.
     if (window.EOWebLLM) {
-      const mirror = (snap) => ({
-        localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error,
-        localModelId: snap.modelId, localCatalog: snap.catalog, localStorageEstimate: snap.storage,
-        localModelTier: snap.tier, localUpgrading: snap.upgrading, localUpgradeModelId: snap.upgradeModelId,
-        localUpgradeProgress: snap.upgradeProgress, localUpgradeError: snap.upgradeError,
+      const seed = window.EOWebLLM.snapshot();
+      this.setState({ localModelStatus: seed.status, localModelProgress: seed.progress, localModelError: seed.error, localModelId: seed.modelId, localCatalog: seed.catalog, localStorageEstimate: seed.storage });
+      this._unsubLocalModel = window.EOWebLLM.subscribe((snap) => {
+        this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error, localModelId: snap.modelId, localCatalog: snap.catalog, localStorageEstimate: snap.storage });
       });
-      this.setState(mirror(window.EOWebLLM.snapshot()));
-      this._unsubLocalModel = window.EOWebLLM.subscribe((snap) => this.setState(mirror(snap)));
-      // localModel defaults on everywhere (see state init above) — start the
-      // download immediately rather than waiting for a manual toggle click a
-      // first-time visitor has no reason to know to make. initSmart() (not
-      // init()) so a cold cache gets a fast, small model answering quickly
-      // while the reader's real target loads in the background.
+      // Read the model cache right away, not only once Settings is opened —
+      // otherwise the Settings panel's first paint shows every row with no
+      // downloaded/not-downloaded state at all, and the reader has no way to
+      // tell "primed already" from "hasn't started" until they wait for it
+      // to redraw a moment later.
+      window.EOWebLLM.refreshCatalog().catch(() => {});
+      // localModel defaults on for ON_GH_PAGES, and otherwise carries
+      // forward whatever the reader last chose (see readStoredLocalIntent)
+      // — either way, start the download immediately on mount rather than
+      // waiting for a toggle click a returning visitor has no reason to
+      // make again. This is what "priming the pump" on every tab load means:
+      // a fresh tab picks up exactly where the last one left off.
       if (this.state.localModel && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
-        window.EOWebLLM.initSmart();
+        window.EOWebLLM.init();
       }
     }
     // window.EOSenses (senses-runtime.js) owns install/enable state for the
@@ -2495,9 +2487,6 @@ class Component extends DCLogic {
     if (this._unsubLocalModel) this._unsubLocalModel();
     if (this._unsubBrowserSenses) this._unsubBrowserSenses();
     if (this._onEntitySpanClick) document.removeEventListener('click', this._onEntitySpanClick);
-    if (this._onCiteHoverOver) document.removeEventListener('mouseover', this._onCiteHoverOver);
-    if (this._onCiteHoverOut) document.removeEventListener('mouseout', this._onCiteHoverOut);
-    clearTimeout(this._citeHoverTimer);
   }
 
   // Put an earlier question back in the composer to reword and ask again.
@@ -2661,26 +2650,7 @@ class Component extends DCLogic {
   async _pingHealth() {
     try {
       const res = await fetch(this.proxyUrl() + '/health', { signal: AbortSignal.timeout(3000) });
-      if (res.ok) {
-        const data = await res.json();
-        this.setState({ proxyAlive: new Date(), _healthData: data });
-        return;
-      }
-    } catch {}
-    // Also try /stats for model info
-    try {
-      const statsRes = await fetch(this.proxyUrl() + '/stats', { signal: AbortSignal.timeout(3000) });
-      if (statsRes.ok) {
-        const statsData = await statsRes.json();
-        this.setState({ _healthData: { ...(this.state._healthData || {}), stats: statsData } });
-      }
-    } catch {}
-    try {
-      const modelsRes = await fetch(this.proxyUrl() + '/v1/models', { signal: AbortSignal.timeout(3000) });
-      if (modelsRes.ok) {
-        const modelsData = await modelsRes.json();
-        this.setState({ _healthData: { ...(this.state._healthData || {}), models: `${modelsData.tiny || '?'}/${modelsData.medium || '?'}` } });
-      }
+      if (res.ok) { this.setState({ proxyAlive: new Date() }); return; }
     } catch {}
     this._defaultToLocalModelIfNoEngine();
   }
@@ -2697,7 +2667,7 @@ class Component extends DCLogic {
     if (this._localModelUserTouched || this.state.localModel) return;
     this.setState({ localModel: true });
     if (window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
-      window.EOWebLLM.initSmart();
+      window.EOWebLLM.init();
     }
   }
 
@@ -2795,8 +2765,8 @@ class Component extends DCLogic {
     } catch {}
     // Static build: no proxy to ask, so the model picker is synthesized from
     // what this page itself can answer with — the in-browser WebLLM model
-    // (auto-downloaded) and the Anthropic API (direct browser call). Ollama
-    // is deliberately absent: there is no engine to reach on this build.
+    // (auto-downloaded), the Anthropic API (direct browser call), and Ollama
+    // (direct connection to the reader's local instance).
     if (ON_GH_PAGES) {
       const localId = window.EOWebLLM ? window.EOWebLLM.modelId : 'Llama-3.2-3B-Instruct-q4f16_1-MLC';
       this.setState(s => ({
@@ -2814,7 +2784,6 @@ class Component extends DCLogic {
   // Called when the reader picks "Ollama" from the provider dropdown.
   requestOllamaConnect() {
     if (ON_GH_PAGES) {
-      // Static build: prompt for the Ollama host URL since there's no proxy.
       const url = prompt('Enter your Ollama host URL (e.g. http://localhost:11434):', this.state._ollamaUrl || 'http://localhost:11434');
       if (!url) return;
       this.setState({ _ollamaUrl: url, _ollamaShowPermission: true });
@@ -2830,7 +2799,6 @@ class Component extends DCLogic {
 
   cancelOllamaConnect() {
     this.setState({ _ollamaShowPermission: false });
-    // Revert provider if they backed out of Ollama.
     if (this.state.provider === 'ollama') this.setState({ provider: 'local' });
   }
 
@@ -3599,109 +3567,6 @@ class Component extends DCLogic {
     this.setState(s => ({ settingsDraftKeys: { ...s.settingsDraftKeys, [provider]: value } }));
   }
 
-  // ── Admin review methods ──
-
-  async loadAdminSubmissions() {
-    const base = this.proxyUrl();
-    this.setState({ adminSubmissionsLoading: true });
-    try {
-      const [pendingRes, resolvedRes, statsRes, summaryRes] = await Promise.all([
-        fetch(`${base}/api/admin/submissions/pending`).then(r => r.json()).catch(() => []),
-        fetch(`${base}/api/admin/submissions/resolved`).then(r => r.json()).catch(() => []),
-        fetch(`${base}/api/admin/submissions/stats`).then(r => r.json()).catch(() => ({ pending: 0, resolved: 0, approved: 0, rejected: 0 })),
-        fetch(`${base}/api/admin/summary`).then(r => r.json()).catch(() => ({ submissionStats: {}, recycleBinCount: 0, memoryUsage: '—' })),
-      ]);
-      this.setState({ adminPendingSubmissions: Array.isArray(pendingRes) ? pendingRes : [], adminResolvedSubmissions: Array.isArray(resolvedRes) ? resolvedRes : [], adminSubmissionStats: statsRes, adminSummary: summaryRes, adminSubmissionsLoading: false });
-    } catch {
-      this.setState({ adminSubmissionsLoading: false });
-    }
-  }
-
-  adminShowQueue() { this.setState({ adminView: 'queue' }); }
-  adminShowEngine() { this.setState({ adminView: 'engine' }); }
-
-  async adminOpenSubmission(id) {
-    const base = this.proxyUrl();
-    try {
-      const resp = await fetch(`${base}/api/admin/submissions/${encodeURIComponent(id)}`);
-      if (!resp.ok) return;
-      const rec = await resp.json();
-      const latestEdit = (rec.provenance?.edits || []).slice(-1)[0];
-      this.setState({ adminReviewingId: id, adminEditDraft: latestEdit ? latestEdit.text : (rec.provenance?.raw?.text || ''), adminReviewFull: rec });
-    } catch { /* best-effort */ }
-  }
-
-  adminBackToQueue() { this.setState({ adminReviewingId: null, adminReviewFull: null, adminEditDraft: '' }); this.loadAdminSubmissions(); }
-
-  async adminSaveEdit() {
-    const id = this.state.adminReviewingId;
-    if (!id) return;
-    const base = this.proxyUrl();
-    try {
-      const resp = await fetch(`${base}/api/admin/submissions/edit`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, text: this.state.adminEditDraft, editor: 'admin' }),
-      });
-      if (!resp.ok) return;
-      this.adminOpenSubmission(id);
-    } catch { /* best-effort */ }
-  }
-
-  async adminApprove() {
-    const id = this.state.adminReviewingId;
-    if (!id) return;
-    const base = this.proxyUrl();
-    try {
-      const resp = await fetch(`${base}/api/admin/submissions/approve`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
-      if (!resp.ok) return;
-      this.setState({ adminReviewingId: null, adminReviewFull: null, adminEditDraft: '' });
-      this.loadAdminSubmissions();
-    } catch { /* best-effort */ }
-  }
-
-  async adminReject() {
-    const id = this.state.adminReviewingId;
-    if (!id) return;
-    const base = this.proxyUrl();
-    try {
-      await fetch(`${base}/api/admin/submissions/reject`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
-      this.setState({ adminReviewingId: null, adminReviewFull: null, adminEditDraft: '' });
-      this.loadAdminSubmissions();
-    } catch { /* best-effort */ }
-  }
-
-  async adminReopen(id) {
-    const base = this.proxyUrl();
-    try {
-      await fetch(`${base}/api/admin/submissions/reopen`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
-      this.setState({ adminReviewingId: null, adminReviewFull: null, adminEditDraft: '' });
-      this.loadAdminSubmissions();
-    } catch { /* best-effort */ }
-  }
-
-  async adminArchive(id) {
-    const base = this.proxyUrl();
-    try {
-      await fetch(`${base}/api/admin/submissions/archive`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      });
-      this.setState({ adminReviewingId: null, adminReviewFull: null, adminEditDraft: '' });
-      this.loadAdminSubmissions();
-    } catch { /* best-effort */ }
-  }
-
-  onAdminEditDraft(e) { this.setState({ adminEditDraft: e.target.value }); }
-
   activeSpace() {
     return this.state.spaces.find(s => s.id === this.state.activeSpaceId) || this.state.spaces[0] || { id: 'default', name: 'Room', turns: [], retrievals: [], sources: [] };
   }
@@ -4213,101 +4078,21 @@ class Component extends DCLogic {
     catch (e) { return { ok: false, error: String(e.message || e) }; }
   }
 
-  // Small local models guess at arithmetic rather than compute it — "15 + 27"
-  // can come back wrong (or right by luck) with no way to tell from the
-  // reply. A question that is nothing but an arithmetic expression under a
-  // conversational wrapper ("what's 15 + 27?") is answered here instead,
-  // exactly, without a model call at all. Deliberately conservative: after
-  // stripping the known-safe function/constant names, everything left over
-  // must be digits and math punctuation — any stray word means this is
-  // ordinary language that happens to contain numbers, not an expression,
-  // and it falls through to the normal ask path untouched.
-  _mathExprFromQuestion(q) {
-    let s = String(q || '').trim();
-    if (!s || s.length > 200) return null;
-    s = s.replace(/^(what'?s|what is|whats|calculate|compute|evaluate|solve|how much is)\s+/i, '').trim();
-    s = s.replace(/\?+\s*$/, '').trim();
-    if (!s) return null;
-    const FN = /\b(sqrt|cbrt|abs|sin|cos|tan|asin|acos|atan|atan2|log10|log2|log|ln|exp|mod|pow|pi|e)\b/gi;
-    const stripped = s.replace(FN, '');
-    if (!/^[\d\s.,+*/^%()-]*$/.test(stripped)) return null;
-    if (!/\d/.test(s)) return null;
-    if (!/[+\-*/^%]/.test(s) && !FN.test(s)) return null;
-    return s;
-  }
-
-  // Appends a math-answered turn the same shape askConversation/
-  // localAskConversation build, but instant and un-streamed — there is
-  // nothing to wait on, the expression already evaluated synchronously.
-  _answerWithMath(question, expr, value) {
-    const formatted = (typeof math !== 'undefined' && math.format) ? math.format(value, { precision: 14 }) : String(value);
-    const id = 'math-' + Date.now();
-    this.updateActiveSpace(sp => ({
-      ...sp,
-      turns: sp.turns.concat([{
-        id, q: question, attachments: [], hasAttachments: false, retrieval: null, prompt: '',
-        a: formatted, citations: null, streaming: false, model: 'math.js (exact, computed in this tab)',
-      }]),
-    }));
-    this.logAdd('∑', `Evaluated "${expr}" via math.js — no model call`, 'chat');
-  }
-
   // The chat answer, as clickable HTML. Markdown renders first, then every
-  // entity surface AND every citation footnote in the resulting text is
-  // wrapped so a reader can click either — a name to open its profile, a
-  // bracket to see the exact span it claims to come from — the same acts the
-  // reader's prose already supports elsewhere in the app. The wrap happens on
-  // real text nodes (never inside tags), so a surface or bracket inside a
-  // bold/emphasis run still highlights without breaking the markup.
-  renderAnswerEntities(text, turnId) {
-    let html = this.renderMarkdown(text);
+  // entity surface in the resulting text is wrapped so a reader can click a
+  // name to open its profile — the same act the reader's prose supports. The
+  // wrap happens on real text nodes (never inside tags), so a surface inside
+  // a bold/emphasis run still highlights without breaking the markup.
+  renderAnswerEntities(text) {
+    const html = this.renderMarkdown(text);
     if (!html) return html;
-    const host = document.createElement('div');
-    host.innerHTML = html;
-
-    if (turnId) {
-      const citeWalker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, {
-        acceptNode(node) {
-          if (node.parentElement && node.parentElement.closest('.katex')) return NodeFilter.FILTER_REJECT;
-          CITE_BRACKET_RE.lastIndex = 0;
-          return CITE_BRACKET_RE.test(node.nodeValue || '') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-        }
-      });
-      const citeNodes = [];
-      while (citeWalker.nextNode()) citeNodes.push(citeWalker.currentNode);
-      citeNodes.forEach(node => {
-        CITE_BRACKET_RE.lastIndex = 0;
-        const raw = node.nodeValue;
-        const frag = document.createDocumentFragment();
-        let cursor = 0;
-        let m;
-        while ((m = CITE_BRACKET_RE.exec(raw)) !== null) {
-          if (m.index > cursor) frag.appendChild(document.createTextNode(raw.slice(cursor, m.index)));
-          const span = document.createElement('span');
-          span.className = 'eo-cite';
-          span.setAttribute('data-eo-cite-turn', turnId);
-          span.setAttribute('data-eo-cite-nums', m[1].replace(/\s+/g, ''));
-          span.title = 'Show the exact span this cites';
-          span.style.color = '#1F5A4C';
-          span.style.cursor = 'pointer';
-          span.style.fontWeight = '500';
-          span.style.borderBottom = '1px dotted #1F5A4C';
-          span.textContent = m[0];
-          frag.appendChild(span);
-          cursor = m.index + m[0].length;
-        }
-        if (cursor < raw.length) frag.appendChild(document.createTextNode(raw.slice(cursor)));
-        node.parentNode.replaceChild(frag, node);
-      });
-      html = host.innerHTML;
-    }
-
     const { regex, surfaceMap } = this.buildSurfaceMatcher();
     if (!regex) return html;
+    const host = document.createElement('div');
+    host.innerHTML = html;
     const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         if (node.parentElement && node.parentElement.closest('.katex')) return NodeFilter.FILTER_REJECT;
-        if (node.parentElement && node.parentElement.closest('.eo-cite')) return NodeFilter.FILTER_REJECT;
         return (node.nodeValue || '').match(regex) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       }
     });
@@ -4340,55 +4125,15 @@ class Component extends DCLogic {
   }
 
   // One delegated listener for every decorated answer, so re-rendered chat
-  // bubbles never leak handlers. Bound in componentDidMount, removed on
-  // teardown. Entity surfaces open a profile on click; citation footnotes
-  // open on hover instead — the reader is checking a claim in passing while
-  // reading, not navigating away from the sentence to do it.
+  // bubbles never leak handlers. Bound in componentDidMount, removed on teardown.
   bindEntityClicks() {
     this._onEntitySpanClick = (e) => {
-      if (!e.target || !e.target.closest) return;
-      const el = e.target.closest('.eo-ent');
+      const el = e.target && e.target.closest ? e.target.closest('.eo-ent') : null;
       if (!el) return;
       const id = el.getAttribute('data-eo-entity');
       if (id) this.setState({ selectedEntity: id });
     };
     document.addEventListener('click', this._onEntitySpanClick);
-    this.bindCiteHover();
-  }
-
-  // mouseover/mouseout (not mouseenter/mouseleave) because only the former
-  // pair bubbles — one document-level listener then covers every citation in
-  // every answer, including ones rendered after this is bound, the same
-  // delegation shape as the click listener above. relatedTarget tracks which
-  // element the pointer is moving TO, so the popover survives the pointer
-  // crossing from the marker into the popover itself (to click its source
-  // link) and only actually closes once the pointer leaves both.
-  bindCiteHover() {
-    this._onCiteHoverOver = (e) => {
-      const cite = e.target.closest && e.target.closest('.eo-cite');
-      if (!cite) return;
-      clearTimeout(this._citeHoverTimer);
-      const rect = cite.getBoundingClientRect();
-      const turnId = cite.getAttribute('data-eo-cite-turn');
-      const nums = (cite.getAttribute('data-eo-cite-nums') || '').split(',').filter(Boolean);
-      if (!turnId || !nums.length) return;
-      this.setState({
-        citeHover: {
-          turnId, nums,
-          top: rect.bottom + window.scrollY + 6,
-          left: Math.min(rect.left + window.scrollX, window.innerWidth - 360),
-        },
-      });
-    };
-    this._onCiteHoverOut = (e) => {
-      const leaving = (e.target.closest && (e.target.closest('.eo-cite') || e.target.closest('.eo-cite-popover')));
-      if (!leaving) return;
-      const to = e.relatedTarget;
-      if (to && to.closest && (to.closest('.eo-cite') || to.closest('.eo-cite-popover'))) return;
-      this._citeHoverTimer = setTimeout(() => this.setState({ citeHover: null }), 150);
-    };
-    document.addEventListener('mouseover', this._onCiteHoverOver);
-    document.addEventListener('mouseout', this._onCiteHoverOut);
   }
 
   // Fold and outline for one source. Both are engine projections keyed by
@@ -4912,6 +4657,114 @@ class Component extends DCLogic {
     return chunk ? `${file} · ${chunk}` : file;
   }
 
+  onComposeTask(e) { this.setState({ composeTask: e.target.value }); }
+
+  // Runs holonic_task directly via the dedicated /api/holonic endpoint (not
+  // the LLM tool-choice loop) and renders each SSE event as it arrives —
+  // per-section iteration scores, replan decisions, and the final assembled
+  // sections with their real mechanical citations. The live iteration trace
+  // IS the point: it's the only place a user can actually see the model
+  // correct itself against the source rather than just reading a finished
+  // essay with no evidence anything was checked.
+  async runCompose() {
+    const task = this.state.composeTask.trim();
+    if (!task || this.state.composeRunning) return;
+
+    this.setState({
+      composeRunning: true, composeError: null, composePlan: null,
+      composeSections: {}, composeOrder: [], composeReplan: null, composeResult: null,
+    });
+    this.logAdd('⊨', `Compose: "${task.slice(0, 60)}${task.length > 60 ? '…' : ''}"`, 'chat');
+
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/holonic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task }),
+      });
+      if (!res.ok) throw new Error('Proxy returned ' + res.status);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (!line.trim() || !line.startsWith('data: ')) continue;
+          let data;
+          try { data = JSON.parse(line.slice(6)); } catch { continue; }
+          this._applyComposeEvent(data);
+        }
+      }
+    } catch (err) {
+      this.setState({ composeError: err.message, composeRunning: false });
+      this.logAdd('⊘', `Compose failed: ${err.message}`, 'chat');
+      return;
+    }
+    this.setState({ composeRunning: false });
+  }
+
+  // Each holonic_* payload carries enough of its own shape (msg + phase-
+  // specific fields) to route on without needing the SSE `event:` line.
+  _applyComposeEvent(data) {
+    if (data.subTasks) {
+      // holonic_plan
+      this.setState({ composePlan: data.subTasks });
+      this.logAdd('⊚', `Compose plan: ${data.subTasks.length} section(s)`, 'chat');
+      return;
+    }
+    if (data.id && data.label !== undefined && data.iteration === undefined && data.groundingScore === undefined) {
+      // holonic_subtask_start
+      this.setState(s => ({
+        composeSections: { ...s.composeSections, [data.id]: { id: data.id, label: data.label, iterations: [], done: false } },
+        composeOrder: s.composeOrder.includes(data.id) ? s.composeOrder : [...s.composeOrder, data.id],
+      }));
+      return;
+    }
+    if (data.id && data.iteration !== undefined && data.groundingScore !== undefined && data.citationsCount === undefined) {
+      // holonic_subtask_iteration
+      this.setState(s => {
+        const existing = s.composeSections[data.id] || { id: data.id, label: data.id, iterations: [], done: false };
+        return { composeSections: { ...s.composeSections, [data.id]: { ...existing, iterations: [...existing.iterations, data] } } };
+      });
+      return;
+    }
+    if (data.id && data.citationsCount !== undefined) {
+      // holonic_subtask_done
+      this.setState(s => {
+        const existing = s.composeSections[data.id] || { id: data.id, label: data.label, iterations: [], done: false };
+        return { composeSections: { ...s.composeSections, [data.id]: { ...existing, done: true, groundingScore: data.groundingScore, citationsCount: data.citationsCount } } };
+      });
+      return;
+    }
+    if (data.unresolvedIds || data.redundantPairs) {
+      // holonic_replan_start
+      this.setState({ composeReplan: { status: 'running', unresolvedIds: data.unresolvedIds || [], redundantPairs: data.redundantPairs || [] } });
+      this.logAdd('⊚', `Replanning: ${(data.unresolvedIds || []).length} unresolved, ${(data.redundantPairs || []).length} redundant`, 'chat');
+      return;
+    }
+    if (data.changes) {
+      // holonic_replan_done
+      this.setState({ composeReplan: { status: 'done', changes: data.changes } });
+      return;
+    }
+    if (data.sections !== undefined && data.output !== undefined) {
+      // final `done` event
+      this.setState({ composeResult: data });
+      this.logAdd('⊨', `Compose done: ${data.sections} section(s), ${data.mechanicalCitations} citations`, 'chat');
+      return;
+    }
+    if (data.message && !data.msg) {
+      // error event
+      this.setState({ composeError: data.message });
+    }
+  }
+
   // draftAttachments carries a File object (needed for the upload) that a
   // turn — which lives in conversation state, exported and copied around —
   // has no business holding onto. This is the shape a turn actually keeps.
@@ -4924,19 +4777,6 @@ class Component extends DCLogic {
     const q = this.state.draft.trim();
     if (!q && !this.state.draftAttachments.length) return;
     const mode = this.state.chatMode || 'chat';
-    // Pure arithmetic never goes to a model at all — see _mathExprFromQuestion.
-    if (!this.state.draftAttachments.length) {
-      const mathExpr = this._mathExprFromQuestion(q);
-      if (mathExpr) {
-        const evaluated = this.evaluateMath(mathExpr);
-        if (evaluated.ok) {
-          this.setState({ draft: '', draftAttachments: [] });
-          if (this.composerEl) { this.composerEl.style.height = 'auto'; }
-          this._answerWithMath(q, mathExpr, evaluated.value);
-          return;
-        }
-      }
-    }
     // Captured before the clear below — the reader panel needs to know which
     // files rode along with THIS question after it scrolls into history, and
     // the state field they live in is about to become the next question's.
@@ -4963,17 +4803,11 @@ class Component extends DCLogic {
       await this.localAskConversation(q, attachments);
     } else if (localReady) {
       await this.localAskConversation(q, attachments);
-    } else if (this.state.localModel || ON_GH_PAGES) {
-      // Local is the selected engine (toggled on in Settings → Senses, the
-      // default) but not ready yet — still downloading, unsupported, or
-      // errored. Falling through to askConversation() here used to silently
-      // send the question to the Ollama proxy's default model instead
-      // (phi4-mini:latest), so an answer would come back attributed to a
-      // model the reader never chose and didn't know was in play. Say why
-      // nothing answered instead of answering from the wrong place.
-      // ON_GH_PAGES is included too: that static build has no proxy or
-      // Ollama to fall back to at all, so firing askConversation() at a
-      // localhost URL the visitor does not own can only fail confusingly.
+    } else if (ON_GH_PAGES) {
+      // Static build: the in-browser WebLLM model is the ONLY other answer
+      // path — there is no proxy or Ollama to fall back to, and firing
+      // askConversation at a localhost URL the visitor does not own can only
+      // fail confusingly. Say why instead.
       await this.localUnavailableTurn(q, mode, null, attachments);
     } else {
       await this.askConversation(q, mode, attachments);
@@ -5030,15 +4864,10 @@ class Component extends DCLogic {
     if (ON_GH_PAGES) return;
     this._localModelUserTouched = true;
     const turningOn = !this.state.localModel;
+    writeStoredLocalIntent(turningOn);
     this.setState({ localModel: turningOn });
     if (turningOn && window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
-      window.EOWebLLM.initSmart();
-    } else if (!turningOn && window.EOWebLLM) {
-      // Actually stop a download in progress rather than just hiding it —
-      // unload() cancels any in-flight load and frees the (possibly
-      // partial) engine, instead of leaving it running in the background
-      // while the toggle claims to be off.
-      window.EOWebLLM.unload();
+      window.EOWebLLM.init();
     }
   }
 
@@ -5056,12 +4885,23 @@ class Component extends DCLogic {
   // Install a different in-browser model. The old one's weights are deleted
   // first — gigabytes each, and the browser's storage quota is shared with the
   // reader's own documents and chats, so keeping two would put that data at
-  // risk of eviction. No confirm() gate: it's redownloadable cache, not data
-  // loss, and native dialogs don't fire in every host (embedded webviews,
-  // automated/testing browsers) — a click here should just act, and the
-  // catalog row's own "installing · N%" state is the feedback.
+  // risk of eviction. Confirm before starting: this both throws away a
+  // download the reader already paid for and begins a new one.
   selectLocalModel(id) {
     if (!window.EOWebLLM || !id || id === this.state.localModelId) return;
+    const next = (this.state.localCatalog || []).find(m => m.id === id);
+    const current = (this.state.localCatalog || []).find(m => m.id === this.state.localModelId);
+    // `cached === null` means the cache could not be read, not that nothing is
+    // there — the purge runs either way, so warn about it either way rather
+    // than promising a download that quietly deletes something.
+    const installed = (this.state.localCatalog || []).filter(m => m.cached !== false && m.id !== id);
+    const ok = window.confirm(
+      `Install ${next ? next.label : id}${next && next.size ? ' (' + next.size + ')' : ''}?\n\n`
+      + (installed.length
+        ? `This deletes the model you have now${current ? ' (' + current.label + ')' : ''} to free the space, then downloads the new one. Only one local model is kept at a time.`
+        : `It downloads now and stays cached for next time.`)
+    );
+    if (!ok) return;
     // The model name shown in the composer follows the active model, so keep
     // the picker's value in step when local mode is what's answering.
     if (this.state.provider === 'local') this.setState({ model: id });
@@ -5074,6 +4914,7 @@ class Component extends DCLogic {
   // browser is out of room and the reader would rather have the space back.
   purgeLocalModels() {
     if (!window.EOWebLLM) return;
+    if (!window.confirm('Delete all downloaded local models?\n\nThis frees the space immediately. Answering locally again will re-download the model.')) return;
     window.EOWebLLM.purgeAll().catch((e) => console.error('[eochat] local model purge failed', e));
   }
 
@@ -5126,58 +4967,93 @@ class Component extends DCLogic {
   }
 
   // The in-browser model catalog, as the Settings panel renders it. Each row
-  // carries its own state word — active / downloaded / not downloaded — so the
-  // reader can see before clicking which one costs a download and which is
-  // already paid for, and the section says out loud that installing one
-  // removes the others.
+  // carries its own state word — ready now / downloading (with a live
+  // progress bar, not just a percent in text) / on disk / not downloaded —
+  // so the reader can see before clicking which one costs a download and
+  // which is already paid for, and the section says out loud that installing
+  // one removes the others.
   _localCatalogProps(S) {
+    const status = S.localModelStatus;
     const rows = (S.localCatalog || []).map((m) => {
       const active = m.id === S.localModelId;
-      const busy = active && S.localModelStatus === 'loading';
+      const busy = active && status === 'loading';
       return {
         id: m.id,
         label: m.label,
         size: m.size,
         note: m.note,
         active,
-        starter: !!m.starter,
-        starterLabel: m.starterLabel || '',
-        state: busy ? `installing · ${S.localModelProgress.percent}%`
-          : active ? (S.localModelStatus === 'ready' ? 'active' : 'selected')
-          : m.cached === true ? 'downloaded'
+        busy,
+        progressWidth: `${Math.max(2, S.localModelProgress.percent || 0)}%`,
+        state: busy ? `downloading · ${S.localModelProgress.percent}%`
+          : active ? (status === 'ready' ? 'ready now' : status === 'error' ? 'failed' : 'selected')
+          : m.cached === true ? 'on disk'
           : m.cached === false ? 'not downloaded'
           : '',
+        stateColor: busy ? '#1F5A4C'
+          : active && status === 'ready' ? '#1F5A4C'
+          : active && status === 'error' ? '#A3592B'
+          : m.cached === true ? '#6E6A60'
+          : '#A39D91',
+        stateBg: busy || (active && status === 'ready') ? '#E5EDE9'
+          : active && status === 'error' ? '#FBEFE3'
+          : m.cached === true ? '#F2EFE8'
+          : 'transparent',
         border: active ? '#1F5A4C' : '#E4DFD5',
         bg: active ? '#F1F5F3' : '#FFFDFA',
         pick: () => this.selectLocalModel(m.id),
-        // Composer popover variant: also closes the menu, since picking a
-        // model there is a one-off action on a floating panel, not a
-        // standing Settings screen the reader keeps open to compare rows.
-        pickAndClose: () => { this.selectLocalModel(m.id); this.setState({ modelMenuOpen: false }); },
       };
     });
     const est = S.localStorageEstimate;
     const gb = (n) => (n / 1073741824).toFixed(1) + ' GB';
-    // Settings leads with the three starter tiers (Fast/Balanced/Best) —
-    // one clear decision instead of seven near-identical rows — and tucks
-    // the rest behind an explicit expander so they stay reachable without
-    // crowding the first choice a reader has to make.
-    const starterRows = rows.filter(r => r.starter);
-    const moreRows = rows.filter(r => !r.starter);
+    const activeRow = rows.find(r => r.active);
+    const cardStatusText = !S.localModelId ? 'Not started yet'
+      : status === 'unsupported' ? (S.localModelError || 'Cannot run in this browser')
+      : status === 'error' ? (S.localModelError || 'Download failed')
+      : status === 'loading' ? `${S.localModelProgress.text || 'Downloading…'} ${S.localModelProgress.percent}%`.trim()
+      : status === 'ready' ? 'Ready — running in this tab, weights stay cached for next time'
+      : 'Not started yet';
     return {
       localCatalog: rows,
-      localStarterCatalog: starterRows,
-      localMoreCatalog: moreRows,
-      hasMoreLocalModels: moreRows.length > 0,
-      showMoreLocalModels: !!S.showMoreLocalModels,
-      toggleMoreLocalModels: () => this.setState(s => ({ showMoreLocalModels: !s.showMoreLocalModels })),
-      moreLocalModelsLabel: S.showMoreLocalModels ? 'Show fewer' : `More models (${moreRows.length})`,
       hasLocalCatalog: rows.length > 0,
       localStorageText: est && est.quota
         ? `Browser storage: ${gb(est.usage)} used of about ${gb(est.quota)} available to this site.`
         : '',
       purgeLocalModels: () => this.purgeLocalModels(),
-      canPurgeLocal: rows.some(r => r.state === 'downloaded' || r.state === 'active'),
+      canPurgeLocal: rows.some(r => r.state === 'on disk' || r.state === 'ready now'),
+      // A single always-visible status card above the picker list — the
+      // question a reader actually has ("is it ready yet, and which one is
+      // it") answered in one place, instead of having to match the active
+      // row's border color against the rest of the list.
+      localCardModelName: window.EOWebLLM ? window.EOWebLLM.modelLabel() : (activeRow ? activeRow.label : ''),
+      localCardCanRename: status !== 'unsupported' && !!S.localModelId,
+      localCardStatusText: cardStatusText,
+      localCardStatusColor: (status === 'error' || status === 'unsupported') ? '#A3592B' : (status === 'ready' ? '#1F5A4C' : '#6E6A60'),
+      localCardIcon: status === 'loading' ? 'ph ph-spinner eo-spin'
+        : status === 'ready' ? 'ph ph-check-circle'
+        : status === 'error' ? 'ph ph-warning-circle'
+        : status === 'unsupported' ? 'ph ph-x-circle'
+        : 'ph ph-cpu',
+      localCardIconColor: status === 'ready' ? '#1F5A4C' : (status === 'error' || status === 'unsupported') ? '#A3592B' : '#8C877C',
+      localCardBorder: status === 'ready' ? '#CFE0D8' : (status === 'error' || status === 'unsupported') ? '#E7C9AE' : '#E4DFD5',
+      localCardBg: status === 'ready' ? '#F1F5F3' : '#FFFDFA',
+      localCardShowProgress: status === 'loading',
+      localCardProgressWidth: `${Math.max(2, S.localModelProgress.percent || 0)}%`,
+      localCardShowRetry: status === 'error',
+      localCardShowStart: status === 'idle' && !!S.localModelId,
+      startLocalModel: () => { if (window.EOWebLLM) window.EOWebLLM.init(); },
+      // Cosmetic only — see webllm-client.js setNickname/modelLabel. Renaming
+      // never touches which weights are cached or active.
+      renameLocalModel: () => this.openModal({
+        title: 'Rename local model',
+        label: 'Nickname (this browser only)',
+        placeholder: activeRow ? activeRow.label : 'e.g. My fast model',
+        initialValue: (window.EOWebLLM && window.EOWebLLM.snapshot().nickname) || '',
+        submitLabel: 'Save',
+        hint: 'Shown here and in the composer instead of the technical model id. Leave blank to go back to the default name.',
+        allowEmpty: true,
+        onSubmit: (v) => { if (window.EOWebLLM) window.EOWebLLM.setNickname(S.localModelId, v); },
+      }),
     };
   }
 
@@ -5304,24 +5180,9 @@ class Component extends DCLogic {
     let groundData;
     let groundFailed = null;
     try {
-      // `history` lets /api/ground run the SAME instruction-gate signal check
-      // (server-only, instruction-gate.js reads instruction-set/*.md from
-      // disk) that decides deliberate long-form treatment for server-mode
-      // chat — this path has no way to run that gate itself.
-      const recentQuestions = this.activeSpace().turns.filter(t => !t.streaming && t.a).slice(-6).map(t => t.q);
-      // Local-mode turns carry no server-held conversation record (nothing
-      // is persisted), so unlike askConversation — where the pool is fixed
-      // once at conversation creation and the server looks it up — this is
-      // the only place that can tell /api/ground which project's sources to
-      // search. Without it, retrieval silently falls back to the shared
-      // "corpus" pool regardless of which project the reader is actually in.
-      const activeProject = this.state.projects.find(p => p.id === this.state.activeProjectId);
       const gres = await fetch(this.proxyUrl() + (useWeb ? '/api/web-ground' : '/api/ground'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(useWeb ? { query: question } : {
-          query: question, groundSource: this.groundSourceFilter(), history: recentQuestions,
-          pool: activeProject ? activeProject.pool : 'corpus',
-        }),
+        body: JSON.stringify(useWeb ? { query: question } : { query: question, groundSource: this.groundSourceFilter() }),
       });
       if (!gres.ok) throw new Error('proxy returned ' + gres.status);
       groundData = await gres.json();
@@ -5330,27 +5191,22 @@ class Component extends DCLogic {
       groundFailed = err;
     }
 
-    // The server path (askConversation) gates project instructions through
-    // instruction-gate.js — surf-and-fold, budgeted, same discipline as
-    // grounding. This path has no server generation call, but the proxy is
-    // still reachable for retrieval (see /api/ground above), so it can also
-    // gate instructions the same way via the existing preview endpoint —
-    // reusing that mechanism rather than handing the model the rules whole.
-    // Falls back to the raw cached text (unfolded) only when the proxy
-    // itself is unreachable, same shape as grounding's own fallback below.
+    // The proxy gates project instructions into the server answer; in local
+    // mode it never sees the generation call, so the reader's rules are loaded
+    // here — from the same store the editor writes when no proxy answers, and
+    // from the proxy when it can — and handed to the model whole, whatever
+    // became of retrieval. A rule the model never sees is a rule the reader
+    // believes they wrote; that gap is the whole reason the server path folds
+    // rather than drops.
     const activeProjectId = this.state.activeProjectId;
-    let projectRulesSystemMessage = '';
+    let projectRules = '';
     if (activeProjectId) {
-      try {
-        const pres = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(activeProjectId) + '/instructions/preview', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question }), signal: AbortSignal.timeout(6000),
-        });
-        if (pres.ok) { const rec = await pres.json(); projectRulesSystemMessage = rec.systemMessage || ''; }
-      } catch {}
-      if (!projectRulesSystemMessage) {
-        const raw = this._localInstructionText(activeProjectId);
-        if (raw) projectRulesSystemMessage = 'PROJECT INSTRUCTIONS — the reader wrote these rules for this project; obey them.\n\n' + raw;
+      projectRules = this._localInstructionText(activeProjectId);
+      if (!projectRules) {
+        try {
+          const pres = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(activeProjectId) + '/instructions', { signal: AbortSignal.timeout(6000) });
+          if (pres.ok) { const rec = await pres.json(); projectRules = rec.text || ''; }
+        } catch {}
       }
     }
 
@@ -5379,107 +5235,28 @@ class Component extends DCLogic {
     };
     patchTurn({ grounding });
 
-    // The proxy path (askConversation) never sends raw history either — the
-    // *server* holds it, keyed by conversationId, and folds project rules
-    // into it there. This path has no server-held conversation (local-mode
-    // turns are never persisted — "answers stay in this tab"), so it is the
-    // only place responsible for putting prior turns back in front of the
-    // model at all.
-    //
-    // Only a small window stays verbatim — that's what actually carries
-    // tone, exact wording, and "it"/"that" references. Anything older is
-    // selected (not summarized) by /api/conversations/fold-history and
-    // handed back as real q/a pairs, placed as ordinary messages ahead of
-    // the verbatim window — no prose recap, no explanation of the mechanism.
-    // A model reads real turns better than a description of turns.
-    const VERBATIM_HISTORY_TURNS = 3;
-    const priorTurns = this.activeSpace().turns.filter(t => t.id !== localId && !t.streaming && t.a);
-    const verbatimTurns = priorTurns.slice(-VERBATIM_HISTORY_TURNS);
-    const olderTurns = priorTurns.slice(0, -VERBATIM_HISTORY_TURNS);
-
-    let foldedTurns = [];
-    let droppedCount = 0;
-    if (olderTurns.length) {
-      try {
-        const fres = await fetch(this.proxyUrl() + '/api/conversations/fold-history', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ turns: olderTurns.map(t => ({ q: t.q, a: t.a })), question }),
-          signal: AbortSignal.timeout(6000),
-        });
-        if (fres.ok) { const rec = await fres.json(); foldedTurns = rec.turns || []; droppedCount = rec.dropped || 0; }
-      } catch {}
-      // Proxy unreachable: no way to select which older turns fit, and
-      // sending everything raw is the regression this exists to avoid — drop
-      // the older turns rather than either. The verbatim window still
-      // carries the immediate thread.
-    }
-
-    // WebLLM requires exactly one system message and it must be messages[0] —
-    // a second role:'system' entry later in the array fails with "System
-    // prompt should always be the first message in `messages`", so grounding
-    // and project rules land in the same one. History does NOT: it goes in
-    // as real user/assistant messages below, not folded into this text.
-    let systemContent = groundData.systemPrompt;
-    if (projectRulesSystemMessage) systemContent += '\n\n' + projectRulesSystemMessage;
-    // The one thing worth a plain, one-line note: honest that a gap exists,
-    // not what mechanism made it. No "budget", no turn count, no jargon.
-    if (droppedCount > 0) systemContent += '\n\nThis conversation has more history than what is included below.';
-
-    const historyMessages = [...foldedTurns, ...verbatimTurns].flatMap(t => [{ role: 'user', content: t.q }, { role: 'assistant', content: t.a }]);
     const messages = [
-      { role: 'system', content: systemContent },
-      ...historyMessages,
-      { role: 'user', content: question },
+      { role: 'system', content: groundData.systemPrompt },
     ];
-
-    // Deliberate long-form: a section-by-section, citation-verified answer
-    // (window.EOLongform, driving the exact same orchestrator turn-controller.js
-    // runs server-side against Ollama) instead of one single-shot completion —
-    // decided server-side in /api/ground (the client has no way to run
-    // instruction-gate.js itself). Only for the plain WebLLM engine for now;
-    // web search and the browser-direct Anthropic/Ollama paths are unaffected.
-    const deliberate = !useWeb && !anthropic && !ollamaDirect && !!groundData.deliberate;
+    if (projectRules.trim()) {
+      messages.push({ role: 'system', content: 'PROJECT INSTRUCTIONS — the reader wrote these rules for this project; obey them.\n\n' + projectRules });
+    }
+    messages.push({ role: 'user', content: question });
 
     let answer = '';
-    let deliberateResult = null;
     const engineName = anthropic ? 'Anthropic API' : ollamaDirect ? 'Ollama' : 'Local model';
     try {
-      if (deliberate) {
-        deliberateResult = await window.EOLongform.run({
-          proxyUrl: this.proxyUrl(), question, citations: groundData.citations || [],
-          onProgress: (e) => {
-            if (e.phase === 'web_research_started') {
-              this.logAdd('⋈', 'Local evidence was thin — searching the web to supplement it.', 'chat');
-            } else if (e.phase === 'section_closed') {
-              answer += (answer ? '\n\n' : '') + `## ${e.title}\n\n${e.text}`;
-              // Citations arrive WITH the section that cites them — each
-              // section_closed event carries the running, already-renumbered
-              // table, so the citation chips update in step with the text
-              // instead of staying empty until the whole answer finishes.
-              const liveCitations = (e.citations || []).map(c => ({
-                num: String(c.index), resolved: true,
-                source: this._shortSource(c.source_id), sourceId: c.source_id,
-                byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
-                quote: String(c.text || '').slice(0, 300),
-              }));
-              patchTurn({ a: answer, citations: liveCitations.length ? liveCitations : null });
-            }
-          },
-        });
-        answer = deliberateResult.text;
+      let stream;
+      if (anthropic) {
+        stream = this._streamAnthropic(messages);
+      } else if (ollamaDirect) {
+        stream = this._streamOllama(messages);
       } else {
-        let stream;
-        if (anthropic) {
-          stream = this._streamAnthropic(messages);
-        } else if (ollamaDirect) {
-          stream = this._streamOllama(messages);
-        } else {
-          stream = window.EOWebLLM.stream(messages);
-        }
-        for await (const delta of stream) {
-          answer += delta;
-          patchTurn({ a: answer });
-        }
+        stream = window.EOWebLLM.stream(messages);
+      }
+      for await (const delta of stream) {
+        answer += delta;
+        patchTurn({ a: answer });
       }
     } catch (err) {
       this.setState({ streamingLoading: false, streamingTurnId: null });
@@ -5492,41 +5269,25 @@ class Component extends DCLogic {
     // the engine or web search retrieved" — the same check server turns run
     // before the mechanical fidelity pass, never the fidelity pass itself.
     // That gap is named explicitly in the trace row below, not left for the
-    // reader to notice on their own. The deliberate path is the one exception:
-    // its citations are already fidelity/attribution-verified and renumbered
-    // by the orchestrator, so there is nothing left for the regex to add.
-    let citations;
-    if (deliberate) {
-      citations = deliberateResult.citations.map(c => ({
-        num: String(c.index), resolved: true,
-        source: this._shortSource(c.source_id), sourceId: c.source_id,
-        byteStart: c.byte_start, byteEnd: c.byte_end, score: c.score,
-        quote: String(c.text || '').slice(0, 300),
-      }));
-    } else {
-      const citedNums = [...new Set((answer.match(/\[(\d+)\]/g) || []).map(m => Number(m.slice(1, -1))))];
-      citations = citedNums.map(num => {
-        const gc = (groundData.citations || []).find(c => c.index === num);
-        return {
-          num: String(num), resolved: !!gc,
-          source: gc ? (useWeb ? gc.title : this._shortSource(gc.source_id)) : ('⊘ unresolved — no ' + (useWeb ? 'web result' : 'engine passage') + ' for [' + num + ']'),
-          sourceId: gc ? gc.source_id : null,
-          url: gc && useWeb ? gc.url : undefined,
-          byteStart: gc ? gc.byte_start : undefined, byteEnd: gc ? gc.byte_end : undefined, score: gc ? gc.score : undefined,
-          quote: gc ? String(gc.text || '').slice(0, 300) : '',
-        };
-      });
-    }
+    // reader to notice on their own.
+    const citedNums = [...new Set((answer.match(/\[(\d+)\]/g) || []).map(m => Number(m.slice(1, -1))))];
+    const citations = citedNums.map(num => {
+      const gc = (groundData.citations || []).find(c => c.index === num);
+      return {
+        num: String(num), resolved: !!gc,
+        source: gc ? (useWeb ? gc.title : this._shortSource(gc.source_id)) : ('⊘ unresolved — no ' + (useWeb ? 'web result' : 'engine passage') + ' for [' + num + ']'),
+        sourceId: gc ? gc.source_id : null,
+        url: gc && useWeb ? gc.url : undefined,
+        byteStart: gc ? gc.byte_start : undefined, byteEnd: gc ? gc.byte_end : undefined, score: gc ? gc.score : undefined,
+        quote: gc ? String(gc.text || '').slice(0, 300) : '',
+      };
+    });
 
     patchTurn({
       a: answer, citations: citations.length ? citations : null, streaming: false,
       model: anthropic
-        ? (this.state.model || 'claude')
-        : window.EOWebLLM.modelLabel(),
-      // Dropped/withheld sections ride in the same collapsed-by-default gaps
-      // panel retrieval gaps already use — no new UI surface, matching
-      // ordinary chat's own "nothing to switch on" shape.
-      grounding: deliberate ? { ...grounding, gaps: [...(grounding.gaps || []), ...deliberateResult.gaps] } : grounding,
+        ? `anthropic: ${this.state.model || 'claude'} (API, browser-direct)`
+        : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
       trace: [
         { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: groundFailed
           ? `Unavailable — ${groundFailed.message}. Answered offline from the project's own rules and general knowledge, without retrieval.`
@@ -5538,11 +5299,9 @@ class Component extends DCLogic {
         { kind: 'model', name: 'Model', detail: anthropic
           ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
           : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
-        deliberate
-          ? { kind: 'ground', name: 'Deliberate long-form', detail: `${deliberateResult.sectionsKept} section(s) kept, ${deliberateResult.sectionsDropped} dropped for not being carried by their evidence, ${deliberateResult.withheld} withheld by the fold — checked with the same fidelity/attribution verification the server path uses, not just a citation-bracket check.` }
-          : { kind: 'gap', name: 'Citation check', detail: useWeb
-              ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
-              : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
+        { kind: 'gap', name: 'Citation check', detail: useWeb
+          ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
+          : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
         { kind: 'gap', name: 'Persistence', detail: anthropic
           ? 'This reply lives only in this tab — it was never sent to the proxy and will not survive a reload.'
           : 'This reply lives only in this tab — it was not sent to the proxy and will not survive a reload.' },
@@ -6974,26 +6733,24 @@ class Component extends DCLogic {
       quote: c.quote ? `“${c.quote}”` : '(engine returned no text for this span)'
     }));
 
-    // Honest account of where the answer's brackets stand. Kept to one short
-    // line — the full reasoning behind each case lives in this comment, not
-    // in the reader-facing text, since turn.hasUngroundedNotice below renders
-    // it collapsed by default (see toggleUngrounded).
+    // Honest account of where the answer's brackets stand.
     let ungroundedNotice = null;
     if (turn.a && unresolved.length) {
-      ungroundedNotice = `${unresolved.length} unverified citation${unresolved.length > 1 ? 's' : ''} (${unresolved.map(c => '[' + c.num + ']').join(' ')}) — no matching passage.`;
+      ungroundedNotice = `${unresolved.length} citation${unresolved.length > 1 ? 's' : ''} in this answer (${unresolved.map(c => '[' + c.num + ']').join(' ')}) ${unresolved.length > 1 ? 'have' : 'has'} no matching engine passage — treat ${unresolved.length > 1 ? 'them' : 'it'} as unverified.`;
     } else if (turn.a && g && !g.empty && retrieved.some(r => r.kept) && !resolved.length) {
       // Count only what the model could actually cite. Blaming it for ignoring
       // passages the fold dropped before it ever saw them is the wrong diagnosis.
       const offered = retrieved.filter(r => r.kept).length;
-      ungroundedNotice = `${offered} passage${offered > 1 ? 's' : ''} offered, none cited — untraceable to a source.`;
+      const dropped = retrieved.length - offered;
+      ungroundedNotice = `The engine retrieved ${retrieved.length} passage${retrieved.length > 1 ? 's' : ''} and offered the model ${offered}${dropped ? ` (${dropped} dropped by the fold budget)` : ''}, but the answer cites none of them — nothing here is traceable to a source.`;
     } else if (turn.a && g && g.empty) {
       // "Still loading" and "your sources are silent" both produced this
       // notice, so a warm-up window looked like a claim about the corpus.
       ungroundedNotice = g.warming
-        ? 'Index still warming — ask again shortly for a grounded answer.'
-        : 'No matching passage — answered from general knowledge.';
+        ? 'The document index was still loading when this was asked — nothing here is from your sources. Ask again in a moment for a grounded answer.'
+        : 'No passage in your sources matches this question — this answer is from the model\'s general knowledge, not your documents.';
     } else if (turn.a && !g) {
-      ungroundedNotice = 'No grounding reported — not engine-backed.';
+      ungroundedNotice = 'This turn reported no grounding — nothing here is engine-backed.';
     }
 
     const groundMeta = g && !g.empty
@@ -7046,19 +6803,10 @@ class Component extends DCLogic {
       }),
 
       // The verbatim surface: one card per citation the answer actually
-      // used. Collapsed by default per message — a five-source answer
-      // otherwise reads as a wall of quote cards before the reader has
-      // decided they want to see any of them — with a toggle to open it
-      // inline and a separate expand into the full-view modal for reading
-      // several side by side.
-      id: turn.id,
+      // used, always visible (no toggle) — the summary's proof sitting
+      // right beneath it, in the book's own bytes, not a diagnostic the
+      // reader has to go looking for.
       hasSnippets: (turn.snippets || []).length > 0,
-      snippetsOpen: !!panels.snippets,
-      toggleSnippets: toggle('snippets'),
-      snippetsChevron: chevron(panels.snippets),
-      snippetsColor: panels.snippets ? '#1F5A4C' : '#8C877C',
-      snippetsLabel: `${panels.snippets ? 'hide' : 'show'} sources (${(turn.snippets || []).length})`,
-      openSourcesModal: () => this.setState({ sourcesModalTurnId: turn.id }),
       snippets: (turn.snippets || []).map(s => {
         const openable = s.url ? true : !!this._sourceForCitation(s.sourceId);
         return {
@@ -7111,16 +6859,8 @@ class Component extends DCLogic {
       rawHeading: turn.prompt ? 'prompt sent to model' : 'prompt not reported by proxy',
       rawPrompt: turn.prompt || 'The proxy did not report an injected prompt for this turn. Nothing is reconstructed here — use “copy json” for everything the client actually received.',
 
-      // Collapsed by default, like trace/raw below — a per-turn toggle rather
-      // than an always-on banner, so a long back-and-forth isn't padded with
-      // one of these under every single reply.
       ungroundedNotice,
-      hasUngroundedNotice: !!ungroundedNotice,
-      ungroundedOpen: !!panels.ungrounded,
-      toggleUngrounded: toggle('ungrounded'),
-      ungroundedChevron: chevron(panels.ungrounded),
-      ungroundedColor: panels.ungrounded ? '#A3592B' : '#8C877C',
-      answerHtml: turn.a ? this.renderAnswerEntities(turn.a, turn.id) : null,
+      answerHtml: turn.a ? this.renderAnswerEntities(turn.a) : null,
       streamingAnswerHtml: null,
       selectForSurf: () => this.setState({ activeTurnId: turn.id, selectedEntity: null }),
       surfOutline: this.state.activeTurnId === turn.id ? '2px solid #1F5A4C' : '0',
@@ -7132,7 +6872,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses');
+    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), cp = tabStyle('compose'), se = tabStyle('senses');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // The proxy being unreachable only means "no engine" if the in-browser
@@ -7149,21 +6889,6 @@ class Component extends DCLogic {
     const selectEntity = (id) => this.focusEntity(id);
     const modal = S.modal;
     const modalValid = !!modal?.allowEmpty || (S.modalValue || '').trim().length > 0;
-    const turnsMapped = active.turns.map((turn, i) => this.turnVals(turn, i, selectEntity));
-    // The sources modal reads the same computed snippets a turn's inline
-    // panel would show — found by id in the already-mapped turns rather than
-    // recomputed, so the modal can never show a different set of sources
-    // than the panel it was opened from.
-    const sourcesModalTurn = S.sourcesModalTurnId ? turnsMapped.find(t => t.id === S.sourcesModalTurnId) : null;
-    // The footnote hover popover reads the very same snippet the inline
-    // panel would show for that number — filtered down to just the
-    // number(s) hovered, never recomputed, so "the span this cites" can
-    // never disagree with itself between the two views.
-    const citeHover = S.citeHover;
-    const citeHoverTurn = citeHover ? turnsMapped.find(t => t.id === citeHover.turnId) : null;
-    const citeHoverSnippets = citeHoverTurn
-      ? (citeHoverTurn.snippets || []).filter(s => citeHover.nums.includes(String(s.num)))
-      : [];
 
     const _commitEdit = (attId) => {
       const v = S.editTitleValue.trim();
@@ -7484,9 +7209,24 @@ class Component extends DCLogic {
       // proposed is routine. They are coloured apart because only one is a bug.
       color: w.from_prior ? '#A3592B' : '#8A857A',
     }));
-    const voidCandidateNote = castWithheld.length > 60
-      ? `60 of ${castWithheld.length} shown, prior-named first`
-      : `${castWithheld.length} candidate${castWithheld.length === 1 ? '' : 's'}`;
+    // LAWS.md L6 — engine-ground.js's engineFoldSource already computes
+    // withheld_total (the TRUE count before its own `limit` truncates the
+    // withheld array) and withheld_truncated specifically so "a truncated
+    // list cannot be mistaken for the whole one" (its own comment). That
+    // total was already threaded into castOfEnabledSources as d.withheldTotal
+    // and shown per-document (see the `cast:` summary line below), but this
+    // panel's own "N shown" note compared only against castWithheld.length —
+    // the already-engine-truncated array — so a document where the ENGINE
+    // itself had capped withheld at 40 out of, say, 200 real candidates would
+    // read as "40 candidates" here with nothing indicating 160 more exist
+    // upstream of this UI ever seeing them. Reconciled against the real
+    // total the engine already computed, not just this panel's own display cap.
+    const withheldTrueTotal = castDocs.reduce((sum, d) => sum + (d.withheldTotal || 0), 0);
+    const voidCandidateNote = withheldTrueTotal > castWithheld.length
+      ? `${Math.min(60, castWithheld.length)} of ${castWithheld.length} available shown (${withheldTrueTotal} total — the engine itself withheld the rest; refold with a higher limit to see more)`
+      : castWithheld.length > 60
+        ? `60 of ${castWithheld.length} shown, prior-named first`
+        : `${castWithheld.length} candidate${castWithheld.length === 1 ? '' : 's'}`;
     // Gaps are grouped by the field they are about, so nine engine gaps about
     // one unwired organ read as one finding instead of nine complaints.
     const voidGapRows = (() => {
@@ -7960,8 +7700,7 @@ class Component extends DCLogic {
 
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses',
-      isAdmin: true,
+      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isCompose: t === 'compose', isSenses: t === 'senses',
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
       webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
@@ -7971,19 +7710,9 @@ class Component extends DCLogic {
       toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch })),
       provider: S.provider,
       model: S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : ''),
-      // Truthful about what's actually going to answer the next question —
-      // local mode overrides provider/model in send() regardless of what
-      // those say (see localReady), so a picker that kept showing the dead
-      // Ollama selection while Local silently governed everything is what
-      // read as "it says two different models at once."
-      modelPickerLabel: !S.localModel
-        ? `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`
-        : !window.EOWebLLM ? 'local'
-        : S.localModelStatus === 'loading' ? `local · warming up ${S.localModelProgress.percent}%`
-        : S.localModelStatus === 'error' ? 'local · failed'
-        : S.localModelStatus === 'unsupported' ? 'local · unavailable'
-        : S.localModelStatus === 'ready' ? `local · ${window.EOWebLLM.modelLabel(S.localModelId)}${S.localUpgrading ? ' (upgrading…)' : ''}`
-        : 'local · off',
+      modelPickerLabel: (S.provider === 'local' && window.EOWebLLM)
+        ? `local · ${window.EOWebLLM.modelLabel()}`
+        : `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`,
       onProviderChange: (e) => {
         const id = e.target.value;
         if (id === 'ollama' && !S._ollamaAuthorized) {
@@ -7997,7 +7726,7 @@ class Component extends DCLogic {
         this.setState({ provider: id, model: p ? p.defaultModel : S.model });
       },
       onModelChange: (e) => this.setState({ model: e.target.value }),
-      hasModels: S._availableModels.length > 0 || (S.localCatalog && S.localCatalog.length > 0),
+      hasModels: S._availableModels.length > 0,
       modelOptions: S._availableModels,
       modelMenuOpen: S.modelMenuOpen,
       toggleModelMenu: () => this.setState(s => ({ modelMenuOpen: !s.modelMenuOpen })),
@@ -8047,6 +7776,33 @@ class Component extends DCLogic {
       settingsLocalBg: S.localModel ? '#1F5A4C' : 'none',
       settingsLocalColor: S.localModel ? '#FFFDFA' : '#8C877C',
       settingsLocalIcon: S.localModelStatus === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
+      // On a server-backed deployment, Ollama's free-text provider/model
+      // fields only mean something when Local is off — showing them
+      // alongside the in-browser catalog is exactly the "which box controls
+      // what" confusion the static build's own picker exists to avoid, so
+      // they're hidden the moment Local is on there too, not just on GH
+      // Pages.
+      showServerProviderFields: !ON_GH_PAGES && !S.localModel,
+      // The static build has no server at all, so "Default provider" /
+      // "Model name" — built for typing an arbitrary Ollama tag — never
+      // applied there in the first place. It gets its own, much smaller
+      // choice instead: this tab's own model, or the reader's Anthropic key.
+      isStaticBuild: ON_GH_PAGES,
+      staticProviderIsAnthropic: S.provider === 'anthropic',
+      staticSelectLocal: () => {
+        const row = S._availableModels.find(m => m.id === 'local');
+        this.setState({ provider: 'local', model: row ? row.defaultModel : S.model });
+      },
+      staticSelectAnthropic: () => {
+        const row = S._availableModels.find(m => m.id === 'anthropic');
+        this.setState({ provider: 'anthropic', model: row ? row.defaultModel : S.model });
+      },
+      staticLocalBorder: S.provider !== 'anthropic' ? '#1F5A4C' : '#E0DACE',
+      staticLocalBg: S.provider !== 'anthropic' ? '#E4EEE9' : '#FFFDFA',
+      staticLocalColor: S.provider !== 'anthropic' ? '#1F5A4C' : '#8C877C',
+      staticAnthropicBorder: S.provider === 'anthropic' ? '#1F5A4C' : '#E0DACE',
+      staticAnthropicBg: S.provider === 'anthropic' ? '#E4EEE9' : '#FFFDFA',
+      staticAnthropicColor: S.provider === 'anthropic' ? '#1F5A4C' : '#8C877C',
 
       // ── Settings → Senses. Hugging Face models installed into this browser
       // (window.EOSenses / senses-runtime.js). Every fact shown here about a
@@ -8195,35 +7951,12 @@ class Component extends DCLogic {
       })),
 
       ...this._localCatalogProps(S),
-      // The proxy/Ollama status pill and the stale fallback model name both
-      // describe a path that isn't answering right now — local defaults on
-      // everywhere, and once it's live, showing "proxy · live" and a model
-      // name from a dropdown that no longer exists in Settings is noise next
-      // to the local model badge that already says what's actually running.
-      proxyLive: live && !usingLocalModel, proxyDead: engineUnavailable,
-      // !S.localModel, not !usingLocalModel: the reader's INTENT to use local
-      // mode should hide the dormant Ollama label immediately, not just once
-      // WebLLM's status catches up to 'loading'/'ready' — local defaults on
-      // now, so gating on usingLocalModel alone let this flash visible for
-      // one render during the idle-to-loading transition on every mount.
-      showFallbackModelLabel: !!S.model && !S.localModel,
+      proxyLive: live, proxyDead: engineUnavailable,
       proxyStatusText: live ? ('proxy · live · ' + Math.round((Date.now() - S.proxyAlive.getTime()) / 1000) + 's ago') : '',
-      // Visible whenever local mode is actually what's answering, regardless
-      // of whether a proxy also happens to be reachable — local defaults on
-      // everywhere now, so gating this on the proxy being dead hid install
-      // progress and the active model in the single most common case (a dev
-      // proxy running alongside it), the one place a reader most needs to see
-      // it without opening Settings.
-      usingLocalModelBadge: usingLocalModel,
-      localModelBadgeText: (() => {
-        const label = window.EOWebLLM ? window.EOWebLLM.modelLabel() : 'local model';
-        if (S.localModelStatus === 'loading') return `${label} · installing ${S.localModelProgress.percent}%`;
-        if (S.localUpgrading) {
-          const upLabel = window.EOWebLLM ? window.EOWebLLM.modelLabel(S.localUpgradeModelId) : 'target model';
-          return `${label} · ready — upgrading to ${upLabel} ${S.localUpgradeProgress.percent}%`;
-        }
-        return `${label} · ready`;
-      })(),
+      usingLocalModelBadge: !live && usingLocalModel,
+      localModelBadgeText: S.localModelStatus === 'loading'
+        ? `local model · loading ${S.localModelProgress.percent}%`
+        : 'local model · ready',
       retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
       proxyUrlLabel: this.proxyUrl(),
       // Static (GitHub Pages) builds have no engine to reach at all — the
@@ -8254,7 +7987,7 @@ class Component extends DCLogic {
       tabDocuments: () => this.setState({ tab: 'documents' }),
       tabChat: () => this.setState({ tab: 'chat' }), tabOutline: () => this.setState({ tab: 'outline' }),
       tabOrbit: () => this.setState({ tab: 'orbit' }), tabGlassBox: () => this.setState({ tab: 'glassbox' }),
-      tabPriors: () => this.setState({ tab: 'priors' }),
+      tabPriors: () => this.setState({ tab: 'priors' }), tabCompose: () => this.setState({ tab: 'compose' }),
       tabSenses: () => this.setState({ tab: 'senses' }),
       tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
       tabChatColor: c.color, tabChatUnderline: c.underline,
@@ -8263,6 +7996,55 @@ class Component extends DCLogic {
       tabGlassBoxColor: g.color, tabGlassBoxUnderline: g.underline,
       tabPriorsColor: pr.color, tabPriorsUnderline: pr.underline,
       tabSensesColor: se.color, tabSensesUnderline: se.underline,
+      tabComposeColor: cp.color, tabComposeUnderline: cp.underline,
+      composeTask: S.composeTask,
+      onComposeTask: (e) => this.onComposeTask(e),
+      composeRunning: S.composeRunning,
+      composeCanRun: S.composeTask.trim().length > 0 && !S.composeRunning,
+      composeButtonBg: (S.composeTask.trim().length > 0 && !S.composeRunning) ? '#1F5A4C' : '#E0DACE',
+      runCompose: () => this.runCompose(),
+      composeButtonLabel: S.composeRunning ? 'Generating…' : 'Generate',
+      hasComposePlan: !!S.composePlan,
+      composePlanCount: S.composePlan ? S.composePlan.length : 0,
+      composeSectionRows: S.composeOrder.map(id => {
+        const sec = S.composeSections[id] || { id, label: id, iterations: [], done: false };
+        const trail = sec.iterations.map(it => it.groundingScore.toFixed(2)).join(' → ') || '…';
+        return {
+          id: sec.id,
+          label: sec.label,
+          groundingTrail: trail,
+          statusLabel: sec.done
+            ? `done — ${sec.citationsCount || 0} citation${sec.citationsCount === 1 ? '' : 's'}`
+            : (sec.iterations.length > 1 ? 'correcting…' : 'writing…'),
+          statusColor: sec.done ? '#1F5A4C' : '#A39D91',
+        };
+      }),
+      hasComposeSections: S.composeOrder.length > 0,
+      composeReplanNotice: S.composeReplan
+        ? (S.composeReplan.status === 'done'
+            ? (S.composeReplan.changes || []).map(c => `${c.action}: ${c.justification}`).join(' · ') || null
+            : 'Replanning — a section never grounded well or two sections turned out redundant…')
+        : null,
+      hasComposeError: !!S.composeError,
+      composeError: S.composeError,
+      composeDone: !!S.composeResult,
+      composeSummary: S.composeResult
+        ? `${S.composeResult.sections} section(s), ${S.composeResult.mechanicalCitations} mechanical citation(s), ${S.composeResult.gaps} gap(s)`
+        : '',
+        composeResultSections: (S.composeResult && S.composeResult.results || []).map(r => ({
+        id: r.id,
+        label: r.label,
+        content: r.content,
+        contentHtml: this.renderMarkdown(r.content),
+        citations: (r.citations || []).map(cit => {
+          const s = (r.surf || [])[cit.surfIndex];
+          return {
+            jaccard: cit.evidence.jaccard.toFixed(3),
+            source: this._shortSource(s ? s.source : ''),
+            quote: (s ? s.text : '').slice(0, 240),
+          };
+        }),
+      })),
       draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
       inputDisabled: S.streamingLoading,
       stopButtonAnim: S.streamingLoading ? 'animation: eoPulse 1.8s ease-in-out infinite;' : '',
@@ -8270,17 +8052,7 @@ class Component extends DCLogic {
         ? 'Every source is switched off — switch one on in the rail to ask.'
         : 'Answers cite only what your sources say.',
       composerHintColor: enabledSourceCount === 0 && roomSources.length ? '#A3592B' : '#A39D91',
-      turns: turnsMapped,
-      sourcesModalOpen: !!sourcesModalTurn,
-      sourcesModalTitle: sourcesModalTurn ? `Sources (${(sourcesModalTurn.snippets || []).length})` : '',
-      sourcesModalSnippets: sourcesModalTurn ? sourcesModalTurn.snippets : [],
-      closeSourcesModal: () => this.setState({ sourcesModalTurnId: null }),
-      citeHoverOpen: !!citeHoverTurn,
-      citeHoverTop: citeHover ? citeHover.top : 0,
-      citeHoverLeft: citeHover ? citeHover.left : 0,
-      citeHoverTitle: citeHover && citeHover.nums.length > 1 ? `Footnotes [${citeHover.nums.join(', ')}]` : `Footnote [${citeHover && citeHover.nums[0] || ''}]`,
-      citeHoverSnippets: citeHoverSnippets,
-      citeHoverEmpty: !!citeHoverTurn && citeHoverSnippets.length === 0,
+      turns: active.turns.map((turn, i) => this.turnVals(turn, i, selectEntity)),
       streamingAnswer: S.streamingAnswer, streamingAnswerHtml: S.streamingAnswer ? this.renderAnswerEntities(S.streamingAnswer) : null, streamingCitations: S.streamingCitations, streamingLoading: S.streamingLoading,
       thinkingPhase: S.thinkingPhase,
       // Once the answer's own prose starts arriving, thinkingPhase is cleared —
@@ -9054,167 +8826,6 @@ class Component extends DCLogic {
       goToApp: () => this.goToProjects(),
       goToProjects: () => this.goToProjects(),
       activeProjectName: (S.projects.find(p => p.id === S.activeProjectId) || {}).name || 'No project',
-
-      // ── Admin bindings ──
-      adminShowingQueue: S.adminView === 'queue',
-      adminShowingEngine: S.adminView === 'engine',
-      adminShowQueue: () => this.adminShowQueue(),
-      adminShowEngine: () => this.adminShowEngine(),
-      adminQueueBtnBorder: S.adminView === 'queue' ? '#1F5A4C' : '#E0DACE',
-      adminQueueBtnBg: S.adminView === 'queue' ? '#1F5A4C' : 'transparent',
-      adminQueueBtnColor: S.adminView === 'queue' ? '#FFFDFA' : '#8C877C',
-      adminEngineBtnBorder: S.adminView === 'engine' ? '#1F5A4C' : '#E0DACE',
-      adminEngineBtnBg: S.adminView === 'engine' ? '#1F5A4C' : 'transparent',
-      adminEngineBtnColor: S.adminView === 'engine' ? '#FFFDFA' : '#8C877C',
-      adminQueueSummary: S.adminSubmissionStats.pending > 0
-        ? `${S.adminSubmissionStats.pending} pending · ${S.adminSubmissionStats.approved} approved · ${S.adminSubmissionStats.rejected} rejected`
-        : 'Review queue · submissions',
-
-      // Review detail
-      adminReviewing: !!S.adminReviewingId,
-      adminNotReviewing: !S.adminReviewingId,
-      adminBackToQueue: () => this.adminBackToQueue(),
-      adminEditDraft: S.adminEditDraft,
-      onAdminEditDraft: (e) => this.onAdminEditDraft(e),
-      adminSaveEdit: () => this.adminSaveEdit(),
-      adminApprove: () => this.adminApprove(),
-      adminReject: () => this.adminReject(),
-      adminApproveBg: S.adminEditDraft.trim() ? '#1F5A4C' : '#E0DACE',
-      adminReopen: () => S.adminReviewingId && this.adminReopen(S.adminReviewingId),
-      adminArchive: () => S.adminReviewingId && this.adminArchive(S.adminReviewingId),
-
-      // Review provenance
-      adminReviewMediaLabel: (() => {
-        const rec = S.adminReviewFull; if (!rec) return 'text';
-        return rec.provenance?.raw?.mediaType === 'audio' ? 'audio submission' : 'text submission';
-      })(),
-      adminReviewSubmitted: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '';
-        try { return new Date(rec.createdAt).toLocaleString(); } catch { return ''; }
-      })(),
-      adminReviewRawText: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '';
-        return rec.provenance?.raw?.text || '';
-      })(),
-      adminReviewHasHeard: (() => {
-        const rec = S.adminReviewFull; if (!rec) return false;
-        return !!rec.provenance?.heard;
-      })(),
-      adminReviewHeardModel: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '';
-        return rec.provenance?.heard?.model || 'unknown';
-      })(),
-      adminReviewHeardText: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '';
-        return rec.provenance?.heard?.text || '';
-      })(),
-      adminReviewEdits: (() => {
-        const rec = S.adminReviewFull; if (!rec) return [];
-        return (rec.provenance?.edits || []).map((ed, i) => ({
-          by: ed.by || 'admin',
-          when: (() => { try { return new Date(ed.editedAt).toLocaleString(); } catch { return ''; } })(),
-          text: ed.text || '',
-          reason: ed.reason || '',
-          hasReason: !!ed.reason,
-        }));
-      })(),
-      adminReviewHasFinal: (() => {
-        const rec = S.adminReviewFull; if (!rec) return false;
-        return !!rec.provenance?.final;
-      })(),
-      adminReviewApproved: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '';
-        try { return new Date(rec.provenance?.final?.approvedAt).toLocaleString(); } catch { return ''; }
-      })(),
-      adminReviewFinalText: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '';
-        return rec.provenance?.final?.text || '';
-      })(),
-      adminReviewHasTemplate: (() => {
-        const rec = S.adminReviewFull; if (!rec) return false;
-        return !!rec.template;
-      })(),
-      adminReviewTemplateKind: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '';
-        return rec.template?.kind || 'form';
-      })(),
-      adminReviewTemplateFields: (() => {
-        const rec = S.adminReviewFull; if (!rec) return [];
-        return rec.template?.fields || [];
-      })(),
-      adminReviewPending: (() => {
-        const rec = S.adminReviewFull; if (!rec) return false;
-        return rec.status === 'pending';
-      })(),
-      adminReviewResolved: (() => {
-        const rec = S.adminReviewFull; if (!rec) return false;
-        return rec.status === 'approved' || rec.status === 'rejected';
-      })(),
-      adminReviewStatusColor: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '#A39D91';
-        return rec.status === 'approved' ? '#1F5A4C' : '#C0392B';
-      })(),
-      adminReviewStatusLabel: (() => {
-        const rec = S.adminReviewFull; if (!rec) return '';
-        return rec.status === 'approved' ? 'Approved' : 'Rejected';
-      })(),
-
-      // Queue list
-      adminPendingCount: S.adminPendingSubmissions.length,
-      adminQueueEmpty: S.adminPendingSubmissions.length === 0,
-      adminQueueItems: S.adminPendingSubmissions.map(s => ({
-        id: s.id,
-        preview: s.originalText || '(empty)',
-        glyph: s.mediaType === 'audio' ? '◷' : '◰',
-        glyphColor: s.mediaType === 'audio' ? '#1F5A4C' : '#A3592B',
-        mediaLabel: s.mediaType === 'audio' ? 'audio' : 'text',
-        mediaColor: s.mediaType === 'audio' ? '#1F5A4C' : '#A39D91',
-        hasHeard: !!s.hasHeard,
-        hasEdits: !!s.hasEdits,
-        open: () => { this.adminOpenSubmission(s.id); },
-      })),
-      adminHasResolved: S.adminResolvedSubmissions.length > 0,
-      adminResolvedCount: S.adminResolvedSubmissions.length,
-      adminResolvedItems: S.adminResolvedSubmissions.map(s => ({
-        id: s.id,
-        preview: s.finalText || s.originalText || '(empty)',
-        glyph: s.status === 'approved' ? '●' : '⊘',
-        glyphColor: s.status === 'approved' ? '#1F5A4C' : '#C0392B',
-        statusLabel: s.status === 'approved' ? 'Approved' : 'Rejected',
-        statusColor: s.status === 'approved' ? '#1F5A4C' : '#C0392B',
-        opacity: s.status === 'approved' ? 1 : 0.7,
-        open: () => { this.adminOpenSubmission(s.id); },
-      })),
-
-      // Submissions stats
-      adminSubmissionsPending: S.adminSubmissionStats.pending || 0,
-      adminSubmissionsApproved: S.adminSubmissionStats.approved || 0,
-      adminSubmissionsRejected: S.adminSubmissionStats.rejected || 0,
-
-      // Engine
-      adminEngineGlyph: engineUnavailable ? '⊘' : '⊨',
-      adminEngineColor: engineUnavailable ? '#C0392B' : '#1F5A4C',
-      adminEngineStatus: engineUnavailable ? 'unreachable' : 'running',
-      adminEngineUptime: (S._healthData && S._healthData.uptime) ? `${S._healthData.uptime}s` : '—',
-      adminStoreSize: (S._healthData && S._healthData.store_size != null) ? `${S._healthData.store_size}` : '—',
-      adminModels: (S._healthData && S._healthData.models) ? S._healthData.models : '—',
-
-      adminNoProjects: !S.projects.length,
-      adminProjectRows: S.projects.map(p => ({
-        id: p.id,
-        name: p.name,
-        meta: `${p.sourceCount || 0} sources · ${p.conversationCount || 0} conversations`,
-      })),
-      adminRecycleBinCount: S._recycleBin ? `${S._recycleBin.length}` : '—',
-      adminMemoryFiles: [
-        { name: 'conversations', count: '—' },
-        { name: 'projects', count: '—' },
-        { name: 'submissions', count: '—' },
-        { name: 'discourse', count: '—' },
-        { name: 'cabinet', count: '—' },
-      ],
-      adminNoMemory: false,
-
       projectList: S.projects.map(p => ({
         id: p.id,
         name: p.name,

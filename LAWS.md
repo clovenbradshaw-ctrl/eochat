@@ -480,6 +480,186 @@ decide whether to trust the draft or wait for correction.
 
 ---
 
+## L6 — No implied completeness
+
+**Between showing a reader a compressed or truncated view of a source and
+showing them the source itself, the interface never implies the compressed
+view is everything.**
+
+A fold, a withheld-candidates list, a summary — every one of these
+necessarily omits something, and that omission is not a defect, it is the
+point of compressing. But a reader who cannot tell "this is a deliberate,
+navigable truncation" from "this is everything there is" will eventually be
+burned by the first case while trusting it like the second. Measured
+directly, not hypothetically: `engineFoldSource` already computes
+`withheld_total` (the true count before its own `limit` truncates the
+`withheld` array) specifically so, in its own comment, "a truncated list
+cannot be mistaken for the whole one" — and until this law's check found it,
+the fold panel's own "N shown" note compared only against its
+already-engine-truncated array, never against that true total. The engine
+was honest; the interface built on top of it silently was not.
+
+### Clauses
+
+- **L6a — A truncation the engine discloses must be reconciled, not
+  independently recomputed.** Any UI surface that lists items an engine
+  projection has already capped (`limit`, `withheld_total`,
+  `withheld_truncated`, or any future field of the same shape) must compare
+  its own "N shown" language against the engine's real total, not just
+  against the length of whatever array it happens to hold client-side.
+
+### Measurement
+
+`scripts/check-laws.mjs::checkNoImpliedCompleteness` — static, not live (the
+live version of this check needs a browser rendering real ingested content
+against the fold panel, which this script has no harness for; the checks
+elsewhere in this document that need a running proxy get one, this one does
+not need one to verify what it verifies). Confirms `ui/index.html`'s
+withheld-candidates panel reconciles its display note against
+`castDocs`-derived `withheldTotal` before claiming a count is complete.
+
+---
+
+## L7 — No silent degradation across language or medium
+
+**When an organ produces no signal because the content is outside what it
+can read — wrong script, wrong medium, wrong register — the interface says
+so. It never presents an empty or negative result as if it were a
+considered finding.**
+
+`cube/index.js`'s terrain classifier is, by its own header's admission, an
+English lexicon. Real ancient Greek correctly produces no signal from it —
+that is the classifier behaving exactly as designed, refusing to guess
+outside its competence. What was missing was telling the reader which of
+two very differently-shaped things they were looking at: "Signal detected:
+NO (dominant: Void)" reads, unqualified, like a claim about the *source* —
+that this passage is genuinely about nothing, an absence. The true state —
+"this specific classifier cannot read this script at all" — is a claim
+about the *tool's own scope*, and a reader (or a model) cannot tell the two
+apart from an identically-shaped empty result.
+
+### Clauses
+
+- **L7a — A no-signal result from a scope-limited organ discloses the scope
+  limit.** When an organ whose competence is documented as partial (a
+  language-specific lexicon, a medium-specific perceiver) returns no signal,
+  the surface presenting that result states the organ's known scope
+  alongside the negative finding, rather than presenting the negative
+  finding alone.
+- **L7b — The disclosure does not become noise.** The same surface must
+  render cleanly, without the scope caveat, when the organ does find real
+  signal — an always-on caveat is as dishonest in the other direction as a
+  silent one, because a reader who sees it on every result stops reading it
+  at all.
+- **L7c — One fixed call site is not the law.** The same organ's output
+  often renders in more than one place (a full report, an ingest summary, a
+  search hint), and the conflation this law forbids has to be checked at
+  every rendering, not just the first one found.
+
+### Measurement
+
+`scripts/check-laws.mjs::checkNoSilentDegradation` — real, not mocked: runs
+the actual vendored cube classifier (`vendor/eoreader5`, via
+`buildReadingFromBytes`) against real ancient Greek text and real English
+text with genuine terrain signal, through `server/terrain-report-format.js`'s
+`formatTerrainReport` — the exact function `terrain_report`'s tool handler
+calls, extracted to its own module so it is unit-testable without a live
+proxy or a model round-trip. Confirms the scope-ambiguity disclosure is
+present on the Greek case (L7a) and absent on the clean-signal English case
+(L7b). L7c is a static check of `server/proxy.js`'s own source, needing no
+live engine at all — it directly verifies the two other real call sites
+(`ingest_file`'s terrain summary, `search_memory`'s terrain hint) carry the
+same fix `terrain_report` does, rather than assuming they were covered by
+analogy. See "Promoted, after a genuine disagreement worth recording" below
+for how those two extra call sites were actually found.
+
+---
+
+## L8 — Selection over a navigation index is mechanical, never model-steered
+
+**A generative model may read what a deterministic process selected. It must
+never be the process that does the selecting.**
+
+Free-form selection by a generative model over a list of candidates is not a
+navigation mechanism — it produces a plausible-sounding answer regardless of
+whether it looked in the right place, and nothing distinguishes "the model
+chose correctly" from "the model guessed and the prose covered for it"
+without an independent check. This is the same failure L2f names for
+citations (a quote unfalsifiable back to its bytes) one step earlier in the
+pipeline: an unfalsifiable *choice of where to look* is strictly worse,
+because everything downstream — the passage shown, the quote extracted, the
+review that passed it — inherits a wrong location and has no way to know.
+
+Measured directly, not assumed: three real local models (qwen2.5 0.5b, 1.5b,
+3b — CPU-only, via ollama) were each asked to pick the single most relevant
+entry from a 57-item byte-verified navigation index (eoreader6's tiered
+belief-graph fold over War and Peace) to answer "How does the book compare
+Napoleon and Kutuzov as commanders?" **All three picked the wrong entry** —
+even though the exactly correct one ("russian military kutuzov · napoleon
+defeats kutuzov") appeared three separate times in the list every one of
+them was shown. The smallest model additionally fabricated a supporting
+quote ("monstrous") that does not appear anywhere in the real passage it was
+given, and misattributed a real word ("vanquished") from a sentence about an
+unrelated character to a claimed Napoleon-versus-Kutuzov comparison. A
+larger model in the same run did not fabricate, but still picked the wrong
+passage and then, to its credit, said the passage didn't answer the
+question — which is the honest failure mode, but still a failure of
+*selection*, not of honesty, and honesty about a wrong passage does not
+recover the right one.
+
+Replacing free-form selection with deterministic keyword-overlap scoring
+against the same 57-item index — no model call in the selection step at
+all — picked the correct entry on the first try, reproducibly, at every
+model size including the smallest.
+
+### Clauses
+
+- **L8a — Selection is deterministic.** Given the same question and the same
+  index, the same candidate is chosen every time, regardless of which model
+  (if any) later reads it. A selection step whose output can change between
+  identical runs without the underlying data changing is not a selection
+  mechanism; it is a guess wearing a mechanism's clothes.
+- **L8b — A model generates only over what selection already produced.**
+  Once a mechanical process has chosen the material, a model's role is to
+  read it and answer — never to have chosen it, and never to be re-asked
+  afterward to justify a choice it made, because a post-hoc justification is
+  not a check on the choice.
+- **L8c — Every apparent quotation in a model's answer is checked against
+  the real source bytes before being shown to the reader.** A phrase that
+  reads like a citation is treated as a potential fabrication, not as
+  evidence, until it is confirmed to be a literal substring of the material
+  the model was actually given — regardless of how confident or specific it
+  reads. This holds even when L8a and L8b are both satisfied: a model can
+  still fabricate while reading real, correctly-selected material, and did,
+  measured above.
+
+### Measurement
+
+`scripts/probe-navigate-with-small-model.mjs` is the check, and it is meant
+to be re-run, not taken on faith: it prints the mechanical selection's
+reasoning (which keywords matched, against which candidates), the real bytes
+independently re-fetched at the selected offset, the model's answer, and an
+automated pass that extracts every quoted phrase from the answer and
+verifies it is a literal substring of the passage the model was shown. This
+is a real, reproducible script-level measurement rather than a live-proxy
+check like `check-laws.mjs`'s others — the failure mode lives in a model's
+free-form choice under a prompt, not in the proxy's own routing, and the fix
+is to remove that choice from the model's hands entirely rather than to
+audit it after the fact.
+
+### Fixed under this law
+
+The navigation demo this law was extracted from (`probe-navigate-with-
+small-model.mjs`) was itself the violation on its first version: it asked
+the model which of 57 index entries to read. Rewritten so the SURF step is
+pure keyword-overlap scoring (no model call) and the model's only job is
+reading the mechanically-selected, independently-byte-verified passage.
+Every model size tested went from wrong-and-sometimes-fabricating to
+correct-and-verified under the same question, with no change to the model
+itself — the fix was entirely in what was and wasn't asked of it.
+
+---
+
 ## Candidate laws
 
 Observed as consistent practice but not yet enforced by a check. Promote by
@@ -502,6 +682,30 @@ writing the check first; a law without one is a slogan.
   and now partially enforced here: L2e's check requires a no-match search to
   report *which* silence it was, so an empty corpus and a silent one can no
   longer render identically.
+### Promoted, after a genuine disagreement worth recording
+
+L6 ("no implied completeness") and L7 ("no silent degradation across
+language or medium") sat here briefly as unenforced candidates, on the
+reasoning that `vendor/eoreader5` was "a submodule this checkout does not
+vendor in" and no live signal existed to check against. That was true in
+the environment that wrote it and false in this one: `git submodule update
+--init --recursive` (the repo's own documented, standard setup step —
+see `package.json`'s `postinstall`) makes the real engine available, and
+against it both checks are real and currently pass — see L6 and L7 above,
+`scripts/check-laws.mjs::checkNoImpliedCompleteness` and
+`::checkNoSilentDegradation`. Promoted rather than left in two contradictory
+states in the same document.
+
+The analysis that arrived at "not yet promotable" was not wasted, though —
+it named two real call sites (`proxy.js`'s ingest terrain summary and
+`search_memory`'s terrain hint) carrying the identical unqualified "Void"
+conflation that the first fix (`terrain_report` alone) had missed. Both are
+now fixed too, and L7c checks them directly. Environment-dependent
+availability of a live engine is itself worth a note for whoever reads this
+next: a check that skips cleanly when its dependency is missing (as both do
+here, `SKIP` not `VIOLATION`, when the submodule isn't initialized) is
+correct; concluding from one uninitialized checkout that no check could
+ever exist was the actual mistake, not the missing submodule.
 
 ### Promoted
 

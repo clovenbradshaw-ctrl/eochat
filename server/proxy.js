@@ -48,6 +48,7 @@ import { REPO_ROOT, MEMORY_DIR, UI_DIR, INDEX_REPOS, assertDependencies, PERCEIV
 import { createModelRouter } from "./model-router.js";
 import { ensureSession, engineIngestFileAsync, engineIngestTextAsync, engineIngestFile, engineIngestText, engineGroundQuery, engineSearch, engineReadSpan, engineReadSegment, engineReadSourceBytes, engineReadContext, engineStats, engineListSources, engineFoldSource, engineDeleteSource, engineListRecycleBin, engineRestoreSource, enginePurgeSource, enginePurgeRecycleBin, engineRecycleBinStats, outlineOfText, engineOutlineOfSource, buildGroundedSystemPrompt, buildUngroundedSystemPrompt, foldConversationTurns } from "./engine-ground.js";
 import { terminateIngestWorker } from "./ingest-worker-client.js";
+import { formatTerrainReport } from "./terrain-report-format.js";
 import { compileInstructionFolds } from "./project-instructions.js";
 import { createInstructionGate, countTokens as gateCountTokens, DEFAULT_INSTRUCTION_BUDGET } from "./instruction-gate.js";
 import { DELIBERATE_FOLD_IDS, runDeliberateAnswer } from "./longform-orchestrator.js";
@@ -137,6 +138,14 @@ const MEDIUM_MODEL = parseArg("medium-model", "phi4-mini:latest");
 // reply's outer bound before it reads as broken, not a generation-quality
 // target.
 const LATENCY_BUDGET_MS = parseArg("latency-budget-ms", 8000, Number);
+
+// The model that rewrites a terse follow-up ("read it again") into a
+// self-contained cue for retrieval and the instruction gate (prosify-cue.js).
+// Defaults to the tiny talker model — the rewrite is a cheap, bounded task,
+// never the model that writes the answer. Pass --prosify-model "" to disable
+// the rewrite entirely; turn-controller.js treats a falsy value as a no-op.
+const PROSIFY_MODEL = parseArg("prosify-model", TINY_MODEL);
+const PROSIFY_TIMEOUT_MS = parseArg("prosify-timeout-ms", 4000, Number);
 
 // Context window handed to the talker. Must be large enough for the folded
 // passages plus the answer, and small enough that the model stays resident on
@@ -280,6 +289,8 @@ const turnController = createTurnController({
   isWarming: () => corpusWarmup.started && !corpusWarmup.ready,
   webSearchFn: webSearchAndFetch,
   cabinetStore,
+  prosifyModel: PROSIFY_MODEL,
+  prosifyTimeoutMs: PROSIFY_TIMEOUT_MS,
 });
 
 // ── Retry helper ──
@@ -1747,9 +1758,18 @@ const toolHandlers = {
       }
 
       store.ingest(content.slice(0, 50000), "file", { path: args.path, terrain: terrainInfo });
+      // LAWS.md L7a — same conflation server/terrain-report-format.js fixes
+      // for terrain_report's own output, fixed here too: "Void (no signal
+      // detected)" alone reads as a finding about this file, when it may
+      // just as easily mean the classifier's English-only lexicon cannot
+      // read it at all (see cube/index.js; measured directly on real Greek
+      // in ORGAN-STACK-REAL-DEPLOYMENT.md). Kept short — this is an inline
+      // one-line summary, not the full terrain_report — but the ambiguity
+      // is still named, not silently resolved to the reading that looks
+      // like a real finding.
       const terrainSummary = terrainInfo?.signalDetected
         ? ` Terrain: ${terrainInfo.covered.join(", ")}`
-        : " Terrain: Void (no signal detected)";
+        : " Terrain: Void, or outside this English-only classifier's scope (see terrain_report for detail)";
       return `Ingested ${args.path} (${bytes.length} bytes).${terrainSummary}`;
     } catch (err) {
       return `[Error ingesting ${args.path}: ${err.message}]`;
@@ -1760,10 +1780,14 @@ const toolHandlers = {
     const results = store.search(args.query, args.limit || 5);
     if (!results.length) return "(no matches in memory)";
     return results.map((r, i) => {
+      // LAWS.md L7a — same fix as the ingest summary above: an unqualified
+      // "Void" tag here is indistinguishable from "outside this English-
+      // only classifier's scope." Named explicitly, even in this terse a
+      // hint, rather than left to read as a finding.
       const terrain = r.meta?.terrain;
       const terrainHint = terrain?.signalDetected
         ? ` [terrain: ${terrain.covered?.join(",")}]`
-        : (terrain ? " [terrain: Void]" : "");
+        : (terrain ? " [terrain: Void/out-of-scope]" : "");
       return `--- ${i + 1}. (score: ${r.score.toFixed(2)}) ${r.meta.file || r.meta.path || "?"}${terrainHint} ---\n${r.text.slice(0, 500)}`;
     }).join("\n\n");
   },
@@ -1831,42 +1855,13 @@ const toolHandlers = {
       const { buildReadingFromBytes } = await import(perceiverDispatchUrl());
       const bytes = await fsp.readFile(args.path);
       const reading = await buildReadingFromBytes(bytes);
-      const report = reading.terrain_report;
-      const gate = reading.born_gate;
-
-      if (!report) return `[No terrain report available for ${args.path}]`;
-
-      const lines = [
-        `Terrain Report for: ${args.path}`,
-        `Medium: ${report.medium}`,
-        `Signal detected: ${gate?.signalDetected ? "YES" : "NO"} ${gate?.signalDetected ? "" : "(dominant: Void)"}`,
-        `Covered (${report.covered?.length ?? 0}/9): ${(report.covered ?? []).join(", ") || "none"}`,
-        `Uncovered: ${(report.uncovered ?? []).join(", ") || "none"}`,
-        ``,
-      ];
-
-      const ev = report.evidence ?? {};
-      if (ev.states != null) lines.push(`States: ${ev.states}`);
-      if (ev.events != null) lines.push(`Events: ${ev.events}`);
-      if (ev.categories != null) lines.push(`Categories: ${ev.categories}`);
-      if (ev.associations != null) lines.push(`Associations: ${ev.associations}`);
-      if (ev.voids != null) lines.push(`Voids: ${ev.voids}`);
-      if (ev.paradigms != null) lines.push(`Paradigms: ${ev.paradigms}`);
-      if (ev.atmospheres != null) lines.push(`Atmosphere descriptors: ${ev.atmospheres}`);
-      if (ev.lenses != null) lines.push(`Lens characteristics: ${ev.lenses}`);
-      if (ev.holonicLevels) lines.push(`Holonic: states=${ev.holonicLevels.states}, events=${ev.holonicLevels.events}, phases=${ev.holonicLevels.phases}`);
-      if (ev.dominantTerrain) lines.push(`Dominant terrain: ${ev.dominantTerrain}`);
-      if (ev.dominantStance) lines.push(`Dominant stance: ${ev.dominantStance}`);
-      if (ev.classifier) lines.push(`Classifier: ${ev.classifier}`);
-      if (ev.terrainAmplitudes) {
-        const top = ev.terrainAmplitudes
-          .filter((a) => a.amplitude > 0.01)
-          .sort((a, b) => b.amplitude - a.amplitude)
-          .slice(0, 5);
-        if (top.length) lines.push(`Top terrain amplitudes: ${top.map((t) => `${t.label}=${t.amplitude.toFixed(3)}`).join(", ")}`);
-      }
-
-      return lines.join("\n");
+      // Formatting lives in terrain-report-format.js, not inline here, so
+      // scripts/check-laws.mjs's L7 check can import and test the EXACT
+      // production text (real ambiguity-disclosure included) without needing
+      // a live proxy or a model round-trip — proxy.js starts an HTTP server
+      // as a side effect of module load, so it cannot itself be imported
+      // just to unit-test one handler's output.
+      return formatTerrainReport(reading.terrain_report, reading.born_gate, args.path);
     } catch (err) {
       return `[Error analyzing ${args.path}: ${err.message}]`;
     }

@@ -22,8 +22,7 @@ import {
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
 import { createInstructionGate, countTokens as gateCountTokens } from "./instruction-gate.js";
-import { runDeliberateAnswer, DELIBERATE_FOLD_IDS } from "./longform-orchestrator.js";
-import { loadMorphologyPrior, discoverNarratorContext } from "./longform-node-context.js";
+import { needsProsify, buildProsifyMessages, applyProsifyResult } from "./prosify-cue.js";
 import { reviewOutput, buildCorrectionSystemContent } from "./output-review.js";
 import {
   applyTurn, buildMemoryMessage, checkRecallDenial, emptyMemory,
@@ -32,6 +31,25 @@ import {
 import {
   buildCabinetBlock, emptyCabinet, mergeDeskFacts, markAccessed, retrieveCabinet,
 } from "./project-memory.js";
+import { createConversationHolon, recordTurn } from "./conversation-holon.js";
+import { generateAnswer } from "./turn-generation.js";
+
+// Every blink can be longform — these are ceilings, not targets; the model
+// still decides when to stop. DEFAULT is generous headroom for the common
+// case where a turn's evidence doesn't structurally split into more than one
+// earned section (turn-generation.js's outline collapses to one call, same
+// as before that module existed).
+const DEFAULT_MAX_TOKENS = 8192;
+// The output-review correction pass only fixes flagged violations in an
+// already-generated answer — it does not need longform headroom.
+const CORRECTION_MAX_TOKENS = 1500;
+// How many earned sections a turn's outline is allowed to grow to.
+// LONGFORM is the ceiling a turn earns once conversation-holon.js discovers
+// (never declares) that it depends on a prior turn's evidence — see
+// recordTurn in conversation-holon.js. Either way this bounds how far an
+// outline CAN split, never how far it must.
+const DEFAULT_MAX_SECTIONS = 4;
+const LONGFORM_MAX_SECTIONS = 8;
 
 // Mechanical post-processing: read the model's own output and format it for
 // display — no model call, no learned system, just regexes and rules.
@@ -116,6 +134,11 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
  * @param {number} deps.latencyBudgetMs
  * @param {() => boolean} deps.isWarming - true while the corpus is still ingesting at boot
  * @param {(query: string, opts?: object) => Promise<Array<{rank:number,title:string,url:string,snippet:string,text:string}>>} deps.webSearchFn - performs web search + fetch, returns structured results
+ * @param {string} [deps.prosifyModel] - Ollama model id used to rewrite a terse follow-up
+ *   ("read it again") into a self-contained retrieval/gate cue (prosify-cue.js). Omitted or
+ *   falsy disables the rewrite entirely — the raw question is used everywhere, unchanged,
+ *   which is the same behavior as before this dependency existed.
+ * @param {number} [deps.prosifyTimeoutMs] - abort budget for the rewrite call (default 4000)
  * @param {object|null} deps.cabinetStore - project file-cabinet store (has .get(pool) and .set(pool, cabinet)); null disables cabinet memory
  */
 // The grounding instruction the talker actually receives.
@@ -190,7 +213,7 @@ export function createTurnController(deps) {
     conversationStore, groundQuery, target, anthropicKey, anthropicModel,
     numCtx,
     modelRouter, heuristicModel, latencyBudgetMs, isWarming, webSearchFn,
-    cabinetStore,
+    cabinetStore, prosifyModel, prosifyTimeoutMs,
   } = deps;
 
   const _getAnthropicKey = () => typeof anthropicKey === 'function' ? anthropicKey() : anthropicKey;
@@ -293,6 +316,46 @@ export function createTurnController(deps) {
     return next;
   }
 
+  const DEFAULT_PROSIFY_TIMEOUT_MS = 4000;
+
+  // Rewrite a terse follow-up into a self-contained cue, using ONLY this
+  // conversation's own recorded state (the desk's hot terms/facts and recent
+  // raw history) — never the model's general knowledge. The raw `question`
+  // is what the model is told the reader said and what the desk extracts
+  // facts from (both unchanged by this); `cue` is used ONLY to decide what
+  // gets retrieved and which instruction folds surface. See prosify-cue.js.
+  //
+  // Disabled by default (no deps.prosifyModel): returns the raw question
+  // unchanged, at zero cost, so a deployment that never configures this
+  // dependency behaves exactly as it did before it existed.
+  async function prosifyCue({ question, history, hot, facts }) {
+    if (!prosifyModel || !needsProsify(question)) {
+      return {
+        cue: question, raw: question, changed: false,
+        reason: prosifyModel ? "self-contained" : "disabled",
+      };
+    }
+    try {
+      const messages = buildProsifyMessages({ question, history, hot, facts });
+      const resp = await fetch(`${target}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: prosifyModel, messages, stream: false,
+          options: { temperature: 0.2, num_predict: 128 },
+        }),
+        signal: AbortSignal.timeout(prosifyTimeoutMs || DEFAULT_PROSIFY_TIMEOUT_MS),
+      });
+      if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
+      const data = await resp.json();
+      return applyProsifyResult({ question, modelText: data.message?.content });
+    } catch (err) {
+      // A failed or slow rewrite degrades to the raw question — the same
+      // behavior as a self-contained message, not a broken turn.
+      return { cue: question, raw: question, changed: false, reason: "error", error: err.message };
+    }
+  }
+
   // Gate one turn's instruction context. Returns null when there is no corpus
   // (an empty gate is a no-op, never a crash), otherwise the report for SSE +
   // persistence plus the system message to prepend to the model call.
@@ -391,7 +454,7 @@ export function createTurnController(deps) {
     });
   }
 
-  async function callOllamaStreaming(model, messages, { signal, onDelta, maxTokens = 4096 }) {
+  async function callOllamaStreaming(model, messages, { signal, onDelta, maxTokens = DEFAULT_MAX_TOKENS }) {
     const resp = await fetch(`${target}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -427,7 +490,7 @@ export function createTurnController(deps) {
     return { text, model };
   }
 
-  async function callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens = 4096 }) {
+  async function callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens = DEFAULT_MAX_TOKENS }) {
     const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
     const nonSystem = messages.filter(m => m.role !== "system");
     const body = {
@@ -476,35 +539,21 @@ export function createTurnController(deps) {
     return { text, model };
   }
 
-  // Pulled out of callModelStreaming so a caller that needs to make SEVERAL
-  // calls within one turn (the deliberate long-form pipeline: a title call
-  // plus a draft call per section plus revisions) can resolve the model
-  // ONCE and reuse it — calling this per section would risk one essay's
-  // sections silently drafting from different routed models, and would make
-  // the single draft_info event's draftModel report the wrong thing.
-  function resolveModel({ provider, modelOverride, draftModel }, messages) {
+  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride, draftModel, maxTokens = DEFAULT_MAX_TOKENS }) {
+    let model, routerCtx;
     const key = _getAnthropicKey();
     const useAnthropic = provider === "anthropic" && key;
     if (useAnthropic) {
-      return { model: modelOverride || anthropicModel || "claude-sonnet-4-20250514", routerCtx: null, useAnthropic: true };
+      model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
     } else if (draftModel) {
-      // Draft model: use the fastest model that's still good enough. The
-      // correction loop will fix violations with a better model if needed.
-      return { model: draftModel, routerCtx: null, useAnthropic: false };
+      model = draftModel;
     } else if (modelOverride) {
-      return { model: modelOverride, routerCtx: null, useAnthropic: false };
+      model = modelOverride;
     } else if (modelRouter) {
-      const { model, ctx: routerCtx } = modelRouter.pick(messages);
-      return { model, routerCtx, useAnthropic: false };
+      ({ model, ctx: routerCtx } = modelRouter.pick(messages));
     } else {
-      return { model: heuristicModel(messages), routerCtx: null, useAnthropic: false };
+      model = heuristicModel(messages);
     }
-  }
-
-  // `fixedModel` (a resolveModel() result) skips re-resolution entirely —
-  // the deliberate pipeline's repeated small calls all pass the same one.
-  async function callModelStreaming(messages, { signal, onDelta, provider, modelOverride, draftModel, maxTokens, fixedModel }) {
-    const { model, routerCtx, useAnthropic } = fixedModel || resolveModel({ provider, modelOverride, draftModel }, messages);
     const startedAt = Date.now();
     const result = useAnthropic
       ? await callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens })
@@ -536,7 +585,7 @@ export function createTurnController(deps) {
     if (useAnthropic) {
       const systemMessages = messages.filter(m => m.role === "system").map(m => m.content).join("\n\n");
       const body = {
-        model, max_tokens: 1500,
+        model, max_tokens: CORRECTION_MAX_TOKENS,
         messages: messages.filter(m => m.role !== "system").map(m => ({ role: m.role, content: m.content })),
       };
       if (systemMessages) body.system = systemMessages;
@@ -554,7 +603,7 @@ export function createTurnController(deps) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model, messages, stream: false,
-        options: { temperature: 0.4, num_predict: 1500, num_ctx: numCtx },
+        options: { temperature: 0.4, num_predict: CORRECTION_MAX_TOKENS, num_ctx: numCtx },
       }),
     });
     if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
@@ -874,6 +923,21 @@ export function createTurnController(deps) {
     }
   }
 
+  // Records this turn in the conversation's holon log against the sources its
+  // OWN retrieval actually grounded on, and returns the section-count ceiling
+  // this blink earned — DEFAULT unless the log discovers this turn depends on
+  // a prior one (conversation-holon.js). This only bounds how far
+  // turn-generation.js's outline is ALLOWED to split; the outline still only
+  // splits as far as the evidence itself earns. Persists the updated log
+  // best-effort; a persistence failure should never block the answer itself.
+  async function resolveMaxSections(conv, turn, sourceIds) {
+    const priorLog = conv.holonLog || createConversationHolon();
+    const { log, promoted } = recordTurn(priorLog, { turnId: turn.id, sourceIds });
+    conversationStore.setHolonLog(conv.id, log).catch(() => {});
+    conv.holonLog = log;
+    return promoted ? LONGFORM_MAX_SECTIONS : DEFAULT_MAX_SECTIONS;
+  }
+
   // The core pipeline shared by a fresh turn and a regenerate — both already
   // have a turnId/answerId and a question by the time this runs.
   async function runAnswer({ conv, turn, answerId, question, sourceScope, pool, provider, model: modelOverride, draftModel, mode, webSearch }, sendEvent) {
@@ -941,13 +1005,20 @@ export function createTurnController(deps) {
 
         const history = buildHistoryMessages(conv, turn.id);
         const discourse = await loadDiscourseBlocks({ question, conv, pool });
+        // webSearchFn already ran on the raw question above, before the desk
+        // loaded — the cue cannot widen the search itself on this path. It
+        // still sharpens which instruction folds this turn surfaces.
+        const cueResult = await prosifyCue({
+          question, history: recentUserQuestions(conv, turn.id),
+          hot: discourse.state.hot, facts: discourse.state.facts,
+        });
         const messages = [];
         if (discourse.cabinetBlock) messages.push({ role: "system", content: discourse.cabinetBlock });
         if (discourse.memoryMsg) messages.push({ role: "system", content: discourse.memoryMsg });
         messages.push(systemMsg);
 
         const gateInfo = gateInstructionBlock({
-          question, conv, turnId: turn.id,
+          question: cueResult.cue, conv, turnId: turn.id,
           evidence: webResults.map((r) => [r.title, r.text || r.snippet || ""].join("\n")),
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
@@ -955,59 +1026,18 @@ export function createTurnController(deps) {
         const webDeliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id))
           && webResults.length > 0;
 
-        let rawText, model, webDeliberateGaps = null;
+        const maxSections = await resolveMaxSections(conv, turn, webResults.map((r) => r.url));
+        const webEvidence = webResults.map((r) => ({ source_id: r.url, span_id: r.url, text: r.text || r.snippet || "" }));
         let sawStart = false;
-
-        if (webDeliberate) {
-          const fixedModel = resolveModel({ provider, modelOverride, draftModel }, messages);
-          model = fixedModel.model;
-          sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length });
-
-          const generate = async (system, user, maxTokens) => {
-            const r = await callModelStreaming(
-              [{ role: "system", content: system }, { role: "user", content: user }],
-              { signal: controller.signal, onDelta: () => {}, maxTokens, fixedModel }
-            );
-            return r.text;
-          };
-
-          const webCitations = webResults.map((r, i) => ({
-            span_id: `web-${i}`,
-            source_id: r.url,
-            byte_start: 0,
-            byte_end: (r.text || r.snippet || "").length,
-            score: 1.0,
-            text: (r.text || r.snippet || "").trim(),
-          }));
-
-          let cumulativeText = "";
-          const result = await runDeliberateAnswer({
-            question, citations: webCitations, generate,
-            signal: controller.signal,
-            onProgress: (e) => {
-              if (e.phase === "section_closed") {
-                const chunk = (cumulativeText ? "\n\n" : "") + `## ${e.title}\n\n${e.text}`;
-                cumulativeText += chunk;
-                controller._partialText = formatOutput(cumulativeText);
-                sendEvent("answer_delta", { turnId: turn.id, answerId, delta: chunk, text: controller._partialText });
-              }
-            },
-          });
-
-          rawText = result.text;
-          lastCitations = result.citations;
-          maxCitation = result.citations.length;
-          webDeliberateGaps = result.gaps;
-        } else {
-          ({ text: rawText, model } = await callModelStreaming(messages, {
-            signal: controller.signal, provider, modelOverride, draftModel,
-            onDelta: (delta, text) => {
-              if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length }); }
-              controller._partialText = formatOutput(text);
-              sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
-            },
-          }));
-        }
+        const { text: rawText, model } = await generateAnswer({
+          messages, evidence: webEvidence, maxSections, singleSectionMaxTokens: DEFAULT_MAX_TOKENS,
+          callModelStreaming, provider, modelOverride, draftModel, signal: controller.signal,
+          onSectionDelta: (delta, text) => {
+            if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: webResults.length }); }
+            controller._partialText = formatOutput(text);
+            sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
+          },
+        });
 
         // Draft info: which model produced this draft. When draftModel is set,
         // the reader sees both the draft model and the correction model (if any).
@@ -1051,7 +1081,6 @@ export function createTurnController(deps) {
         if (webResults.length === 0) {
           gaps.push({ type: "no_web_results", reason: "No web search results matched this question — answered from general knowledge, uncited." });
         }
-        if (webDeliberateGaps?.length) gaps.push(...webDeliberateGaps);
         for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
@@ -1066,6 +1095,7 @@ export function createTurnController(deps) {
             gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
             corpora: gateInfo.corpora,
           } : null,
+          prosify: { raw: cueResult.raw, cue: cueResult.cue, changed: cueResult.changed, reason: cueResult.reason },
         });
         sendEvent("completed", {
           turnId: turn.id, answerId, status: "completed", text: finalText,
@@ -1082,7 +1112,11 @@ export function createTurnController(deps) {
         // The desk loads BEFORE retrieval so the conversation's topic trace can
         // condition the ground query (engineGroundQuery's `discourse` widening).
         const discourse = await loadDiscourseBlocks({ question, conv, pool });
-        const groundResult = groundQuery(question, {
+        const cueResult = await prosifyCue({
+          question, history: recentUserQuestions(conv, turn.id),
+          hot: discourse.state.hot, facts: discourse.state.facts,
+        });
+        const groundResult = groundQuery(cueResult.cue, {
           budget: 3000, maxUnits: 5, limit: 16,
           source: sourceScope, pool: pool || "corpus",
           discourse: discourse.state.hot?.length
@@ -1138,111 +1172,24 @@ export function createTurnController(deps) {
         messages.push(systemMsg);
 
         const gateInfo = gateInstructionBlock({
-          question, conv, turnId: turn.id,
+          question: cueResult.cue, conv, turnId: turn.id,
           evidence: (groundResult.citations || []).map((c) => c.text),
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
         messages.push(...history, { role: "user", content: question });
 
-        // Deliberate long-form: a section-by-section, citation-verified
-        // answer (longform-orchestrator.js) instead of one single-shot
-        // completion — triggered by the SAME instruction-gate signal that
-        // already describes this behaviour in prose
-        // (instruction-set/150-longform-essay.md), so the description is
-        // mechanically true rather than a hope that the model reads and
-        // follows it. Same mechanism the WebLLM/local-mode path uses (see
-        // /api/ground in proxy.js) — one implementation, both backends.
-        const deliberate = !!gateInfo?.activeIds?.some((id) => DELIBERATE_FOLD_IDS.has(id))
-          && (groundResult.citations || []).length > 0;
-
-        let effectiveGround = groundResult;
-        let effectiveLastCitations = lastCitations;
-        let effectiveMaxCitation = maxCitation;
-        let rawText, model;
+        const maxSections = await resolveMaxSections(conv, turn, (groundResult.citations || []).map((c) => c.source_id));
         let sawStart = false;
-
-        if (deliberate) {
-          // The default retrieval width above (budget:3000, maxUnits:5,
-          // limit:16) leaves almost nothing for the outline step to
-          // partition — widen once, using write-longform.mjs's own
-          // already-tuned values, only for turns that actually need it.
-          effectiveGround = groundQuery(question, {
-            budget: 4000, maxUnits: 12, limit: 24,
-            source: sourceScope, pool: pool || "corpus",
-            discourse: discourse.state.hot?.length
-              ? discourse.state.hot.slice(0, 4).map((t) => t.term).join(" ")
-              : undefined,
-          });
-          effectiveLastCitations = (effectiveGround.citations || []).map((c, i) => ({
-            index: i + 1, source_id: c.source_id, span_id: c.span_id,
-            byte_start: c.byte_start, byte_end: c.byte_end, score: c.score, text: c.text,
-          }));
-
-          // Re-report grounding against what the essay is ACTUALLY built
-          // from — the passages panel must match the wider retrieval, not
-          // the narrower one the turn started with.
-          sendEvent("witnesses_selected", {
-            turnId: turn.id, answerId,
-            empty: !effectiveGround.context, warming,
-            sourceCount: effectiveGround.total || 0, foldedCount: effectiveGround.folded || 0,
-            tokens: effectiveGround.tokens, budget: effectiveGround.budget, dropped: effectiveGround.dropped,
-            retrieved: [], citations: effectiveLastCitations, gaps: effectiveGround.gaps || [],
-            priorWidening: effectiveGround.priorWidening || null, discourse: effectiveGround.discourse || null,
-          });
-          await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-            grounding: {
-              sourceCount: effectiveGround.total || 0, foldedCount: effectiveGround.folded || 0,
-              tokens: effectiveGround.tokens, budget: effectiveGround.budget, dropped: effectiveGround.dropped,
-              empty: !effectiveGround.context, warming,
-              priorWidening: effectiveGround.priorWidening || null, discourse: effectiveGround.discourse || null,
-            },
-          });
-
-          const fixedModel = resolveModel({ provider, modelOverride, draftModel }, messages);
-          model = fixedModel.model;
-          sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: effectiveGround.folded || 0 });
-
-          const generate = async (system, user, maxTokens) => {
-            const r = await callModelStreaming(
-              [{ role: "system", content: system }, { role: "user", content: user }],
-              { signal: controller.signal, onDelta: () => {}, maxTokens, fixedModel }
-            );
-            return r.text;
-          };
-          const { narratorSpans, cast } = discoverNarratorContext(effectiveLastCitations);
-          const morphology = loadMorphologyPrior();
-
-          let cumulativeText = "";
-          const result = await runDeliberateAnswer({
-            question, citations: effectiveLastCitations, generate, narratorSpans, cast, morphology,
-            signal: controller.signal,
-            onProgress: (e) => {
-              if (e.phase === "section_closed") {
-                const chunk = (cumulativeText ? "\n\n" : "") + `## ${e.title}\n\n${e.text}`;
-                cumulativeText += chunk;
-                controller._partialText = formatOutput(cumulativeText);
-                sendEvent("answer_delta", { turnId: turn.id, answerId, delta: chunk, text: controller._partialText });
-              }
-            },
-          });
-
-          rawText = result.text;
-          effectiveLastCitations = result.citations; // already renumbered to match the brackets in rawText
-          effectiveMaxCitation = result.citations.length;
-          effectiveGround = { ...effectiveGround, gaps: [...(effectiveGround.gaps || []), ...result.gaps] };
-        } else {
-          const r = await callModelStreaming(messages, {
-            signal: controller.signal, provider, modelOverride, draftModel,
-            onDelta: (delta, text) => {
-              if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
-              controller._partialText = formatOutput(text);
-              sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
-            },
-          });
-          rawText = r.text;
-          model = r.model;
-        }
+        const { text: rawText, model } = await generateAnswer({
+          messages, evidence: groundResult.citations || [], maxSections, singleSectionMaxTokens: DEFAULT_MAX_TOKENS,
+          callModelStreaming, provider, modelOverride, draftModel, signal: controller.signal,
+          onSectionDelta: (delta, text) => {
+            if (!sawStart) { sawStart = true; sendEvent("writing_started", { turnId: turn.id, answerId, passageCount: groundResult.folded || 0 }); }
+            controller._partialText = formatOutput(text);
+            sendEvent("answer_delta", { turnId: turn.id, answerId, delta, text: controller._partialText });
+          },
+        });
 
         // Draft info: which model produced this draft.
         sendEvent("draft_info", {
@@ -1302,6 +1249,7 @@ export function createTurnController(deps) {
             gap: gateInfo.stats?.gap, rejectedByBudget: gateInfo.stats?.rejectedByBudget,
             corpora: gateInfo.corpora,
           } : null,
+          prosify: { raw: cueResult.raw, cue: cueResult.cue, changed: cueResult.changed, reason: cueResult.reason },
         });
         sendEvent("completed", {
           turnId: turn.id, answerId, status: "completed", text: finalText,
@@ -1344,7 +1292,7 @@ export function createTurnController(deps) {
     // violations. This extends the within-turn correction loop (finalizeAndReview)
     // across turns when the model can't fix everything in one pass.
     let effectiveQuestion = question;
-    let correction = null;
+    let crossTurnCorrection = null;
     const turns = conv.turns || [];
     if (turns.length > 0) {
       const prevTurn = turns[turns.length - 1];
@@ -1352,16 +1300,16 @@ export function createTurnController(deps) {
       if (prevAnswer?.review?.verdict === "FLAGGED" && prevAnswer.review.flags?.length) {
         const correctionContext = buildCorrectionSystemContent(prevAnswer.review.flags, prevAnswer.instructionGate?.activeIds || []);
         effectiveQuestion = `${question}\n\n${correctionContext}`;
-        correction = { previousTurnId: prevTurn.id, flags: prevAnswer.review.flags.map((f) => f.type) };
+        crossTurnCorrection = { previousTurnId: prevTurn.id, flags: prevAnswer.review.flags.map((f) => f.type) };
       }
     }
 
     const { turn } = await conversationStore.appendTurn(conversationId, {
       question: effectiveQuestion, sourceScope: effectiveScope, attachments,
     });
-    if (correction) {
-      sendEvent("cross_turn_correction", { turnId: turn.id, ...correction });
-    }
+    // Emitted only once `turn` exists — the event names THIS turn, so it
+    // cannot fire before this turn has an id.
+    if (crossTurnCorrection) sendEvent("cross_turn_correction", { turnId: turn.id, ...crossTurnCorrection });
     const answer = await conversationStore.addAnswer(conversationId, turn.id, {});
     sendEvent("accepted", {
       turnId: turn.id, answerId: answer.id, question: effectiveQuestion,
