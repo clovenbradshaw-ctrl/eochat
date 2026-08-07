@@ -12,6 +12,8 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, resolve, relative, dirname } from "node:path";
+import { sniffBinary, looksLikeWav } from "./media.mjs";
+import { perceive as dispatchPerceive } from "./senses.mjs";
 
 const MAX_READ_CHARS = 4000;
 const MAX_SHELL_OUTPUT_CHARS = 3000;
@@ -52,22 +54,45 @@ export function createTools(sandboxDir) {
       },
     },
     read_file: {
-      description: `read_file({"path": "relative/path.js"}) — read a file's content (truncated to ${MAX_READ_CHARS} chars, with a stated truncation count, never silent).`,
+      description: `read_file({"path": "relative/path.js"}) — read a TEXT file's content (truncated to ${MAX_READ_CHARS} chars, with a stated truncation count, never silent). Refuses honestly on binary content (e.g. a WAV or PNG file) instead of silently corrupting it as garbled text — use perceive to inspect a non-text file's real content instead.`,
       run({ path }) {
         let result;
         try {
           const abs = resolveInSandbox(sandboxDir, path);
-          const full = readFileSync(abs, "utf8");
-          const truncated = full.length > MAX_READ_CHARS;
-          result = {
-            content: full.slice(0, MAX_READ_CHARS),
-            truncated,
-            withheldChars: truncated ? full.length - MAX_READ_CHARS : 0,
-          };
+          const raw = readFileSync(abs);
+          if (sniffBinary(raw)) {
+            const hint = looksLikeWav(raw)
+              ? "this looks like a WAV audio file — use perceive to inspect its real structure"
+              : "read_file only reads text; use perceive to inspect non-text content without corrupting it";
+            result = { error: `"${path}" is binary content (${raw.length} bytes), not text — ${hint}` };
+          } else {
+            const full = raw.toString("utf8");
+            const truncated = full.length > MAX_READ_CHARS;
+            result = {
+              content: full.slice(0, MAX_READ_CHARS),
+              truncated,
+              withheldChars: truncated ? full.length - MAX_READ_CHARS : 0,
+            };
+          }
         } catch (err) {
           result = { error: err.message };
         }
         record("read_file", { path }, result);
+        return result;
+      },
+    },
+    perceive: {
+      description: 'perceive({"path": "relative/anything", "buckets": 16}) — sniff a file\'s REAL format and route it to the narrowest sense this app has for it, bounded so the result never grows with file size: text says so and points you to read_file; WAV gets its real chunk layout, sample rate/channels, duration, and a fixed-size loudness envelope ("buckets" numbers, default 16 — a 10-minute clip costs the same context as a 1-second one); PNG gets its real width/height/color-type from its header (pixel content itself is a stated gap, not decoded). Anything else reports a specific, honest gap AND names which of this app\'s own cataloged vision/OCR systems (server/senses-catalog.js) would apply — none has a live endpoint in this sandbox, so that gap is real, not a bug.',
+      run({ path, buckets }) {
+        let result;
+        try {
+          const abs = resolveInSandbox(sandboxDir, path);
+          const raw = readFileSync(abs);
+          result = dispatchPerceive(raw, path, buckets === undefined ? {} : { buckets });
+        } catch (err) {
+          result = { error: err.message };
+        }
+        record("perceive", { path, buckets }, result);
         return result;
       },
     },
