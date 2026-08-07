@@ -64,7 +64,30 @@ for (const line of lines) sum += JSON.parse(line).amount;
 console.log(sum);
 `;
 
+const routeListPatch = [
+  'if (mode === "list") {',
+  '  const dir = "claims";',
+  "  const lines = readdirSync(dir)",
+  '    .filter((f) => f.endsWith(".claim.json"))',
+  '    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")))',
+  "    .map((c) => `${c.claim_id} ${c.expect}`)",
+  "    .sort();",
+  "  for (const line of lines) console.log(line);",
+  "  process.exit(0);",
+  "}",
+  "",
+  "",
+].join("\n");
+
 export const DRY_RUN_SCRIPTS = {
+  "level3-constitution-list-command": [
+    { decompose: false },
+    { tool: "read_file", args: { path: "assay/route.mjs" } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'import { readFileSync } from "node:fs";', new_string: 'import { readFileSync, readdirSync } from "node:fs";\nimport { join } from "node:path";' } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'console.error(`unknown mode "${mode}"`);', new_string: routeListPatch + 'console.error(`unknown mode "${mode}"`);' } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs list" } },
+    { tool: "finish", args: { summary: "added the list subcommand to route.mjs, verified its output against claims/, and confirmed check still works" } },
+  ],
   "level4-constitution-veto-bug": [
     { decompose: false },
     { tool: "run_shell", args: { command: "node --test conformance/assay.test.js" } },

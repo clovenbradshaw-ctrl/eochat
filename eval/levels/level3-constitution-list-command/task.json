@@ -1,0 +1,13 @@
+{
+  "id": "level3-constitution-list-command",
+  "level": 3,
+  "title": "Real codebase: add a new subcommand to a real multi-file CLI, following its existing conventions",
+  "seedDir": "seed",
+  "repo": "clovenbradshaw-ctrl/eo-constitution",
+  "surfBudget": 1200,
+  "surfMaxUnits": 6,
+  "maxSteps": 12,
+  "maxTokensPerStep": 300,
+  "seed": 3001,
+  "taskPrompt": "There is a real Node.js CLI tool in the current directory: assay/route.mjs (which uses assay/classify.js), with existing 'check' and 'ask' subcommands, plus a claims/ directory of *.claim.json fixture files (each has a \"claim_id\" string field and an \"expect\" field that is either \"pass\" or \"refute\"). Add a NEW subcommand: `node assay/route.mjs list` must read every *.claim.json file in claims/, and print exactly one line per claim to stdout in the form `<claim_id> <expect>` (the two values separated by a single space, nothing else on the line), sorted alphabetically by claim_id, then exit with code 0. Do not change the existing 'check' or 'ask' behavior — they must keep working exactly as before. Use edit_file, not write_file, on assay/route.mjs — it is a real existing file, not something to retype from scratch. Actually run `node assay/route.mjs list` and compare a few lines against the real files in claims/ before calling finish."
+}
