@@ -222,12 +222,63 @@ unfalsifiable citation as the more serious failure than a missing one.
    the same "must make sense for a nameless leitmotif" bar applies here: a
    snippet that only works framed as this one task's hack does not become an
    organ, it stays a one-off.
-10. **Retain.** Write source, revision/SWHID, license, induced kind, cube
-    address, and verification result to the semantic ledger. The next task
-    at the same address finds this instead of re-searching — and if steps
-    3–7 all missed and eoCode genuinely had to hand-code something new, step
-    10 still fires on that result, so the same kind is never solved twice
-    even the first time it's real.
+10. **Coherence gate — built and validated, not just proposed
+    (`eval/agent/coherence-check.mjs`).** Verification (stage 8) proves each
+    spliced piece works in isolation; it says nothing about whether multiple
+    snipped pieces actually relate to each other the way the source
+    implementation did, or just sit next to each other because they
+    compiled. This is the check none of §6's market/research prior art has:
+    not "does it pass tests," but "do these pieces form a real holon, or an
+    incoherent pile." Built on `server/task-log.js`'s `deriveLevels()`,
+    which mechanically determines whether one thing is genuinely *above*
+    another — a real existence-dependency relation — or merely a *peer*,
+    with peer reported as an honest, first-class result rather than a forced
+    hierarchy. `checkCoherence(dir)` builds a REAL import/require graph over
+    a snipped set of files and runs it through that same test, flagging any
+    file with zero earned relation to the rest as `isolated`.
+
+    Validated against real, freshly-cloned material, not fixtures — the
+    same real-repo discipline `ORGAN-STACK-REAL-DEPLOYMENT.md` insists on:
+    cloned `d11z/asperitas` (a real Reddit clone from §6) and ran three
+    snips through it. `controllers/posts.js` + its two real model imports
+    (`models/post.js`, `models/user.js`) correctly reports `coherent: true`
+    — a clean core with every file earning a real edge. Adding
+    `controllers/comments.js` to that same snip correctly flags it
+    `isolated`: it has zero *import* edges to anything else, even though
+    it's functionally coupled to posts at runtime through Express
+    middleware (`req.post.comments`) — a real, honest limitation surfaced
+    by real material, not a hypothetical one: static import analysis alone
+    misses coupling that only exists through the framework's own request
+    lifecycle. A third, adversarial test mixed real asperitas files with
+    two files from an entirely unrelated codebase (this repo's own
+    `eo-cube.js`, `web-search.js`) in the same directory; the checker
+    correctly isolated exactly the two unrelated files while still finding
+    the real relations among the actually-related ones in the same run —
+    proof this discriminates rather than defaulting to "coherent."
+
+    Wired as a live tool (`check_coherence`, `addCoherenceCheckTool` in
+    `server/eocode-agent.js`) so eoCode itself can run it on anything it
+    just copied in, before calling `finish`.
+
+    **Real, current gap, not a detail to gloss over:** the theory
+    `deriveLevels()` cites (`docs/holon-level.md`, referenced in
+    `task-log.js` and `holonic-task.js`) names *two* tests —
+    existence-dependency and possibility-constraint ("A constrains what B
+    may be") — but only existence-dependency is implemented, here and
+    everywhere else in this codebase. `possibility-constraint` is named in
+    three places and built in none of them. Until it exists, this gate can
+    confirm two pieces are unrelated, or related by a real import edge; it
+    cannot yet confirm the fuller claim that a real edge is wired
+    *correctly*, or catch coupling that exists at runtime but not in the
+    import graph (as `comments.js` showed) — it inherits the same honesty
+    this document already insists on elsewhere: report what's actually
+    checked, not what the theory eventually promises.
+11. **Retain.** Write source, revision/SWHID, license, induced kind, cube
+    address, verification result, and coherence-gate result to the semantic
+    ledger. The next task at the same address finds this instead of
+    re-searching — and if steps 3–7 all missed and eoCode genuinely had to
+    hand-code something new, step 11 still fires on that result, so the
+    same kind is never solved twice even the first time it's real.
 
 **A constraint that binds every stage above, carried over from day one:
 never inflate the local model's prompt window.** eoCode drives a small
@@ -334,7 +385,7 @@ mature product (app generation) or a mature research area (repo-level
 retrieval), that prior art mostly argues *against* the piece of CRISPR built
 most recently — live external search as the primary mechanism — and
 *toward* the piece designed first and tested least: an internal, growing,
-license-clean organ registry (the Retain step, §4 stage 10 — the same
+license-clean organ registry (the Retain step, §4 stage 11 — the same
 shape as Voyager's skill library and Yeoman's generator ecosystem, minus
 their staleness problem, if kind induction keeps it self-maintaining
 instead of hand-curated). What genuinely does not already exist elsewhere,
@@ -360,7 +411,7 @@ no reason CRISPR should get a pass on it just because it's new.
 (`eval/agent/crispr-search.mjs`, tested live against `qwen2.5-coder:1.5b` on
 a real task) before §6 was written. Given what §6 found, the next
 investment should not be expanding external search further (more corpus
-stages, more registries) — it should be strengthening stage 10, Retain:
+stages, more registries) — it should be strengthening stage 11, Retain:
 turning every verified splice and every genuine hand-coded solution into a
 permanent, license-clean entry in eoCode's own organ registry, so external
 search stays a cold-start fallback for a kind eoCode has never seen, not
