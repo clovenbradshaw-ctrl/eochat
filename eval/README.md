@@ -35,6 +35,50 @@ Every run is recorded to `eval/results/runs/<timestamp>__<model>.jsonl` (one
 JSON object per task, full detail) and folded into `eval/results/
 scoreboard.md` (a human-readable, append-only history, newest first).
 
+## Real results so far (`qwen2.5-coder:7b`, CPU-only, this environment)
+
+Across several real runs in one session (see `eval/results/scoreboard.md`
+for the full, append-only history — nothing below is cherry-picked, every
+run's raw `.jsonl` is committed):
+
+- **Level 1 (single-shot): reliably PASSES.** Both tasks, every run.
+- **Level 2 `jsonl-quirk` (self-correct): reliably PASSES**, twice, via two
+  different real convergence paths — once a clean direct attempt (4 tool
+  calls), once via the bidirectional retry mechanism decomposing into 4
+  evidence-informed sub-tasks after a failed direct attempt (73 tool
+  calls). Two fixes got it here, both landed from live transcript evidence,
+  not guesses: Ollama `format: "json"` (grammar-constrains decoding —
+  without it, 3 consecutive unparseable responses aborted the loop
+  entirely) and disclosing a real environmental fact (no npm packages, no
+  network) that the model had been silently assuming otherwise.
+- **Level 2 `csv-quoted-comma`: still fails**, but every failure is now
+  diagnosable from a real persisted transcript instead of a black box. One
+  run's root cause: the model wrote a naive `split(",")` parser, correctly
+  read the real `CHECK: FAIL` output, then tried to fix it via `edit_file`
+  with `old_string` wrapped in its own stray literal quote marks — never
+  matched the real file, and it repeated the identical failing call 3
+  times without adapting. `edit_file`'s tool description and error message
+  now name this exact mistake.
+- **Level 3/4 (real multi-file codebase): fail, with a controlled,
+  reproducible finding.** Two different real runs at two different step
+  budgets (12→20 for Level 3, 14→22 for Level 4) show the model spending
+  its ENTIRE budget alternating `read_file`/`edit_file` and essentially
+  never calling `run_shell` to verify — and the read:edit ratio scaled
+  proportionally with the extra budget rather than resolving into
+  eventual verification. That rules out "not enough steps" as the cause:
+  this is a real behavioral pattern (re-reading a file after nearly every
+  edit instead of trusting `edit_file`'s own success response, never
+  breaking out to actually execute) independent of step budget, not a
+  resource constraint to keep tuning around.
+
+The honest summary: the architecture — bidirectional holonic retry,
+`surf`/fold ingest of a real repo, `edit_file`, transcript-level
+observability — is real and demonstrably working end-to-end against a real
+local model, including two genuine passes on a self-correction task. The
+remaining failures are real, characterized, measured capability boundaries
+of a 7B CPU model, not harness bugs — which is what this eval exists to
+find out.
+
 ## Architecture — reusing this codebase's own organs, not a bespoke framework
 
 The redirect that shaped this design: don't build a generic ReAct scaffold
