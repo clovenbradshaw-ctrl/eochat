@@ -3118,9 +3118,24 @@ class Component extends DCLogic {
   // guarantee — a prior must never become an attachable chat source.
   async fetchSources() {
     try {
-      // Fetch both the global corpus and the active project's pool
+      // A project's pool is its own — never blended with the shared global
+      // corpus. Fetching both and merging (the old behavior) meant anything
+      // ingested outside a project stayed permanently attached, toggle-on-by
+      // -default, inside every project's source list. Outside a project the
+      // global corpus is the whole story, so that's the only fallback case.
       const activeProject = this.state.projects.find(p => p.id === this.state.activeProjectId);
       const projectPool = activeProject ? activeProject.pool : null;
+
+      if (projectPool) {
+        const projRes = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(this.state.activeProjectId) + '/sources', { signal: AbortSignal.timeout(5000) });
+        if (projRes.ok) {
+          const { sources } = await projRes.json();
+          const projectSources = (Array.isArray(sources) ? sources : []).filter(s => (s.kind || 'corpus') === 'corpus');
+          this.setState({ _proxySources: projectSources });
+          this.warmFolds(projectSources);
+        }
+        return;
+      }
 
       const res = await fetch(this.proxyUrl() + '/api/sources?pool=corpus', { signal: AbortSignal.timeout(5000) });
       if (res.ok) {
@@ -3133,20 +3148,6 @@ class Component extends DCLogic {
         // source to be expanded. fetchFold is one-shot per source, so the
         // 15s health poll re-runs this harmlessly.
         this.warmFolds(corpus);
-      }
-
-      // Fetch project-scoped sources if a project is active
-      if (projectPool) {
-        const projRes = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(this.state.activeProjectId) + '/sources', { signal: AbortSignal.timeout(5000) });
-        if (projRes.ok) {
-          const { sources } = await projRes.json();
-          if (Array.isArray(sources)) {
-            const projectSources = sources.filter(s => (s.kind || 'corpus') === 'corpus');
-            this.setState(s => ({
-              _proxySources: [...((s._proxySources || []).filter(x => !projectSources.find(ps => ps.name === x.name))), ...projectSources],
-            }));
-          }
-        }
       }
     } catch {}
   }
@@ -3943,6 +3944,11 @@ class Component extends DCLogic {
     // previous project was on — cross-project chats must never carry over.
     const scoped = this.state.spaces.filter(sp => sp.spaceId === id || (project && sp.pool === project.pool));
     this.setState({ activeProjectId: id, view: 'chat', tab: 'chat', activeSpaceId: scoped.length ? scoped[0].id : null });
+    // Without this, the Documents rail keeps showing the previous project's
+    // (or the global corpus's) sources until the next 15s health poll —
+    // stale enough that a reader who switches and immediately checks
+    // Documents sees the wrong project's list.
+    this.fetchSources();
     if (project) {
       this.logAdd('●', `Switched to project "${project.name}"`, 'chat');
     }
@@ -6599,7 +6605,15 @@ class Component extends DCLogic {
     this.logAdd('◱', `${engineName} reply done`, 'chat');
   }
 
+  // Both the header "+" (next to Search the web) and the Documents tab's
+  // empty-state "Add documents" button — which says "No documents in this
+  // project" — call this. Neither is reachable outside a project (see the
+  // insideProject guard around the header button), so once a project is
+  // active this must land in that project's own pool via addProjectDocument,
+  // not the shared global corpus ingestSource() used to send it to
+  // regardless of context.
   addSource() {
+    if (this.state.activeProjectId) { this.addProjectDocument(); return; }
     this.openModal({
       title: 'Add source',
       label: 'URL or file path',
@@ -7338,13 +7352,27 @@ class Component extends DCLogic {
       sourcesOff: { ...(sp.sourcesOff || {}) }
     }));
     delete (this.activeSpace().sourcesOff || {})[base];
-    fetch(this.proxyUrl() + '/api/sources?source=' + encodeURIComponent(key), { method: 'DELETE' })
+    // A source attached inside a project lives in that project's own pool,
+    // not the shared "corpus" pool /api/sources assumes when no pool is
+    // given. Hitting that route from inside a project used to fail to find
+    // the source at all (wrong pool), so nothing was ever actually deleted —
+    // the row above disappears optimistically, then the next fetchSources()
+    // pulls the same, still-undeleted source right back in from its real pool.
+    const projectId = this.state.activeProjectId;
+    const delUrl = projectId
+      ? this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/sources/' + encodeURIComponent(key)
+      : this.proxyUrl() + '/api/sources?source=' + encodeURIComponent(key);
+    fetch(delUrl, { method: 'DELETE' })
       .then(r => r.json())
       .then(result => {
         if (result.error) { this.logAdd('⊘', `Delete failed for "${name}": ${result.error}`, 'sources'); }
         else { this.logAdd('●', `Deleted "${name}" (${result.spansRemoved || 0} spans removed)`, 'sources'); this.fetchRecycleBin(); }
       })
-      .catch(err => this.logAdd('⊘', `Delete failed for "${name}": ${err.message}`, 'sources'));
+      .catch(err => this.logAdd('⊘', `Delete failed for "${name}": ${err.message}`, 'sources'))
+      // Re-sync with the server's real state either way — a failed delete
+      // should show the source still there, not leave the optimistic removal
+      // standing in for a delete that never actually happened.
+      .finally(() => this.fetchSources());
   }
 
   async restoreSource(name) {
