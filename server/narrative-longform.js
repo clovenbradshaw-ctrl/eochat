@@ -623,10 +623,31 @@ function buildContinuityCorrectionPrompt(priorText, flags, world) {
  * pass: a possessive join ("Ledger's Daughter") broke the multi-word run at
  * the apostrophe, fragmenting one real name into two spurious ones — the
  * run pattern now optionally bridges a `'s ` between two capitalized words.
+ *
+ * MEASURED DEFECT, FIXED HERE (round 4): a run with ZERO declared entities
+ * (every name entirely model-invented, no world.entities to lean on at all)
+ * exposed a worse failure than fragmentation. "Mrs. Kuroba" — a title
+ * abbreviation, period included — recurred 10+ times, always as "Mrs.
+ * Kuroba". The period after "Mrs" both (a) broke the multi-word run, same
+ * shape as round 3's possessive fix, splitting off a bare "Mrs" fragment,
+ * AND (b) made round 2's own sentence-initial check misfire in the OTHER
+ * direction from round 3's dialogue bug: EVERY occurrence of "Kuroba"
+ * immediately follows "Mrs. " (period + space), which the lookbehind reads
+ * as a genuine sentence ending — so "Kuroba" was scored non-initial ZERO
+ * times across all 10+ appearances and never crossed the round-2 threshold
+ * at all. The actual, recurring, load-bearing surname was invisible to
+ * this mechanism entirely, not merely fragmented. Fixed: a small closed set
+ * of common English title abbreviations (the same "declared list, not
+ * inferred" discipline NAME_STOP already uses) is tried as an optional
+ * PREFIX that bridges its own period — "Mrs. Kuroba" now matches as one
+ * phrase, so the sentence-initial check runs once on the whole phrase's
+ * real start position instead of misfiring mid-abbreviation.
  */
+const TITLE_PREFIX = "(?:Mr|Mrs|Ms|Miss|Dr|St|Jr|Sr|Prof|Rev|Gen|Sgt|Capt|Lt|Col|Fr|Msgr)";
+
 function extractNewNames(text, known) {
   const counts = new Map(); // phrase -> { total, nonInitial }
-  const runRe = /\b[A-Z][a-z]{2,}(?:(?:'s)?\s+[A-Z][a-z]{2,})*\b/g;
+  const runRe = new RegExp(`\\b${TITLE_PREFIX}\\.\\s+[A-Z][a-z]{2,}(?:(?:'s)?\\s+[A-Z][a-z]{2,})*\\b|\\b[A-Z][a-z]{2,}(?:(?:'s)?\\s+[A-Z][a-z]{2,})*\\b`, "g");
   const SENTENCE_INITIAL_RE = /[.!?]\s+["'‘“]?$/;
   let m;
   while ((m = runRe.exec(text))) {
