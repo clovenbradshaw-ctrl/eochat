@@ -186,6 +186,22 @@ trusting the oracle (see git history for that verification).
   tasks against a genuinely arbitrary public repo are therefore scaffolded
   (the ingest/surf machinery works) but not run to completion in this
   session.
+- **Level 7 (ambiguous/underspecified) is deliberately deferred, not built.**
+  Levels 1-6 all share one property that makes their oracles trustworthy:
+  there is a single, independently-checkable correct behavior, discovered
+  before the model ever saw the task. Level 7's own premise — the task is
+  genuinely ambiguous — breaks that property; scoring it honestly requires
+  either accepting multiple interpretations (which needs the oracle to
+  parse and validate the model's own stated interpretation, a materially
+  weaker and more gameable check than every level below it) or silently
+  picking one "correct" interpretation ourselves, which would make the task
+  not actually ambiguous and defeats the point. Building a Level 7 task
+  with a weak oracle to complete the ladder would produce a number that
+  looks like a measurement and isn't one — the same failure shape this
+  codebase's own `eo-constitution` repo names explicitly for its own
+  deferred work ("a gap is a result"). Left as a stated gap for a future
+  session with a specific design for that oracle problem, not a silent
+  omission.
 - **Level 4 has one real task now** (`level4-constitution-veto-bug`):
   `harness.mjs` clones a real, in-scope repo (`clovenbradshaw-ctrl/eo-
   constitution`) declared by `task.repo`, ingests it into a dedicated `surf`
