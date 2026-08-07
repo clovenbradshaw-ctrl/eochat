@@ -34,6 +34,45 @@ function freshSandbox() {
   return mkdtempSync(join(tmpdir(), "react-loop-test-"));
 }
 
+test("the prompt sent to the model stays bounded past foldK turns — earlier steps fold to a summary line instead of full replay", async () => {
+  const sandboxDir = freshSandbox();
+  try {
+    writeFileSync(join(sandboxDir, "a.js"), "content\n");
+    const listCall = { tool: "list_files", args: {} };
+    const script = [listCall, listCall, listCall, listCall, listCall, listCall, listCall, listCall, { tool: "finish", args: { summary: "done" } }];
+    const adapter = createSpyAdapter(script);
+
+    const result = await runReactLoop({
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1, foldK: 3,
+    });
+
+    assert.equal(result.finished, true);
+    assert.equal(adapter.calls.length, 9, "8 list_files calls + 1 finish call");
+
+    // Before folding kicks in (foldedTurns.length <= foldK), the prompt is
+    // every turn verbatim: system + intro + 2 turns * 2 messages each.
+    assert.equal(adapter.calls[2].messages.length, 6, "step 2 has only 2 prior turns folded so far — no folding needed yet");
+    assert.ok(!adapter.calls[2].messages.some((m) => /EARLIER STEPS \(folded/.test(m.content)), "no fold summary before foldK is exceeded");
+
+    // By step 7 there are 7 prior turns — more than foldK=3 — so the prompt
+    // must be system + intro + ONE fold summary + the 3 most recent turns
+    // (6 messages), never all 7 turns' full detail (which would be 14+3=17).
+    const lateCall = adapter.calls[7].messages;
+    assert.equal(lateCall.length, 9, "system + intro + fold summary + 3 kept turns (6 messages) — bounded regardless of how many steps ran");
+    const foldMsg = lateCall.find((m) => /EARLIER STEPS \(folded/.test(m.content));
+    assert.ok(foldMsg, "expected a fold summary message once turns exceed foldK");
+    assert.match(foldMsg.content, /list_files/, "the fold summary still names what happened, just compactly");
+
+    // The full, un-folded record returned to the caller must still have
+    // every turn — folding only bounds what's SENT to the model, never what
+    // is remembered/reported.
+    assert.equal(result.transcript.length, 9);
+    assert.equal(result.messages.length, 2 + 8 * 2 + 1, "system+intro, 8 (assistant+observation) pairs, 1 final assistant finish message");
+  } finally {
+    rmSync(sandboxDir, { recursive: true, force: true });
+  }
+});
+
 test("a repeated identical failing call escalates to an explicit nudge, then aborts before exhausting the step budget", async () => {
   const sandboxDir = freshSandbox();
   try {
@@ -94,7 +133,7 @@ test("older steps get folded to a bounded digest once the window is exceeded, bu
     const adapter = createSpyAdapter(script);
 
     const result = await runReactLoop({
-      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1,
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1, foldK: 3,
     });
 
     assert.equal(result.finished, true);

@@ -27,58 +27,65 @@ import { parseAction } from "./lib/parse-action.mjs";
 const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
 const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
 
-// PROMPT FOLDING. `messages` below accumulates every raw response and every
-// full observation with no bound -- fine for the harness's own record, but
-// sent WHOLE to the adapter every single step it becomes exactly the
-// unbounded-context growth `ingest.mjs`'s surf/fold and task-log.js's
-// foldToWorkingSet exist to prevent, and it is the model under test that
-// pays for it: a CPU-bound small model has a small, fixed context window
-// (this eval's own Ollama adapter runs at num_ctx 4096), and a transcript
-// that keeps growing past it either gets silently mid-conversation-shifted
-// by the runtime or crowds out the actual task. Same fix, same place it
-// already lives in this codebase: keep the last FOLD_WINDOW_STEPS steps
-// verbatim (recent tool results are what the next decision actually turns
-// on), fold everything older into one bounded, honest digest line per step
-// -- never silently dropped, always says how much was condensed.
-const FOLD_WINDOW_STEPS = 3;
-const MAX_FOLDED_DIGEST_CHARS = 600;
+// SURF AND FOLD, applied to the running conversation. Ollama's /api/chat is
+// stateless per request, so every turn resends the WHOLE prompt — left
+// unbounded, a real run measured n_tokens climbing past 3400 within half a
+// dozen steps (system prompt + every raw assistant reply + every full tool
+// observation, replayed in full every single turn), which is most of a
+// small local model's entire context window spent on replaying its own
+// history rather than reasoning about the next step. This is the same
+// discipline task-log.js's foldToWorkingSet already applies to tasks —
+// "hand the model a small, bounded, current state, not more context as the
+// work grows" — applied here to conversation turns instead: the most
+// recent FOLD_K turns are replayed verbatim (recency is what a ReAct step
+// actually needs), everything older is folded to one short line per step,
+// and if even the fold gets long only the most recent folded lines are
+// shown, with an explicit count of what's withheld — never a silent
+// truncation.
+const DEFAULT_FOLD_K = 6;          // most recent turns kept in full
+const MAX_FOLDED_SUMMARY_LINES = 12; // even the fold itself is bounded
 
-function digestTranscriptEntry(entry) {
-  if (entry.malformed) return `step ${entry.step}: (unparseable response) ${entry.reason}`;
-  if (entry.tool === "finish") return `step ${entry.step}: finish`;
-  const argsStr = JSON.stringify(entry.args ?? {});
-  const briefArgs = argsStr.length > 100 ? `${argsStr.slice(0, 100)}…` : argsStr;
-  const outcome = entry.result && typeof entry.result === "object" && "error" in entry.result
-    ? `error: ${String(entry.result.error).slice(0, 100)}`
-    : "ok";
-  return `step ${entry.step}: ${entry.tool}(${briefArgs}) -> ${outcome}`;
+function summarizeResult(tool, result) {
+  if (result && typeof result === "object" && "error" in result) {
+    return `ERROR: ${String(result.error).slice(0, 140)}`;
+  }
+  if (tool === "read_file") return `ok (${result?.content?.length ?? 0} chars${result?.truncated ? ", truncated" : ""})`;
+  if (tool === "list_files") return `ok (${result?.files?.length ?? 0} file(s))`;
+  if (tool === "write_file" || tool === "edit_file") return `ok (${result?.bytesWritten ?? "?"} bytes written)`;
+  if (tool === "run_shell") return `exit ${result?.exitCode}${result?.truncated ? ", output truncated" : ""}`;
+  return "ok";
 }
 
-function foldOlderSteps(transcript, foldedCount) {
-  const digest = transcript.slice(0, foldedCount).map(digestTranscriptEntry).join("\n");
-  if (digest.length <= MAX_FOLDED_DIGEST_CHARS) return digest;
-  const withheld = digest.length - MAX_FOLDED_DIGEST_CHARS;
-  return `${digest.slice(0, MAX_FOLDED_DIGEST_CHARS)}… (${withheld} more char(s) of older-step history withheld — folded to the ${MAX_FOLDED_DIGEST_CHARS}-char budget, not silently grown)`;
+function summarizeFoldedEntry(e) {
+  if (e.malformed) return `step ${e.step}: (unparseable response) — ${e.reason}`;
+  if (e.note) return `step ${e.step}: ${e.note}`;
+  return `step ${e.step}: ${e.tool}(${JSON.stringify(e.args)}) -> ${summarizeResult(e.tool, e.result)}`;
+}
+
+/** One compact user message standing in for everything folded out. */
+function buildFoldedSummaryMessage(entries) {
+  const shown = entries.length > MAX_FOLDED_SUMMARY_LINES ? entries.slice(-MAX_FOLDED_SUMMARY_LINES) : entries;
+  const withheldExtra = entries.length - shown.length;
+  const header = withheldExtra > 0
+    ? `EARLIER STEPS (folded to keep this prompt small — showing the last ${shown.length} of ${entries.length} folded step(s); ${withheldExtra} even-earlier step(s) withheld entirely):`
+    : `EARLIER STEPS (folded to keep this prompt small — ${shown.length} step(s), full detail withheld):`;
+  return { role: "user", content: `${header}\n${shown.map(summarizeFoldedEntry).join("\n")}` };
 }
 
 /**
- * The actual prompt sent to the model each step: fixed prefix (system +
- * task), a folded digest of everything older than the window (only once
- * there IS anything to fold), then the last FOLD_WINDOW_STEPS steps
- * verbatim. `messages` itself (the harness's full record) is left
- * untouched by this -- folding only changes what the model is actually
- * shown, never what gets recorded.
+ * Build what's actually SENT to the model this turn: system + task intro,
+ * always; then either every turn verbatim (a short run) or the most recent
+ * `foldK` turns verbatim plus one folded summary message standing in for
+ * everything older. `foldedTurns` pairs each transcript entry with the raw
+ * message(s) it produced, so folding never has to re-derive them.
  */
-function buildPromptMessages(messages, transcript, windowSteps) {
-  const stepsSoFar = transcript.length;
-  if (stepsSoFar <= windowSteps) return messages;
-  const foldedCount = stepsSoFar - windowSteps;
-  const foldedMsg = {
-    role: "user",
-    content: `EARLIER STEPS (${foldedCount} step(s) folded to keep this prompt small, not silently dropped):\n${foldOlderSteps(transcript, foldedCount)}`,
-  };
-  const recent = messages.slice(2 + foldedCount * 2);
-  return [messages[0], messages[1], foldedMsg, ...recent];
+function buildPromptView(system, intro, foldedTurns, foldK) {
+  if (foldedTurns.length <= foldK) {
+    return [system, intro, ...foldedTurns.flatMap((t) => t.msgs)];
+  }
+  const kept = foldedTurns.slice(-foldK);
+  const folded = foldedTurns.slice(0, -foldK);
+  return [system, intro, buildFoldedSummaryMessage(folded.map((t) => t.entry)), ...kept.flatMap((t) => t.msgs)];
 }
 
 const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
@@ -107,22 +114,37 @@ function formatObservation(toolName, result) {
  * @param {number} [opts.maxSteps]
  * @param {number} [opts.maxTokensPerStep]
  * @param {number} [opts.seed]
+ * @param {number} [opts.foldK] how many recent turns are replayed to the
+ *   model verbatim before older ones fold to a one-line summary each (see
+ *   buildPromptView above). Default 6 — the same 4-7 "mouth" range
+ *   task-log.js's foldToWorkingSet documents.
+ * @param {Function} [opts.onStep] optional (transcriptEntry) => void, called
+ *   the instant each transcript entry is recorded — the live-disclosure hook.
+ *   Purely observational: it cannot alter the loop's own decisions, and a
+ *   throwing onStep is never allowed to break a real eval run, so it is
+ *   called inside a try/catch that only logs.
  */
 export async function runReactLoop({
   taskPrompt, groundingBlock = null, toolset, adapter, maxSteps = 8, maxTokensPerStep = 200, seed = 0,
+  foldK = DEFAULT_FOLD_K, onStep = null,
 }) {
+  const emit = onStep
+    ? (entry) => { try { onStep(entry); } catch (err) { console.error(`[react-loop] onStep handler threw: ${err.message}`); } }
+    : () => {};
   const { tools, toolCalls } = toolset;
   const toolNames = Object.keys(tools);
-  const system = PROTOCOL(toolNames.map((n) => tools[n].description));
+  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description)) };
 
   const userIntro = groundingBlock
     ? `TASK:\n${taskPrompt}\n\nRESEARCH (surfaced before you started, folded to what fit the budget):\n${groundingBlock}`
     : `TASK:\n${taskPrompt}`;
+  const intro = { role: "user", content: userIntro };
 
-  const messages = [
-    { role: "system", content: system },
-    { role: "user", content: userIntro },
-  ];
+  // The full, honest, append-only record of everything said — never
+  // truncated, returned whole in the result. What's actually SENT to the
+  // model each turn is the separate, bounded `foldedTurns` view below.
+  const messages = [system, intro];
+  const foldedTurns = []; // { entry, msgs }[] — one per step that needs another generate() call after it
 
   const transcript = [];
   let finished = false;
@@ -134,18 +156,30 @@ export async function runReactLoop({
   let stuckLoopAbort = false;
 
   for (; step < maxSteps; step++) {
-    const promptMessages = buildPromptMessages(messages, transcript, FOLD_WINDOW_STEPS);
-    const raw = await adapter.generate(promptMessages, { maxTokens: maxTokensPerStep, seed: seed + step });
-    messages.push({ role: "assistant", content: raw });
+    const promptView = buildPromptView(system, intro, foldedTurns, foldK);
+    if (foldedTurns.length > foldK) {
+      emit({ step, phase: "folded", keptTurns: Math.min(foldedTurns.length, foldK), foldedTurns: foldedTurns.length - foldK });
+    }
+    emit({ step, phase: "generating" });
+    const raw = await adapter.generate(promptView, { maxTokens: maxTokensPerStep, seed: seed + step });
+    const assistantMsg = { role: "assistant", content: raw };
+    messages.push(assistantMsg);
+    emit({ step, phase: "assistant_raw", raw });
 
     const parsed = parseAction(raw, toolNames);
     if (!parsed.ok) {
       malformedStreak += 1;
-      transcript.push({ step, raw, malformed: true, reason: parsed.reason });
+      const entry = { step, raw, malformed: true, reason: parsed.reason };
+      transcript.push(entry);
+      emit({ ...entry, phase: "malformed" });
       const nudge = `Your last response could not be parsed: ${parsed.reason}. Respond with exactly one JSON object: {"tool": "<name>", "args": {...}}.`;
-      messages.push({ role: "user", content: nudge });
+      const nudgeMsg = { role: "user", content: nudge };
+      messages.push(nudgeMsg);
+      foldedTurns.push({ entry, msgs: [assistantMsg, nudgeMsg] });
       if (malformedStreak >= 3) {
-        transcript.push({ step, note: "aborted after 3 consecutive malformed responses" });
+        const abortEntry = { step, note: "aborted after 3 consecutive malformed responses" };
+        transcript.push(abortEntry);
+        emit({ ...abortEntry, phase: "aborted" });
         break;
       }
       continue;
@@ -155,27 +189,36 @@ export async function runReactLoop({
     if (parsed.tool === "finish") {
       finished = true;
       summary = typeof parsed.args.summary === "string" ? parsed.args.summary : "(no summary given)";
-      transcript.push({ step, tool: "finish", args: parsed.args });
+      const entry = { step, tool: "finish", args: parsed.args };
+      transcript.push(entry);
+      emit({ ...entry, phase: "finish" });
       break;
     }
 
+    emit({ step, phase: "tool_call", tool: parsed.tool, args: parsed.args });
     const result = tools[parsed.tool].run(parsed.args);
     const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
     const isFailure = result && typeof result === "object" && "error" in result;
     repeatFailStreak = isFailure && callKey === lastFailedCallKey ? repeatFailStreak + 1 : isFailure ? 1 : 0;
     lastFailedCallKey = isFailure ? callKey : null;
 
-    transcript.push({ step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatFailStreak || undefined });
+    const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatFailStreak || undefined };
+    transcript.push(entry);
+    emit({ ...entry, phase: "tool_result" });
 
     let observation = formatObservation(parsed.tool, result);
     if (repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
       observation += `\n\nSTUCK LOOP: this is the ${repeatFailStreak}${repeatFailStreak === 2 ? "nd" : repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
     }
-    messages.push({ role: "user", content: observation });
+    const observationMsg = { role: "user", content: observation };
+    messages.push(observationMsg);
+    foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
 
     if (repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
       stuckLoopAbort = true;
-      transcript.push({ step, note: `aborted after ${repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` });
+      const abortEntry = { step, note: `aborted after ${repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` };
+      transcript.push(abortEntry);
+      emit({ ...abortEntry, phase: "aborted" });
       break;
     }
   }
