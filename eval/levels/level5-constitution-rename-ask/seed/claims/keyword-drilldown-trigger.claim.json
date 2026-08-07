@@ -1,0 +1,27 @@
+{
+  "claim_id": "keyword-drilldown-trigger",
+  "what": "a 'show deeper reading' trigger implemented as text.includes(needle) against the folded context, rather than the summary organ's own forward-surprise signal",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Exemplar for the 9th amendment (II.14), drawn from the real first draft of a fold-drilldown probe: it used keyword occurrence as its own trigger, relocating rather than solving the flooding-by-occurrence failure the fold architecture exists to prevent. Rebuilt on summary/spine.js's real forward-surprise, which found a genuine narrative turning point unprompted by any keyword.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": true,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": [],
+    "level_test": "above"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "level5-constitution-rename-ask",
+  "level": 5,
+  "title": "Cross-file consistency: rename a real CLI subcommand everywhere it is the command, nowhere it is just English",
+  "seedDir": "seed",
+  "repo": "clovenbradshaw-ctrl/eo-constitution",
+  "surfBudget": 1200,
+  "surfMaxUnits": 6,
+  "maxSteps": 16,
+  "maxTokensPerStep": 300,
+  "seed": 5001,
+  "taskPrompt": "This real project has a CLI subcommand named `ask` (in assay/route.mjs: `node assay/route.mjs ask <evidence.json>`). Rename this subcommand from `ask` to `classify` EVERYWHERE it refers to this specific CLI command: (1) assay/route.mjs must recognize `classify` as the mode instead of `ask` (after your change, running it with `ask` must no longer work), and its usage/help text must say `classify` instead of `ask`; (2) README.md documents this same CLI command in its own usage examples and prose — update those to say `classify` too. Do NOT touch AMENDMENT-9-PROPOSAL.md — it uses the word 'ask' as ordinary English, unrelated to this CLI command, and must stay byte-for-byte the same. Use edit_file, not write_file, on every real file — they are too long to retype. Verify by actually running `node assay/route.mjs classify claims/holonic-task.claim.json` (must work) and `node assay/route.mjs ask claims/holonic-task.claim.json` (must now fail with an unknown-mode error) before calling finish."
+}

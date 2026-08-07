@@ -35,14 +35,65 @@ Every run is recorded to `eval/results/runs/<timestamp>__<model>.jsonl` (one
 JSON object per task, full detail) and folded into `eval/results/
 scoreboard.md` (a human-readable, append-only history, newest first).
 
+## Real results so far (`qwen2.5-coder:7b`, CPU-only, this environment)
+
+Across several real runs in one session (see `eval/results/scoreboard.md`
+for the full, append-only history — nothing below is cherry-picked, every
+run's raw `.jsonl` is committed):
+
+- **Level 1 (single-shot): reliably PASSES.** Both tasks, every run.
+- **Level 2 `jsonl-quirk` (self-correct): reliably PASSES**, twice, via two
+  different real convergence paths — once a clean direct attempt (4 tool
+  calls), once via the bidirectional retry mechanism decomposing into 4
+  evidence-informed sub-tasks after a failed direct attempt (73 tool
+  calls). Two fixes got it here, both landed from live transcript evidence,
+  not guesses: Ollama `format: "json"` (grammar-constrains decoding —
+  without it, 3 consecutive unparseable responses aborted the loop
+  entirely) and disclosing a real environmental fact (no npm packages, no
+  network) that the model had been silently assuming otherwise.
+- **Level 2 `csv-quoted-comma`: still fails**, but every failure is now
+  diagnosable from a real persisted transcript instead of a black box. One
+  run's root cause: the model wrote a naive `split(",")` parser, correctly
+  read the real `CHECK: FAIL` output, then tried to fix it via `edit_file`
+  with `old_string` wrapped in its own stray literal quote marks — never
+  matched the real file, and it repeated the identical failing call 3
+  times without adapting. `edit_file`'s tool description and error message
+  now name this exact mistake.
+- **Level 3/4 (real multi-file codebase): fail, with a controlled,
+  reproducible finding.** Two different real runs at two different step
+  budgets (12→20 for Level 3, 14→22 for Level 4) show the model spending
+  its ENTIRE budget alternating `read_file`/`edit_file` and essentially
+  never calling `run_shell` to verify — and the read:edit ratio scaled
+  proportionally with the extra budget rather than resolving into
+  eventual verification. That rules out "not enough steps" as the cause:
+  this is a real behavioral pattern (re-reading a file after nearly every
+  edit instead of trusting `edit_file`'s own success response, never
+  breaking out to actually execute) independent of step budget, not a
+  resource constraint to keep tuning around.
+
+The honest summary: the architecture — bidirectional holonic retry,
+`surf`/fold ingest of a real repo, `edit_file`, transcript-level
+observability — is real and demonstrably working end-to-end against a real
+local model, including two genuine passes on a self-correction task. The
+remaining failures are real, characterized, measured capability boundaries
+of a 7B CPU model, not harness bugs — which is what this eval exists to
+find out.
+
 ## Architecture — reusing this codebase's own organs, not a bespoke framework
 
 The redirect that shaped this design: don't build a generic ReAct scaffold
 from scratch — build the agent out of primitives this codebase already has.
 
 - **`agent/tools.mjs`** — the agent's "organs": `read_file`, `write_file`,
-  `run_shell`, `finish`, each bound to one sandbox directory. This is a fixed,
-  hand-grown set for now (see "Future direction" below).
+  `edit_file`, `run_shell`, `finish`, each bound to one sandbox directory.
+  This is a fixed, hand-grown set for now (see "Future direction" below).
+  `edit_file` (old_string/new_string, unique-match-or-refuse — the same
+  discipline this very harness's own editing tool uses) was grown once
+  real, larger files entered the picture at Level 3+: `write_file` requires
+  retyping the COMPLETE file, which is fine for a 20-line script but
+  physically does not fit a CPU-bound model's per-step token budget once the
+  file is a real few-hundred-line module. Without it, "real codebase" tasks
+  were impossible by construction, not a measured capability gap.
 - **`agent/react-loop.mjs`** — the actual read-execute-observe-correct loop.
   The model emits exactly one JSON tool call per turn; the tool actually
   runs; the real result (including real errors) is appended as an
@@ -59,6 +110,46 @@ from scratch — build the agent out of primitives this codebase already has.
   and results fold back up via `projectTasks`/`foldToWorkingSet`. The
   decomposition decision itself is a model call — planning is the model's
   job too.
+
+  **Nesting is bidirectional, not just a downward split.** `task-log.js`'s
+  `deriveLevels()` and eoreader6's `holon_level/index.js` both name a level
+  relation as two independent tests, not one — existence-dependency (remove
+  the low and the high's ground moves) and possibility-constraint (the
+  high's synthesis sits measurably apart from, and biases, the low). The
+  first build of this wrapper only had the downward half: a plan was guessed
+  once, up front, before any leaf ever ran, and a leaf's real outcome never
+  fed back into what the parent believed was possible next — a tree with the
+  arrow pointing one way. Two additions close the loop:
+
+  - **low → high, sets POSSIBILITY.** When a direct attempt does not
+    converge (hits its step cap, never calls `finish`), the parent may
+    replan — but ONLY armed with that attempt's own real last tool
+    observation (`distillEvidence`), never a fresh guess. No evidence, no
+    retry. This is a genuine predictive-processing correction step: a real
+    prediction error (what actually happened) is what earns the right to
+    revise the model of the task, recorded as a `SUPERSEDE` entry
+    (`revised_because: <the evidence>`) — the same "revise on measured
+    residual" discipline `server/longform.js`'s `reviseDraft` already uses.
+  - **high → low, sets PROBABILITY.** When a task does decompose — eagerly
+    or because a failed attempt earned a retry — each child is handed a
+    small, bounded `priorHint`: the parent's goal and how this piece fits
+    among its siblings (plus the failure evidence, on a retry). This never
+    changes what a leaf *can* do — the tool set and sandbox are identical —
+    it only biases which of the possible actions the leaf is likely to try
+    first, exactly like a precision-weighted top-down prediction. It is
+    prose context, not injected code or a solution, and it is folded to a
+    small declared budget (`MAX_HANDOFF_CHARS` in `holon-coder.mjs`) with an
+    explicit "N chars withheld" report when it doesn't fit — the same
+    never-silently-truncate discipline `foldToWorkingSet` and
+    `engineGroundQuery` already use for their own budgets. "We never prompt
+    the model with more than it needs" applies to cross-level handoff, not
+    only to `surf`.
+
+  Recursion stays bounded exactly as before: the top task spends its one
+  split budget (`maxDepth`, default 1) either eagerly or reactively, never
+  both, so this is real feedback, not an unbounded retry loop dressed up as
+  one. See `eval/agent/holon-coder.test.mjs` for deterministic, offline
+  coverage of both directions.
 - **`agent/ingest.mjs`** — the **surf and fold** half, applied to a whole
   codebase instead of prose. Clones a repo (or uses a local path), admits
   every source file into a dedicated pool of the *real* engine corpus
@@ -79,6 +170,8 @@ from scratch — build the agent out of primitives this codebase already has.
 ```
 eval/
   agent/            the agent itself — tools, react loop, holonic wrapper, ingest
+                    (holon-coder.test.mjs: offline coverage of the bidirectional
+                    nesting — run with `node --test eval/agent/holon-coder.test.mjs`)
   adapters/         ollama-adapter.mjs (real), scripted-adapter.mjs (dry-run)
   levels/           Level 1-7 task definitions + independent oracles
     level1-csv-to-json/       task.json, test.mjs
@@ -114,12 +207,24 @@ trusting the oracle (see git history for that verification).
 - `metrics.totalToolCalls` / `toolCallCounts` — raw tool-use footprint.
 - `metrics.hitStepCapAnyLeaf` — ran out of steps without finishing (honest
   incompleteness signal).
+- `metrics.stuckLoopAbortAnyLeaf` — a leaf stopped ITSELF early because it
+  called the same tool with the exact same arguments and got the exact
+  same failure 4 times in a row (`react-loop.mjs`'s `STUCK_LOOP_ABORT_AT`)
+  — a different, more specific honest signal than `hitStepCapAnyLeaf`: the
+  attempt did not run out of budget, it demonstrated it would not converge
+  on its own. The 2nd repeat already gets an explicit in-conversation
+  nudge naming the loop before the 4th aborts it.
 - `metrics.selfReportMismatch` — the model's own `finish` summary claimed
   success (matched against `/pass|success|works|verified|complete|done|
   fixed/i`) but the independent oracle disagreed. This is the self-report-
   accuracy metric the spec calls out as a leading indicator of trust
   problems.
-- `decomposed` — whether `holon-coder.mjs` split the task into sub-tasks.
+- `decomposed` — whether `holon-coder.mjs` split the task into sub-tasks,
+  eagerly or via an evidence-informed retry (see `retried`).
+- `retried` — a direct attempt failed, its own evidence earned a replan, and
+  the replan decomposed. `retryConsidered`/`retryDeclined` — the replan ran
+  but, even with real failure evidence, still judged the task undecomposable
+  (an honest "no," not forced).
 
 ## Known scope and honest limitations
 
@@ -132,9 +237,34 @@ trusting the oracle (see git history for that verification).
   tasks against a genuinely arbitrary public repo are therefore scaffolded
   (the ingest/surf machinery works) but not run to completion in this
   session.
-- **Levels 3–7 task definitions are not yet written.** Only Levels 1–2 (4
-  tasks) are built and scored. The architecture (holonic recursion, surf/
-  fold ingest) is built to support them; the task content is not yet there.
+- **Level 7 (ambiguous/underspecified) is deliberately deferred, not built.**
+  Levels 1-6 all share one property that makes their oracles trustworthy:
+  there is a single, independently-checkable correct behavior, discovered
+  before the model ever saw the task. Level 7's own premise — the task is
+  genuinely ambiguous — breaks that property; scoring it honestly requires
+  either accepting multiple interpretations (which needs the oracle to
+  parse and validate the model's own stated interpretation, a materially
+  weaker and more gameable check than every level below it) or silently
+  picking one "correct" interpretation ourselves, which would make the task
+  not actually ambiguous and defeats the point. Building a Level 7 task
+  with a weak oracle to complete the ladder would produce a number that
+  looks like a measurement and isn't one — the same failure shape this
+  codebase's own `eo-constitution` repo names explicitly for its own
+  deferred work ("a gap is a result"). Left as a stated gap for a future
+  session with a specific design for that oracle problem, not a silent
+  omission.
+- **Level 4 has one real task now** (`level4-constitution-veto-bug`):
+  `harness.mjs` clones a real, in-scope repo (`clovenbradshaw-ctrl/eo-
+  constitution`) declared by `task.repo`, ingests it into a dedicated `surf`
+  pool, seeds the sandbox with a real multi-file project (a genuine ~260-
+  line rule-engine module, its real route CLI, its real 30-assertion
+  conformance suite, and its real claim fixtures) carrying one deliberately
+  injected, isolated regression, and scores against the project's OWN real,
+  unmodified test suite — not a test written for this eval. An integrity
+  guard fails the task outright if the agent edits the oracle or the claim
+  fixtures instead of the actual defect. Levels 3, 5, 6, 7 are still not yet
+  written. The architecture (holonic recursion, surf/fold ingest, now a real
+  repo-ingest path in `harness.mjs`) is built to support them.
 - **`eval/tasks/` and `eval/tier0/`** are earlier work from a prior framing
   of this eval (constitutional-invariant gating and one-shot Tier 1-4
   generation tasks). `tier0/` is real, tested (33 passing assertions against

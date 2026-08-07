@@ -1,0 +1,13 @@
+{
+  "id": "level6-constitution-stats-report",
+  "level": 6,
+  "title": "Long-horizon: a multi-stage report where each stage's output feeds the next",
+  "seedDir": "seed",
+  "repo": "clovenbradshaw-ctrl/eo-constitution",
+  "surfBudget": 1200,
+  "surfMaxUnits": 6,
+  "maxSteps": 20,
+  "maxTokensPerStep": 300,
+  "seed": 6001,
+  "taskPrompt": "Add a new subcommand `node assay/route.mjs stats` to this real CLI (assay/route.mjs). It must do FOUR sequential stages, each depending on the last: (1) read every *.claim.json file in claims/; (2) for EACH claim, call check(claim) from assay/classify.js — the SAME real function the existing `check` subcommand already uses — to get its real verdict (do not just read the claim.json's own \"expect\" field; the verdict must come from actually calling check(), never guessed); (3) print exactly three lines, in this order: `TOTAL <n>` (n = number of claim files), `PASS <n>` (n = how many of those check() calls returned verdict \"pass\"), `REFUTE <n>` (n = how many returned anything else); (4) then, across every claim's check() `reasons` array (an array of strings), find every constitutional article code that appears anywhere in them — a code looks like `II.7`, `III.2`, `IV.3`: an uppercase Roman numeral, a dot, then digits — count how many DISTINCT claims cite each code at least once, and print one line per distinct code found, in the form `<code> <count>`, sorted by count descending (most-cited first). Exit 0. Do not change the existing check/ask subcommands or claims/ itself. Use edit_file, not write_file, on route.mjs — it is a real existing file. Verify by actually running `node assay/route.mjs stats` and sanity-checking the TOTAL/PASS/REFUTE numbers and at least one article count by hand against a couple of real claims/*.claim.json files before calling finish."
+}

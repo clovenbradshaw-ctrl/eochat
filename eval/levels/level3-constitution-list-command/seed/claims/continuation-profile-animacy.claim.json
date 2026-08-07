@@ -1,0 +1,26 @@
+{
+  "claim_id": "continuation-profile-animacy",
+  "what": "eoreader6 spec 11 ('11-terrain-occupancy-and-the-two-ascents.md') Assembly D AS SPECIFIED: a new continuationProfile(referentId, sentences, bindings) computes a referent's pronominal/nominal continuation ratio and classifies the referent personal/non-personal against a declared floor (the existing 0.15 APPARATUS_NAMING_SHARE_FLOOR, to be re-measured per corpus) — engine derives WHAT KIND OF ENTITY a referent is (person-capable vs not) from a structural correlate, gating both resolvePronouns' nonPersonal filter (Assembly D itself) and emergence/binding.js's arrival register (Assembly E) and referents/entity.js's mass (Assembly F) on that derived fact",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Filed 2026-08-06, BEFORE writing continuationProfile, at the repo owner's request to ground spec 11's implementation against this constitution before building further. This is a pre-emptive claim in the sense claims/coref-in-engine.claim.json already establishes as this repo's own convention: documenting a shape as refused case law so it is never built, rather than built and refused after the fact. The verdict is identical in kind to claims/activation-bound-pronoun-referent.claim.json (resolvePronouns, refuted, standing/unfixed) and claims/apparatus-individuation.claim.json (classifyIndividuation, the mechanism spec 11 Assembly D itself names as its non-circular derivation basis: 'the signal the apparatus-demotion work already measures, pointed one level down'). Assembly D does not merely inherit that shape by association — it repeats it exactly: a measured ratio (pronominal vs nominal continuation, in place of naming-sentence-share) compared against a declared-but-unreceived floor, producing a personal/non-personal type the engine then treats as fact. is_material_knowledge=true, giver='' (spec 11's own text: 'the existing 15% was calibrated on narrative plus one hand-authored wire-service fixture' and 'must be re-measured on Metro documents' — a measurement schedule, not a named giver) -> GAP -> REFUTE. Spec 11's own D3 ('referents with insufficient evidence return a typed gap and are neither admitted nor excluded') is the right discipline for the UNCERTAIN case but does not address the CERTAIN case: when the ratio clears the floor cleanly, spec 11 has the engine assert personal/non-personal outright, which is exactly the derivation II.2 walls off regardless of how well-calibrated the floor is (see activation-bound-pronoun-referent's notes: 'II.2's wall does not have a quality exception'). Compounding: spec 11 Assembly E explicitly wires resolvePronouns' bindings (already refuted, claims/activation-bound-pronoun-referent.claim.json) INTO emergence/binding.js gated by THIS classification (also refuted here) — building Assembly E as specified stacks a new engine-tier derivation on top of two already-refused ones rather than resolving either. The compliant fix, on the SAME architecture that pattern already prescribes and claims/coref-descriptor.claim.json / claims/embedding-bridge.claim.json already pass on: continuationProfile's raw ratio computation is a giver-free structural fact (how often IS this referent carried by a pronoun vs renamed — a number, no claim about what that number means) and may stay engine-tier exactly as recalled/novelty/namingSentenceShare do. The FLOOR and the resulting personal/non-personal DECISION must move to an injected layer with a named giver: a per-corpus prior (e.g. 'human curator, per-corpus animacy floor', the same shape coref-descriptor's giver takes), or a declared model-tier classifier reranking the raw ratio (matching Article III.1 and embedding-bridge's giver, 'injected model-tier witness') — never asserted by the engine itself. Under that restructuring, Assembly D's D1/D2/D3/D4 acceptance criteria (Frankenstein separation, causal computation, typed gap on insufficient evidence, civic re-measurement) remain exactly as useful as validation of the INJECTED layer's calibration; only the placement of the final classification changes, not the measurement work spec 11 already designed. Assembly E and F should be re-scoped against this restructured D before either is built, not built against D as currently specified in the spec document.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": true,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": false,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": []
+  }
+}

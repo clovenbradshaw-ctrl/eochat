@@ -1,0 +1,26 @@
+{
+  "claim_id": "segments-structural-boundaries",
+  "what": "the recurring line-forms by which THIS document marks its structural divisions — chapter openings, section breaks — received from the communicator and held per-text. The division itself is the emergent organ's measured business; the typography that marks it is received, never assumed.",
+  "proposed_placement": "priors",
+  "expect": "pass",
+  "notes": "Re-routed from engine by the 6th amendment (II.11). A fixed heading grammar (short line + blank line + WORD+digit/all-caps/roman + substance test) requires text's surfaces, so it is not engine by assertion; its earlier warrant — 'works on numbered movements in a score' — was a claim about a score's printed movement titles, which is text typography again. It is exactly the phenomenon `learned-typography` already routes to priors: the division is received from the communicator, the typography that marks it is derived, and neither is assumed. The boundary detection itself remains the emergent organ's business and is measured by `runTurn` against real chapter boundaries; `asserted_agnosticism` is false because the mechanism does not declare cross-modal survival.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": true,
+    "giver": "the communicator",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": []
+  }
+}

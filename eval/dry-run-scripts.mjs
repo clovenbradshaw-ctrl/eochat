@@ -64,7 +64,78 @@ for (const line of lines) sum += JSON.parse(line).amount;
 console.log(sum);
 `;
 
+const routeListPatch = [
+  'if (mode === "list") {',
+  '  const dir = "claims";',
+  "  const lines = readdirSync(dir)",
+  '    .filter((f) => f.endsWith(".claim.json"))',
+  '    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")))',
+  "    .map((c) => `${c.claim_id} ${c.expect}`)",
+  "    .sort();",
+  "  for (const line of lines) console.log(line);",
+  "  process.exit(0);",
+  "}",
+  "",
+  "",
+].join("\n");
+
+const routeStatsPatch = [
+  'if (mode === "stats") {',
+  '  const dir = "claims";',
+  '  const files = readdirSync(dir).filter((f) => f.endsWith(".claim.json"));',
+  "  let pass = 0, refute = 0;",
+  "  const articleCounts = {};",
+  "  for (const f of files) {",
+  '    const claim = JSON.parse(readFileSync(join(dir, f), "utf8"));',
+  "    const v = check(claim);",
+  "    if (v.verdict === VERDICTS.PASS) pass++; else refute++;",
+  '    const cited = new Set(v.reasons.join(" ").match(/\\b[IVX]+\\.\\d+\\b/g) || []);',
+  "    for (const code of cited) articleCounts[code] = (articleCounts[code] ?? 0) + 1;",
+  "  }",
+  "  console.log(`TOTAL ${files.length}`);",
+  "  console.log(`PASS ${pass}`);",
+  "  console.log(`REFUTE ${refute}`);",
+  "  const ranked = Object.entries(articleCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));",
+  "  for (const [code, count] of ranked) console.log(`${code} ${count}`);",
+  "  process.exit(0);",
+  "}",
+  "",
+  "",
+].join("\n");
+
 export const DRY_RUN_SCRIPTS = {
+  "level6-constitution-stats-report": [
+    { decompose: false },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'import { readFileSync } from "node:fs";', new_string: 'import { readFileSync, readdirSync } from "node:fs";\nimport { join } from "node:path";' } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'console.error(`unknown mode "${mode}"`);', new_string: routeStatsPatch + 'console.error(`unknown mode "${mode}"`);' } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs stats" } },
+    { tool: "finish", args: { summary: "added the stats subcommand: reads every claim, calls the real check(), tallies verdicts and article citations" } },
+  ],
+  "level5-constitution-rename-ask": [
+    { decompose: false },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: "node assay/route.mjs ask <evidence.json>  classify evidence and return the routed placement", new_string: "node assay/route.mjs classify <evidence.json>  classify evidence and return the routed placement" } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'if (mode === "ask") {', new_string: 'if (mode === "classify") {' } },
+    { tool: "edit_file", args: { path: "README.md", old_string: "npm run route -- ask  <evidence>.json             # classify evidence, get the routed tier", new_string: "npm run route -- classify <evidence>.json             # classify evidence, get the routed tier" } },
+    { tool: "edit_file", args: { path: "README.md", old_string: "`level_test` is only for engine organs (IV.3 growth rule). `ask` accepts a", new_string: "`level_test` is only for engine organs (IV.3 growth rule). `classify` accepts a" } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs classify claims/holonic-task.claim.json" } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs ask claims/holonic-task.claim.json" } },
+    { tool: "finish", args: { summary: "renamed the ask subcommand to classify in route.mjs and README.md; left AMENDMENT-9-PROPOSAL.md's unrelated use of the word alone" } },
+  ],
+  "level3-constitution-list-command": [
+    { decompose: false },
+    { tool: "read_file", args: { path: "assay/route.mjs" } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'import { readFileSync } from "node:fs";', new_string: 'import { readFileSync, readdirSync } from "node:fs";\nimport { join } from "node:path";' } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'console.error(`unknown mode "${mode}"`);', new_string: routeListPatch + 'console.error(`unknown mode "${mode}"`);' } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs list" } },
+    { tool: "finish", args: { summary: "added the list subcommand to route.mjs, verified its output against claims/, and confirmed check still works" } },
+  ],
+  "level4-constitution-veto-bug": [
+    { decompose: false },
+    { tool: "run_shell", args: { command: "node --test conformance/assay.test.js" } },
+    { tool: "edit_file", args: { path: "assay/classify.js", old_string: "if (evidence.giver !== undefined) {", new_string: "if (evidence.giver) {" } },
+    { tool: "run_shell", args: { command: "node --test conformance/assay.test.js" } },
+    { tool: "finish", args: { summary: "fixed the giver falsy-check regression in classify.js; node --test conformance/assay.test.js now passes in full" } },
+  ],
   "level1-csv-to-json": [
     { decompose: false },
     { tool: "write_file", args: { path: "convert.js", content: csvConvert } },

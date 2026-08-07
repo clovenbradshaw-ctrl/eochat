@@ -1,0 +1,26 @@
+{
+  "claim_id": "reading-regime",
+  "what": "eoreader6 packages/engine/loops/reading-regime.js::readingRegime — wires emergence/activation.js's `recalled` channel (how many distinct prior frames answer, via readForward/seriesOf) into loops/atmosphere.js's createRegimeTracker, so an Atmosphere's regime boundaries are computed from the reader's own accumulated recall instead of only the material's raw token statistics",
+  "proposed_placement": "engine",
+  "expect": "pass",
+  "notes": "Recorded 2026-08-06, against eoreader6 branch claude/terrain-occupancy-ascents-xgwo5u (spec 11, '11-terrain-occupancy-and-the-two-ascents.md', Assembly B). Filed before treating Assembly B as done, per the user's instruction to ground the whole effort against this constitution rather than assume passing shape. Distinguishes cleanly from the two REFUTED claims filed alongside this one (apparatus-individuation, continuation-profile-animacy): readingRegime derives no fact about what anything IN THE MATERIAL denotes, is, or refers to — recalled measures a structural property of the READER's own act (how much of this frame's vocabulary has already recurred in frames read so far), the same kind of giver-free structural measurement emergence/activation.js and loops/atmosphere.js already ship as passing engine organs (see operators.js ORGANS: emergence/activation CON.Figure, loops/atmosphere/{def,eva,rec}). This file is composition only — no new derivation, no new claim about identity or reference. is_material_knowledge=false because the question answered ('has the ground had to be rebuilt') is a fact about the reading act, not about who a name denotes or what kind of entity a referent is (II.2's own paradigm cases). weights_present=false and scores_arrival_alone=false because createRegimeTracker's own mechanism IS the II.8/II.9-compliant shape already: a ground rebuilt by perturbation (ground()/groundFrom()), compared by difference() against the current windowed observation, and re-zeroed only when the ground demonstrably fails to explain what followed (a witnessed revision, not a scored arrival) — this file changes only which series feeds that already-compliant mechanism. is_one_off_fix=false: this is the opposite of a one-off, it connects two already-general, independently-earned organs rather than inventing bespoke machinery for one text. medium_agnostic asserted true on the strength of activation.js's and atmosphere.js's own already-established (if not independently re-verified here) agnosticism; if either upstream organ's own II.11 fixture is ever found wanting, this claim's placement should be re-run, not assumed to survive automatically.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": []
+  }
+}
