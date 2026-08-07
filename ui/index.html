@@ -44,6 +44,16 @@
      (DecompressionStream, DOMParser, TextDecoder), so unlike the CDN libs
      above it cannot fail to load independently of this page. -->
 <script type="module" src="./file-formats.js"></script>
+<!-- Community Insights' extraction/key-matching core (which facts a pasted
+     document contains, which standardized key each merges onto), mirrored
+     from server/insight-store.js so ingesting a document works with no
+     proxy reachable at all — the GitHub Pages build (deploy-pages.yml ships
+     only this ui/ directory) has no server ever. Published on
+     window.EOInsightExtract for the same reason as EOFormats above; the
+     localStorage-backed registry/observations store built on it lives in
+     the Component below, next to the offline fallbacks projects and
+     project instructions already have. -->
+<script type="module" src="./insight-extract.js"></script>
 </head>
 <body>
 <x-dc>
@@ -1129,6 +1139,9 @@
           <div style="display:flex; align-items:center; gap:8px;">
             <sc-if value="{{ insightLoading }}">
               <span style="font-size:11px; color:#A39D91;">Loading…</span>
+            </sc-if>
+            <sc-if value="{{ insightOffline }}">
+              <span style="font-size:11px; color:#8A5A22;" title="No engine reachable — ingest, merge and review still work, saved to this browser only.">Stored on this device — no engine reachable</span>
             </sc-if>
             <button type="button" onClick="{{ refreshInsights }}" style="border:1px solid #E4DFD5; border-radius:7px; background:none; padding:5px 10px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">Refresh</button>
           </div>
@@ -2623,6 +2636,11 @@ class Component extends DCLogic {
     // startup like Priors/Senses, since it's meaningless without an active
     // project. null = not fetched yet for the current project.
     _insightRows: null, _insightUnclear: null, _insightConflicts: null, _insightError: null, _insightLoading: false,
+    // Set whenever an insights operation fell back to the localStorage
+    // ledger (_localInsight* methods) because the proxy fetch threw — no
+    // engine reachable at all, or a client-only project the server has
+    // never heard of. Cleared the moment a proxy call succeeds again.
+    _insightOffline: false,
     _insightIngestText: '', _insightIngestName: '', _insightIngestKind: 'goal', _insightIngestAsOf: '',
     _insightIngestLoading: false, _insightIngestResult: null, _insightIngestError: null, _insightExtracting: false,
     _insightResolveDrafts: {}, _insightForProjectId: null,
@@ -3388,6 +3406,349 @@ class Component extends DCLogic {
     if (this._eoCodeAbort) this._eoCodeAbort.abort();
   }
 
+  // ── Community Insights — standalone fallback (mirrors server/insight-store.js) ──
+  //
+  // Every method below the proxy calls in this section falls back to one of
+  // these when the fetch throws — no engine reachable at all (the GitHub
+  // Pages build), or a project createProject() built entirely client-side
+  // because the proxy was down at the time (the server 404s on a project id
+  // it has never heard of, which lands here the same way a network error
+  // does). The extraction/matching itself is window.EOInsightExtract
+  // (ui/insight-extract.js, mirrored from this same file's server copy);
+  // what's here is the storage layer insight-store.js gets from fs — one
+  // JSON blob per project, in localStorage instead of registry.json/
+  // observations.json, with the exact same method names/shapes as
+  // InsightStore so a call site cannot tell which one answered it.
+  //
+  // This is a fallback ledger, not a sync target: it does not merge into the
+  // server's own store if the proxy later comes back online, the same
+  // tradeoff _localInstructionsMap already accepts for project instructions.
+  _localInsightsMap() {
+    return this._loadLocal('eochat.insights.v1') || {};
+  }
+  _localInsightsForProject(projectId) {
+    const map = this._localInsightsMap();
+    return map[projectId] || { keys: [], observations: [] };
+  }
+  _saveLocalInsightsForProject(projectId, store) {
+    const map = this._localInsightsMap();
+    map[projectId] = store;
+    this._saveLocal('eochat.insights.v1', map);
+  }
+  _newLocalInsightId() {
+    return 'obs-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+  }
+
+  // Mirrors InsightStore#pickLatest — the most-recent-by-asOf observation
+  // for a (key, kind), or a conflict flag when the winner is ambiguous.
+  _localInsightPickLatest(observations, key, kind) {
+    const E = window.EOInsightExtract;
+    const matches = observations.filter(o => o.key === key && o.kind === kind && o.keyStatus === 'resolved');
+    if (!matches.length) return { value: null, conflict: false, all: [] };
+    const sorted = matches.slice().sort((a, b) => E.asOfSortKey(b.asOf).localeCompare(E.asOfSortKey(a.asOf)));
+    const topAsOf = sorted[0].asOf || null;
+    const tied = sorted.filter(o => (o.asOf || null) === topAsOf);
+    const distinctTied = [];
+    for (const o of tied) if (!distinctTied.some(d => E.sameValue(d.parsed, o.parsed))) distinctTied.push(o);
+    if (distinctTied.length > 1) return { value: null, conflict: true, all: matches };
+    return { value: sorted[0], conflict: false, all: matches };
+  }
+
+  // Mirrors InsightStore.ingestDocument — takes the same body the proxy's
+  // POST insights/ingest route accepts (content/name/kind/asOf) so callers
+  // can pass the exact object they already built for the fetch.
+  _localInsightIngest(projectId, { content, text, name = null, kind = null, asOf = null } = {}) {
+    const E = window.EOInsightExtract;
+    const store = this._localInsightsForProject(projectId);
+    const docText = content ?? text;
+    const sourceId = name ? `source:${name}` : null;
+    const sourceName = name || null;
+    const facts = E.extractCandidateFacts(docText, { defaultKind: kind || null });
+
+    const created = [];
+    for (const fact of facts) {
+      const match = E.matchKey(fact.rawKey, store.keys);
+      const now = new Date().toISOString();
+      let obsKey = null, keyStatus, candidates = [];
+      if (match.status === 'exact' || match.status === 'auto') {
+        obsKey = match.key;
+        keyStatus = 'resolved';
+        if (match.status === 'auto') {
+          const entry = store.keys.find(k => k.key === match.key);
+          if (entry && !entry.aliases.some(a => E.normalizeKeyText(a) === E.normalizeKeyText(fact.rawKey))) {
+            entry.aliases.push(fact.rawKey);
+          }
+        }
+      } else if (match.status === 'candidates') {
+        keyStatus = 'unclear';
+        candidates = match.candidates;
+      } else {
+        keyStatus = 'unclear';
+        candidates = [];
+      }
+      const parsed = E.parseValue(fact.rawValue);
+      const observation = {
+        id: this._newLocalInsightId(), projectId, kind: fact.kind || kind || 'current_state',
+        rawKey: fact.rawKey, key: obsKey, keyStatus, candidates,
+        value: fact.rawValue, parsed,
+        asOf: fact.asOfYear ? String(fact.asOfYear) : asOf,
+        sourceId, sourceName, quote: fact.quote, line: fact.line,
+        manual: false, createdAt: now, updatedAt: now,
+      };
+      store.observations.push(observation);
+      created.push(observation);
+    }
+    this._saveLocalInsightsForProject(projectId, store);
+    return {
+      added: created.length,
+      unclear: created.filter(o => o.keyStatus === 'unclear').length,
+      resolved: created.filter(o => o.keyStatus === 'resolved').length,
+      observations: created,
+    };
+  }
+
+  // Mirrors InsightStore.addObservation, but — like the proxy's POST
+  // insights/observations route — accepts `rawKey` defaulting to `key` so
+  // submitInsightFact() can pass the same body object it POSTs.
+  _localInsightAddObservation(projectId, { key = null, rawKey = null, kind, value, asOf = null, sourceId = null, sourceName = null, quote = null } = {}) {
+    const E = window.EOInsightExtract;
+    const store = this._localInsightsForProject(projectId);
+    const effectiveRawKey = rawKey || key;
+    let obsKey = key, keyStatus = 'resolved', candidates = [];
+    if (!obsKey) {
+      const match = E.matchKey(effectiveRawKey, store.keys);
+      if (match.status === 'exact' || match.status === 'auto') obsKey = match.key;
+      else { keyStatus = 'unclear'; candidates = match.candidates || []; }
+    } else if (!store.keys.some(k => k.key === obsKey)) {
+      throw new Error(`unknown key: ${obsKey}`);
+    }
+    const now = new Date().toISOString();
+    const parsed = E.parseValue(value);
+    const observation = {
+      id: this._newLocalInsightId(), projectId, kind,
+      rawKey: effectiveRawKey || (store.keys.find(k => k.key === obsKey) || {}).label || obsKey,
+      key: obsKey, keyStatus, candidates, value, parsed, asOf,
+      sourceId, sourceName, quote: quote || null, line: null,
+      manual: true, createdAt: now, updatedAt: now,
+    };
+    store.observations.push(observation);
+    this._saveLocalInsightsForProject(projectId, store);
+    return observation;
+  }
+
+  _localInsightRemoveObservation(projectId, observationId) {
+    const store = this._localInsightsForProject(projectId);
+    const before = store.observations.length;
+    store.observations = store.observations.filter(o => o.id !== observationId);
+    this._saveLocalInsightsForProject(projectId, store);
+    return { deleted: before !== store.observations.length, id: observationId };
+  }
+
+  _localInsightCreateKey(projectId, { key, label, category = null, unit = null, directionality = 'unknown' } = {}) {
+    const E = window.EOInsightExtract;
+    const store = this._localInsightsForProject(projectId);
+    const finalKey = key || E.slugifyKey(label);
+    if (store.keys.some(k => k.key === finalKey)) throw new Error(`key already exists: ${finalKey}`);
+    const entry = { key: finalKey, label: label || finalKey, category, unit, directionality, aliases: [], createdAt: new Date().toISOString() };
+    store.keys.push(entry);
+    this._saveLocalInsightsForProject(projectId, store);
+    return entry;
+  }
+
+  _localInsightUpdateKey(projectId, key, { label, category, unit, directionality } = {}) {
+    const store = this._localInsightsForProject(projectId);
+    const entry = store.keys.find(k => k.key === key);
+    if (!entry) throw new Error(`unknown key: ${key}`);
+    if (label !== undefined) entry.label = label;
+    if (category !== undefined) entry.category = category;
+    if (unit !== undefined) entry.unit = unit;
+    if (directionality !== undefined) entry.directionality = directionality;
+    this._saveLocalInsightsForProject(projectId, store);
+    return entry;
+  }
+
+  // Mirrors InsightStore.unclearKeys — see that method for why exact-norm
+  // groups are then greedily clustered by the same threshold an auto-merge
+  // would have used had a canonical key already existed.
+  _localInsightUnclearKeys(projectId) {
+    const E = window.EOInsightExtract;
+    const store = this._localInsightsForProject(projectId);
+    const byNorm = new Map();
+    for (const o of store.observations) {
+      if (o.keyStatus !== 'unclear') continue;
+      const norm = E.normalizeKeyText(o.rawKey);
+      if (!byNorm.has(norm)) byNorm.set(norm, { rawKey: o.rawKey, candidates: o.candidates || [], observationIds: [], count: 0 });
+      const g = byNorm.get(norm);
+      g.observationIds.push(o.id);
+      g.count++;
+      if ((o.candidates || []).length > (g.candidates || []).length) g.candidates = o.candidates;
+    }
+
+    const clusters = [];
+    for (const entry of byNorm.values()) {
+      const home = clusters.find(cluster => cluster.members.some(m => E.jaccardSimilarity(m.rawKey, entry.rawKey) >= E.AUTO_MERGE_THRESHOLD));
+      if (home) home.members.push(entry);
+      else clusters.push({ members: [entry] });
+    }
+
+    return clusters.map(cluster => {
+      const members = cluster.members.slice().sort((a, b) => b.count - a.count);
+      const candidateByKey = new Map();
+      for (const m of members) {
+        for (const c of m.candidates || []) {
+          const existing = candidateByKey.get(c.key);
+          if (!existing || c.score > existing.score) candidateByKey.set(c.key, c);
+        }
+      }
+      return {
+        rawKey: members[0].rawKey,
+        rawKeys: members.map(m => m.rawKey),
+        count: members.reduce((sum, m) => sum + m.count, 0),
+        candidates: [...candidateByKey.values()].sort((a, b) => b.score - a.score).slice(0, E.MAX_CANDIDATES),
+        observationIds: members.flatMap(m => m.observationIds),
+      };
+    }).sort((a, b) => b.count - a.count);
+  }
+
+  _localInsightResolveKey(projectId, { rawKey = null, rawKeys = null, canonicalKey = null, createLabel = null, category = null, unit = null, directionality = 'unknown' } = {}) {
+    const E = window.EOInsightExtract;
+    const keysToResolve = (rawKeys && rawKeys.length) ? rawKeys : (rawKey ? [rawKey] : []);
+    if (!keysToResolve.length) throw new Error('resolveKey requires rawKey or rawKeys');
+    const store = this._localInsightsForProject(projectId);
+
+    let targetKey = canonicalKey;
+    if (!targetKey) {
+      if (!createLabel) throw new Error('resolveKey requires canonicalKey or createLabel');
+      targetKey = E.slugifyKey(createLabel);
+      if (!store.keys.some(k => k.key === targetKey)) {
+        store.keys.push({ key: targetKey, label: createLabel, category, unit, directionality, aliases: [], createdAt: new Date().toISOString() });
+      }
+    }
+    const entry = store.keys.find(k => k.key === targetKey);
+    if (!entry) throw new Error(`unknown key: ${targetKey}`);
+
+    const norms = new Set();
+    for (const rk of keysToResolve) {
+      norms.add(E.normalizeKeyText(rk));
+      if (!entry.aliases.some(a => E.normalizeKeyText(a) === E.normalizeKeyText(rk))) entry.aliases.push(rk);
+    }
+
+    let resolvedCount = 0;
+    for (const o of store.observations) {
+      if (o.keyStatus === 'unclear' && norms.has(E.normalizeKeyText(o.rawKey))) {
+        o.key = targetKey;
+        o.keyStatus = 'resolved';
+        o.candidates = [];
+        o.updatedAt = new Date().toISOString();
+        resolvedCount++;
+      }
+    }
+    this._saveLocalInsightsForProject(projectId, store);
+    return { key: targetKey, resolvedCount };
+  }
+
+  // Mirrors InsightStore.conflicts — more than one DISTINCT parsed value
+  // claimed for the same resolved (key, kind, asOf).
+  _localInsightConflicts(projectId) {
+    const E = window.EOInsightExtract;
+    const store = this._localInsightsForProject(projectId);
+    const buckets = new Map();
+    for (const o of store.observations) {
+      if (o.keyStatus !== 'resolved' || !o.key) continue;
+      const asOfBucket = o.asOf || '—';
+      const bucketKey = `${o.key} ${o.kind} ${asOfBucket}`;
+      if (!buckets.has(bucketKey)) buckets.set(bucketKey, { key: o.key, kind: o.kind, asOf: o.asOf || null, observations: [] });
+      buckets.get(bucketKey).observations.push(o);
+    }
+    const out = [];
+    for (const bucket of buckets.values()) {
+      const distinct = [];
+      for (const o of bucket.observations) {
+        if (!distinct.some(d => E.sameValue(d.parsed, o.parsed))) distinct.push(o);
+      }
+      if (distinct.length > 1) {
+        out.push({
+          key: bucket.key, kind: bucket.kind, asOf: bucket.asOf,
+          values: bucket.observations.map(o => ({ observationId: o.id, value: o.value, sourceId: o.sourceId, sourceName: o.sourceName, quote: o.quote })),
+        });
+      }
+    }
+    return out;
+  }
+
+  // Mirrors InsightStore.state — the merged goal/current/delta view per
+  // canonical key.
+  _localInsightState(projectId) {
+    const E = window.EOInsightExtract;
+    const store = this._localInsightsForProject(projectId);
+    const all = store.observations;
+
+    return store.keys.map(entry => {
+      const goal = this._localInsightPickLatest(all, entry.key, 'goal');
+      const current = this._localInsightPickLatest(all, entry.key, 'current_state');
+      const definitions = all.filter(o => o.key === entry.key && o.kind === 'definition' && o.keyStatus === 'resolved');
+      const interventions = all.filter(o => o.key === entry.key && o.kind === 'intervention_metric' && o.keyStatus === 'resolved');
+
+      let delta = null, deltaStatus = 'no-data';
+      if (goal.conflict || current.conflict) {
+        deltaStatus = 'conflict';
+      } else if (goal.value && current.value) {
+        const gv = goal.value.parsed, cv = current.value.parsed;
+        if (['number', 'percent', 'currency'].includes(gv.type) && gv.type === cv.type) {
+          if ((gv.unit || null) === (cv.unit || null)) {
+            delta = { amount: cv.number - gv.number, pctOfGoal: gv.number !== 0 ? (cv.number / gv.number) * 100 : null };
+            deltaStatus = 'computed';
+          } else {
+            deltaStatus = 'unit-mismatch';
+          }
+        } else if (gv.type === cv.type) {
+          deltaStatus = E.sameValue(gv, cv) ? 'met' : 'differs';
+        } else {
+          deltaStatus = 'type-mismatch';
+        }
+      } else if (goal.value && !current.value) {
+        deltaStatus = 'no-current-state';
+      } else if (!goal.value && current.value) {
+        deltaStatus = 'no-goal';
+      }
+
+      let progress = null;
+      if (deltaStatus === 'computed' && (entry.directionality === 'higher_is_better' || entry.directionality === 'lower_is_better')) {
+        const good = entry.directionality === 'higher_is_better' ? delta.amount >= 0 : delta.amount <= 0;
+        progress = good ? 'on-track' : 'off-track';
+      }
+
+      const goalOut = goal.value ? {
+        observationId: goal.value.id, value: goal.value.value, parsed: goal.value.parsed, asOf: goal.value.asOf,
+        sourceId: goal.value.sourceId, sourceName: goal.value.sourceName, quote: goal.value.quote,
+      } : null;
+      const currentOut = current.value ? {
+        observationId: current.value.id, value: current.value.value, parsed: current.value.parsed, asOf: current.value.asOf,
+        sourceId: current.value.sourceId, sourceName: current.value.sourceName, quote: current.value.quote,
+      } : null;
+
+      return {
+        key: entry.key, label: entry.label, category: entry.category, unit: entry.unit, directionality: entry.directionality,
+        goal: goalOut, goalConflict: goal.conflict,
+        current: currentOut, currentConflict: current.conflict,
+        delta, deltaStatus, progress,
+        definitions: definitions.map(d => ({ id: d.id, value: d.value, sourceId: d.sourceId, sourceName: d.sourceName, quote: d.quote })),
+        interventions: interventions.map(iv => ({ id: iv.id, value: iv.value, asOf: iv.asOf, sourceId: iv.sourceId, sourceName: iv.sourceName, quote: iv.quote })),
+        signalCount: all.filter(o => o.key === entry.key).length,
+      };
+    });
+  }
+
+  // Mirrors InsightStore.history — every resolved observation for a key,
+  // oldest first.
+  _localInsightHistory(projectId, key, kind = 'current_state') {
+    const E = window.EOInsightExtract;
+    const store = this._localInsightsForProject(projectId);
+    return store.observations
+      .filter(o => o.key === key && o.kind === kind && o.keyStatus === 'resolved')
+      .sort((a, b) => E.asOfSortKey(a.asOf).localeCompare(E.asOfSortKey(b.asOf)));
+  }
+
   // ── Community Insights — standardized-key ledger (server/insight-store.js) ──
   //
   // Loads the merged goal/current/delta table, the raw keys still awaiting a
@@ -3410,9 +3771,17 @@ class Component extends DCLogic {
       const { rows } = await stateRes.json();
       const { unclear } = unclearRes.ok ? await unclearRes.json() : { unclear: [] };
       const { conflicts } = conflictsRes.ok ? await conflictsRes.json() : { conflicts: [] };
-      this.setState({ _insightRows: rows || [], _insightUnclear: unclear || [], _insightConflicts: conflicts || [], _insightError: null, _insightLoading: false });
+      this.setState({ _insightRows: rows || [], _insightUnclear: unclear || [], _insightConflicts: conflicts || [], _insightError: null, _insightOffline: false, _insightLoading: false });
     } catch (err) {
-      this.setState({ _insightError: `could not reach the proxy: ${err.message}`, _insightLoading: false });
+      // No engine reachable — Community Insights still works, standalone:
+      // the exact same extraction/merge rules run against this browser's
+      // own ledger (see the _localInsight* methods just above this one).
+      this.setState({
+        _insightRows: this._localInsightState(projectId),
+        _insightUnclear: this._localInsightUnclearKeys(projectId),
+        _insightConflicts: this._localInsightConflicts(projectId),
+        _insightError: null, _insightOffline: true, _insightLoading: false,
+      });
     }
   }
 
@@ -3421,23 +3790,30 @@ class Component extends DCLogic {
     const text = this.state._insightIngestText.trim();
     if (!projectId || !text) return;
     this.setState({ _insightIngestLoading: true, _insightIngestError: null, _insightIngestResult: null });
+    const body = {
+      content: text,
+      name: this.state._insightIngestName.trim() || null,
+      kind: this.state._insightIngestKind,
+      asOf: this.state._insightIngestAsOf.trim() || null,
+    };
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/ingest', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: text,
-          name: this.state._insightIngestName.trim() || null,
-          kind: this.state._insightIngestKind,
-          asOf: this.state._insightIngestAsOf.trim() || null,
-        }),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(20000),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `proxy returned ${res.status}`);
-      this.setState({ _insightIngestLoading: false, _insightIngestResult: data, _insightIngestText: '' });
+      this.setState({ _insightIngestLoading: false, _insightIngestResult: data, _insightIngestText: '', _insightOffline: false });
       this.fetchInsights();
     } catch (err) {
-      this.setState({ _insightIngestLoading: false, _insightIngestError: err.message });
+      try {
+        const result = this._localInsightIngest(projectId, body);
+        this.setState({ _insightIngestLoading: false, _insightIngestResult: result, _insightIngestText: '', _insightIngestError: null, _insightOffline: true });
+        this.fetchInsights();
+      } catch (localErr) {
+        this.setState({ _insightIngestLoading: false, _insightIngestError: localErr.message });
+      }
     }
   }
 
@@ -3461,32 +3837,44 @@ class Component extends DCLogic {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `proxy returned ${res.status}`);
       }
-      this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [draftKey]: '' } }));
+      this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [draftKey]: '' }, _insightOffline: false }));
       this.fetchInsights();
     } catch (err) {
-      this.setState({ _insightError: err.message });
+      try {
+        this._localInsightResolveKey(projectId, { rawKeys, canonicalKey, createLabel });
+        this.setState(s => ({ _insightResolveDrafts: { ...s._insightResolveDrafts, [draftKey]: '' }, _insightError: null, _insightOffline: true }));
+        this.fetchInsights();
+      } catch (localErr) {
+        this.setState({ _insightError: localErr.message });
+      }
     }
   }
 
   async deleteInsightObservation(observationId) {
     const projectId = this.state.activeProjectId;
     if (!projectId) return;
-    try {
-      await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/observations/' + encodeURIComponent(observationId), {
-        method: 'DELETE', signal: AbortSignal.timeout(10000),
-      });
-      // A deleted observation may have been part of an expanded key's
-      // history — drop the cache entries wholesale rather than trying to
-      // patch them, since removeObservation doesn't say which (key, kind)
-      // it belonged to and a stale cached history is worse than one refetch.
+    // A deleted observation may have been part of an expanded key's
+    // history — drop the cache entries wholesale rather than trying to
+    // patch them, since removeObservation doesn't say which (key, kind)
+    // it belonged to and a stale cached history is worse than one refetch.
+    const refresh = () => {
       this.setState({ _insightHistoryCache: {} });
       this.fetchInsights();
       if (this.state._insightExpandedKey) {
         this.fetchInsightHistory(this.state._insightExpandedKey, 'goal');
         this.fetchInsightHistory(this.state._insightExpandedKey, 'current_state');
       }
+    };
+    try {
+      await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/observations/' + encodeURIComponent(observationId), {
+        method: 'DELETE', signal: AbortSignal.timeout(10000),
+      });
+      this.setState({ _insightOffline: false });
+      refresh();
     } catch (err) {
-      this.setState({ _insightError: err.message });
+      this._localInsightRemoveObservation(projectId, observationId);
+      this.setState({ _insightOffline: true });
+      refresh();
     }
   }
 
@@ -3498,26 +3886,36 @@ class Component extends DCLogic {
     const projectId = this.state.activeProjectId;
     const label = this.state._insightNewKeyLabel.trim();
     if (!projectId || !label) return;
+    const body = {
+      label,
+      category: this.state._insightNewKeyCategory.trim() || null,
+      unit: this.state._insightNewKeyUnit.trim() || null,
+      directionality: this.state._insightNewKeyDirectionality,
+    };
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/keys', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          label,
-          category: this.state._insightNewKeyCategory.trim() || null,
-          unit: this.state._insightNewKeyUnit.trim() || null,
-          directionality: this.state._insightNewKeyDirectionality,
-        }),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(10000),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `proxy returned ${res.status}`);
       this.setState({
         _insightNewKeyOpen: false, _insightNewKeyLabel: '', _insightNewKeyCategory: '', _insightNewKeyUnit: '',
-        _insightNewKeyDirectionality: 'unknown', _insightNewKeyError: null,
+        _insightNewKeyDirectionality: 'unknown', _insightNewKeyError: null, _insightOffline: false,
       });
       this.fetchInsights();
     } catch (err) {
-      this.setState({ _insightNewKeyError: err.message });
+      try {
+        this._localInsightCreateKey(projectId, body);
+        this.setState({
+          _insightNewKeyOpen: false, _insightNewKeyLabel: '', _insightNewKeyCategory: '', _insightNewKeyUnit: '',
+          _insightNewKeyDirectionality: 'unknown', _insightNewKeyError: null, _insightOffline: true,
+        });
+        this.fetchInsights();
+      } catch (localErr) {
+        this.setState({ _insightNewKeyError: localErr.message });
+      }
     }
   }
 
@@ -3534,10 +3932,17 @@ class Component extends DCLogic {
         body: JSON.stringify({ directionality }),
         signal: AbortSignal.timeout(10000),
       });
-      this.fetchInsights();
+      this.setState({ _insightOffline: false });
     } catch (err) {
-      this.setState({ _insightError: err.message });
+      try {
+        this._localInsightUpdateKey(projectId, key, { directionality });
+        this.setState({ _insightOffline: true });
+      } catch (localErr) {
+        this.setState({ _insightError: localErr.message });
+        return;
+      }
     }
+    this.fetchInsights();
   }
 
   // Expanding a key row shows its goal/current history over time (the
@@ -3559,10 +3964,14 @@ class Component extends DCLogic {
     const cacheKey = `${key}:${kind}`;
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/history?key=' + encodeURIComponent(key) + '&kind=' + encodeURIComponent(kind), { signal: AbortSignal.timeout(10000) });
-      if (!res.ok) return;
+      if (!res.ok) throw new Error(`proxy returned ${res.status}`);
       const { observations } = await res.json();
-      this.setState(s => ({ _insightHistoryCache: { ...s._insightHistoryCache, [cacheKey]: observations || [] } }));
-    } catch { /* history is supplementary to state() — a failed fetch just leaves the section showing "loading" */ }
+      this.setState(s => ({ _insightHistoryCache: { ...s._insightHistoryCache, [cacheKey]: observations || [] }, _insightOffline: false }));
+    } catch {
+      // No engine reachable — read the same local ledger state()/ingestDocument() use.
+      const observations = this._localInsightHistory(projectId, key, kind);
+      this.setState(s => ({ _insightHistoryCache: { ...s._insightHistoryCache, [cacheKey]: observations }, _insightOffline: true }));
+    }
   }
 
   // Manual fact entry, scoped to whichever key is currently expanded — the
@@ -3573,23 +3982,31 @@ class Component extends DCLogic {
     const key = this.state._insightExpandedKey;
     const value = this.state._insightFactValue.trim();
     if (!projectId || !key || !value) return;
+    const body = {
+      key, kind: this.state._insightFactKind, value,
+      asOf: this.state._insightFactAsOf.trim() || null,
+      sourceName: this.state._insightFactSourceName.trim() || 'manual entry',
+    };
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/observations', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          key, kind: this.state._insightFactKind, value,
-          asOf: this.state._insightFactAsOf.trim() || null,
-          sourceName: this.state._insightFactSourceName.trim() || 'manual entry',
-        }),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(10000),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `proxy returned ${res.status}`);
-      this.setState({ _insightFactValue: '', _insightFactAsOf: '' });
+      this.setState({ _insightFactValue: '', _insightFactAsOf: '', _insightOffline: false });
       this.fetchInsights();
       this.fetchInsightHistory(key, this.state._insightFactKind);
     } catch (err) {
-      this.setState({ _insightError: err.message });
+      try {
+        this._localInsightAddObservation(projectId, body);
+        this.setState({ _insightFactValue: '', _insightFactAsOf: '', _insightError: null, _insightOffline: true });
+        this.fetchInsights();
+        this.fetchInsightHistory(key, this.state._insightFactKind);
+      } catch (localErr) {
+        this.setState({ _insightError: localErr.message });
+      }
     }
   }
 
@@ -9933,6 +10350,7 @@ class Component extends DCLogic {
       insightHasProject: !!S.activeProjectId,
       insightLoading: S._insightLoading,
       insightError: S._insightError,
+      insightOffline: S._insightOffline,
       refreshInsights: () => this.fetchInsights(),
 
       insightIngestText: S._insightIngestText,
