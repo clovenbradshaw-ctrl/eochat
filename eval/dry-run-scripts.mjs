@@ -64,6 +64,21 @@ for (const line of lines) sum += JSON.parse(line).amount;
 console.log(sum);
 `;
 
+const wavDurationChunked = `const fs = require("fs");
+const buf = fs.readFileSync(process.argv[2]);
+let offset = 12;
+let byteRate = null, dataBytes = null;
+while (offset + 8 <= buf.length) {
+  const id = buf.toString("ascii", offset, offset + 4);
+  const size = buf.readUInt32LE(offset + 4);
+  const body = offset + 8;
+  if (id === "fmt ") byteRate = buf.readUInt32LE(body + 8);
+  if (id === "data") dataBytes = size;
+  offset = body + size + (size % 2);
+}
+console.log(dataBytes / byteRate);
+`;
+
 const routeListPatch = [
   'if (mode === "list") {',
   '  const dir = "claims";',
@@ -160,5 +175,16 @@ export const DRY_RUN_SCRIPTS = {
     { tool: "write_file", args: { path: "summarize.js", content: jsonlSummarize } },
     { tool: "run_shell", args: { command: "node check.mjs" } },
     { tool: "finish", args: { summary: "wrote summarize.js handling line-delimited JSON, node check.mjs printed CHECK: PASS" } },
+  ],
+  "level2-wav-duration-bug": [
+    { decompose: false },
+    { tool: "write_file", args: { path: "duration.js", content: wavDurationChunked } },
+    { tool: "run_shell", args: { command: "node check.mjs" } },
+    // check.mjs writes its fixture to disk before running duration.js, so it
+    // exists by now — this call smoke-tests the generic perceive dispatcher
+    // actually runs against a real file in the sandbox, not just that it
+    // exists as code.
+    { tool: "perceive", args: { path: "._check_fixture.wav" } },
+    { tool: "finish", args: { summary: "wrote duration.js walking real RIFF chunks (not a fixed offset); node check.mjs printed CHECK: PASS; perceive confirmed the fixture's real chunk layout via the wav sense" } },
   ],
 };
