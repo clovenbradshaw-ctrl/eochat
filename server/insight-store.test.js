@@ -19,7 +19,6 @@ import {
   parseValue,
   sameValue,
   extractCandidateFacts,
-  classifyFactKind,
   slugifyKey,
   proposeFactsWithModel,
 } from "./insight-store.js";
@@ -43,32 +42,36 @@ test("jaccardSimilarity is 1 for identical token bags and 0 for disjoint ones", 
   assert.ok(jaccardSimilarity("affordable housing units", "affordable housing target") > 0.3);
 });
 
-test("matchKey returns exact for an alias match, auto for a close fuzzy match, candidates for a plausible-but-unconfirmed one, unclear otherwise", () => {
+test("matchKey returns exact ONLY for literal identity after normalization — everything else, however close, is a candidate", () => {
   const registry = [
     { key: "housing_affordable_units", label: "Affordable housing units", aliases: ["Aff. Housing Units"] },
     { key: "youth_grad_rate", label: "Youth graduation rate", aliases: [] },
   ];
-  assert.deepEqual(matchKey("Aff. Housing Units", registry).status, "exact");
-  const auto = matchKey("affordable housing units total", registry);
-  assert.equal(auto.status, "auto");
-  assert.equal(auto.key, "housing_affordable_units");
+  assert.equal(matchKey("Aff. Housing Units", registry).status, "exact");
 
-  const candidates = matchKey("housing units", registry);
-  assert.ok(candidates.status === "auto" || candidates.status === "candidates");
+  // Containment (structural) — a real, rankable signal, but never auto-applied.
+  // eoreader6's referents/consequence.js retired appearance-based identity
+  // matching even for its own, harder, statistically-testable version of this
+  // problem ("No stem table, no edit distance... not even here"); this module
+  // has no equivalent evidence to test against, so it is stricter still.
+  const structural = matchKey("affordable housing units total", registry);
+  assert.equal(structural.status, "candidates");
+  assert.equal(structural.candidates[0].key, "housing_affordable_units");
+  assert.equal(structural.candidates[0].structural, true);
 
   const unclear = matchKey("stormwater capacity", registry);
   assert.equal(unclear.status, "unclear");
   assert.deepEqual(unclear.candidates, []);
 });
 
-// ── keysStructurallyCorefer — the engine-tier, discover-cast.js-derived rule ─
+// ── keysStructurallyCorefer — a ranking signal only, never a merge trigger ──
 
-test("keysStructurallyCorefer merges by containment when the shared token is significant", () => {
+test("keysStructurallyCorefer detects containment when the shared token is significant", () => {
   assert.ok(keysStructurallyCorefer("Affordable Housing Units", "Housing Units"));
   assert.ok(keysStructurallyCorefer("Housing Units", "Affordable Housing Units"));
 });
 
-test("keysStructurallyCorefer refuses to merge on a shared GENERIC token alone — the 'Prince Andrew/Prince Vasili' failure mode ported to plan vocabulary", () => {
+test("keysStructurallyCorefer refuses containment on a shared GENERIC token alone — the 'Prince Andrew/Prince Vasili' failure mode ported to plan vocabulary", () => {
   // Both end in "units", but that is the only thing they share, and "units"
   // is exactly the kind of generic measurement noun discover-cast.js's
   // shared-leading-honorific carve-out warns against treating as identity.
@@ -76,15 +79,17 @@ test("keysStructurallyCorefer refuses to merge on a shared GENERIC token alone �
   assert.ok(!keysStructurallyCorefer("Housing Target", "Graduation Target"));
 });
 
-test("matchKey never auto-merges on a fuzzy score alone — only structural containment produces 'auto'", () => {
+test("matchKey never returns 'auto' for anything short of literal identity — not even structural containment", () => {
   const registry = [{ key: "housing_target_rate", label: "Housing target rate", aliases: [] }];
-  // "Annual Target Rate" scores 0.5 Jaccard against "Housing target rate"
-  // (shares "target"/"rate", both generic) — a high fuzzy score with NO
-  // significant shared token and no containment. Must stay a candidate at
-  // most, never auto-apply.
+  const structural = matchKey("Affordable Housing Target Rate", registry); // contains "housing"
+  assert.notEqual(structural.status, "auto");
+  assert.equal(structural.status, "candidates");
+
+  // High Jaccard overlap (both contain "target"/"rate") but no significant
+  // shared token and no containment — still just a candidate.
   assert.ok(jaccardSimilarity("Annual Target Rate", "Housing target rate") >= 0.34);
-  const m = matchKey("Annual Target Rate", registry);
-  assert.notEqual(m.status, "auto");
+  const fuzzy = matchKey("Annual Target Rate", registry);
+  assert.notEqual(fuzzy.status, "auto");
 });
 
 test("matchKey reports an ambiguous structural match as candidates listing both, never guesses one", () => {
@@ -96,7 +101,7 @@ test("matchKey reports an ambiguous structural match as candidates listing both,
   // the "Prince across several princes" case. Must not silently pick one.
   const m = matchKey("Housing Units", registry);
   assert.equal(m.status, "candidates");
-  const keys = m.candidates.map((c) => c.key).sort();
+  const keys = m.candidates.filter((c) => c.structural).map((c) => c.key).sort();
   assert.deepEqual(keys, ["north_housing_units", "south_housing_units"]);
 });
 
@@ -180,41 +185,31 @@ test("extractCandidateFacts reads tab-separated rows (DOCX table extraction shap
   assert.equal(facts[0].rawValue, "3.4m");
 });
 
-// ── classifyFactKind — cube/index.js-derived amplitude classifier ───────────
+// ── Kind is derived from document structure only, never scored from a
+//    sentence's own vocabulary — see insight-store.js's header on why a
+//    keyword-based classifier (measured against CUBE.md's own refutation of
+//    the mechanism it was ported from) was removed rather than kept
+//    "advisory."
 
-test("classifyFactKind confidently picks 'goal' for a sentence carrying decisive goal vocabulary", () => {
-  const r = classifyFactKind("The plan's goal is to increase affordable housing by 2030.");
-  assert.equal(r.kind, "goal");
-  assert.equal(r.confident, true);
-  assert.ok(r.amplitudes[0].amplitude > r.amplitudes[1].amplitude);
-});
-
-test("classifyFactKind confidently picks 'definition' for a sentence carrying decisive definition vocabulary", () => {
-  const r = classifyFactKind("Affordable housing is defined as housing costing no more than 30% of income.");
-  assert.equal(r.kind, "definition");
-  assert.equal(r.confident, true);
-});
-
-test("classifyFactKind reports no confident kind (never a silent default) for text with no evidence for any kind", () => {
-  const r = classifyFactKind("The sky was a pale grey over the harbor that morning.");
-  assert.equal(r.kind, null);
-  assert.equal(r.confident, false);
-});
-
-test("extractCandidateFacts falls back to classifyFactKind for a line with no header/table/date signal, and flags low confidence", () => {
-  // No section header set anything, no defaultKind given, no year prefix —
-  // the ONLY signal is the sentence's own vocabulary.
+test("extractCandidateFacts leaves kind null (an honest gap) for a line with no header/table/date signal, however decisive its own wording sounds", () => {
+  // No section header, no defaultKind, no year prefix — nothing structural
+  // declares a kind, so none is guessed from the sentence's own words alone,
+  // even though "goal" appears right in the text.
   const facts = extractCandidateFacts("Youth graduation rate goal: 90% by 2030");
   assert.equal(facts.length, 1);
-  assert.equal(facts[0].kind, "goal");
-  assert.equal(facts[0].kindConfident, true);
+  assert.equal(facts[0].kind, null);
 });
 
-test("extractCandidateFacts marks kindConfident=true unconditionally when a structural signal (header) set the kind, regardless of the line's own vocabulary", () => {
+test("extractCandidateFacts takes kind directly from a section header's own declared title, not from scoring the header's words", () => {
   const facts = extractCandidateFacts("GOALS\nStormwater capacity: 12M gallons\n");
   assert.equal(facts.length, 1);
   assert.equal(facts[0].kind, "goal");
-  assert.equal(facts[0].kindConfident, true);
+});
+
+test("extractCandidateFacts takes kind from the caller's document-level default when nothing else declares one", () => {
+  const facts = extractCandidateFacts("Stormwater capacity: 12M gallons\n", { defaultKind: "current_state" });
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "current_state");
 });
 
 // ── proposeFactsWithModel — model-assisted extraction, grounding-verified ──
@@ -253,16 +248,29 @@ test("proposeFactsWithModel handles a model response that isn't valid JSON witho
   assert.equal(result.rejected.length, 1);
 });
 
-test("proposeFactsWithModel downgrades kindStatus to unclear when the model's claimed kind conflicts with a CONFIDENT mechanical reading of the same quote", async () => {
+test("proposeFactsWithModel accepts the model's own kind claim as-is (no keyword-based cross-check) but always marks it kindConfident=false, needing human review", async () => {
   const text = "Report.\n\nAs of 2024, the current graduation rate stands at 74%, well below where it should be.";
   const callModel = stubModel(JSON.stringify([
-    // Model mislabels a clearly current-state quote as a goal.
-    { rawKey: "Graduation rate", value: "74%", kind: "goal", quote: "As of 2024, the current graduation rate stands at 74%, well below where it should be." },
+    { rawKey: "Graduation rate", value: "74%", kind: "current_state", quote: "As of 2024, the current graduation rate stands at 74%, well below where it should be." },
   ]));
   const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
   assert.equal(result.proposed.length, 1);
+  assert.equal(result.proposed[0].kind, "current_state");
+  // Never trusted as a structural fact, however plausible — same tier as
+  // the model's rawKey claim, and the same discipline extractCandidateFacts
+  // applies: a semantic judgment about content is not a document structure.
   assert.equal(result.proposed[0].kindConfident, false);
-  assert.equal(result.proposed[0].mechanicalKind, "current_state");
+});
+
+test("proposeFactsWithModel rejects a candidate whose kind is missing or not one of the four valid kinds", async () => {
+  const text = "The city aims to increase transit ridership by 2030.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Transit ridership", value: "20%", kind: "aspiration", quote: "The city aims to increase transit ridership by 2030." },
+  ]));
+  const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
+  assert.equal(result.proposed.length, 0);
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reason, /no valid kind/);
 });
 
 test("ingestDocument with useModel merges verified model facts through the same matchKey pipeline as heuristic facts, and reports the two tiers separately", async () => {

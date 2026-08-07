@@ -69,39 +69,50 @@ async function writeAtomic(file, data) {
 
 // ── Key normalization & term binding ────────────────────────────────────────
 //
-// This is the same problem eoreader5's referents/discover-cast.js solves for
+// eoreader5's referents/discover-cast.js solves the sibling problem for
 // character names ("Victor" / "Victor Frankenstein" / "Frankenstein" are one
-// referent), and it draws the identical tier line rather than a fresh one:
+// referent) with a structural containment test (namesCorefer) that auto-
+// merges. An earlier version of this module ported that rule directly —
+// wrong, on eoreader6's own more considered position, not just a different
+// vintage of the same codebase. eoreader6's referents/consequence.js retired
+// appearance-based identity entirely for its harder version of this exact
+// problem (binding two surfaces to one being): "No stem table, no edit
+// distance, no transliteration. Not even here." Its own measured reason: a
+// containment-shaped merge rule pooled two DIFFERENTLY-admitted brothers
+// (Juhani, Tuomas) as readily as it bound one brother's own two halves —
+// appearance-matching cannot tell a real match from a false one, only a
+// statistical test of real, independent evidence can (segregation +
+// displacement against a bootstrapped null, in that module's case).
 //
-//   ENGINE-tier — a STRUCTURAL test (token containment, excluding the generic
-//   words a whole document's vocabulary shares) — is the only thing allowed
-//   to auto-merge without a human. discover-cast.js's namesCorefer is
-//   "containment, or a shared final token (surname)" with an explicit carve-
-//   out that a shared LEADING token never merges ("Prince Andrew"/"Prince
-//   Vasili" share an honorific, not an identity). Community-plan vocabulary
-//   has the mirror-image failure mode at the TRAILING position instead of the
-//   leading one — "Affordable Housing Units" and "Broadband Access Units"
-//   share only the generic measurement noun "units" — so the excluded set
-//   here is GENERIC_TERM_WORDS rather than a leading-honorific list, but the
-//   discipline is the same rule, ported to this domain's own vocabulary
-//   (constitution amendment A7: same mechanism, native vocabulary per medium).
+// This module has no equivalent evidence to test against — a canonical key's
+// label is a persisted name, not a surface with arrival positions in a
+// reading, so consequence.js's actual statistical machinery has no input
+// here. What transfers is the PRINCIPLE it was built to enforce: containment
+// is still appearance-matching, and appearance-matching produces false
+// merges. So the tier line here is stricter than the first draft's:
 //
-//   MODEL/STATISTICAL-tier — Jaccard overlap, or anything a model proposes —
-//   NEVER auto-merges, no matter how high the score. discover-cast.js's own
-//   header is explicit about why: "It also must not be applied blindly...
-//   an identity is a declaration about SPECIFIC surfaces, never a rule about
-//   a token, and a caller declaring one is asserting it on the record." A
-//   fuzzy score is offered as a `candidate` for a human (or a model's
-//   explicitly-attributed, always-reviewable suggestion — see
-//   proposeFactsWithModel below) to confirm, never applied silently. The
-//   previous version of this module auto-merged on Jaccard alone above a
-//   hand-set 0.72 threshold — exactly the "blind" application the tier line
-//   forbids — and is corrected here.
+//   AUTO-APPLY — ONLY literal identity after normalization (case/punctuation/
+//   diacritics stripped). This is not an inference about meaning; it is the
+//   same short-circuit consequence.js's own identityByConsequence makes
+//   before doing any statistical work at all ("if (surfaceA === surfaceB)
+//   return relation: 'same'"). Two spellings of literally the same text are
+//   the same key; nothing else is auto-merged.
+//
+//   CANDIDATE — everything else: structural containment (keysStructurallyCorefer,
+//   kept as a ranking/labeling signal — "this generic-word-excluded token set
+//   is a real signal, worth ranking first"), Jaccard overlap, or anything a
+//   model proposes (see proposeFactsWithModel below). ALL of these require a
+//   human to confirm via resolveKey() before anything merges — never applied
+//   silently, matching discover-cast.js's own explicit rule for its
+//   MODEL-tier descriptor synonymy ("an identity is a declaration about
+//   SPECIFIC surfaces... a caller declaring one is asserting it on the
+//   record") and, more strongly, consequence.js's later refusal to trust
+//   appearance for its ENGINE-tier problem either.
 //
 //   AMBIGUOUS — a raw key that structurally correferes with MORE than one
-//   canonical key is never assigned to either. discover-cast.js's
-//   clusterSurfaces does the same for "Prince" matching several princes:
-//   dropped to a gap, not guessed into whichever candidate sorted first.
+//   canonical key is never assigned to either; both are offered as
+//   candidates. Same as discover-cast.js's clusterSurfaces refusing to
+//   assign "Prince" to whichever matching prince sorted first.
 
 export function normalizeKeyText(s) {
   return String(s ?? "")
@@ -147,13 +158,13 @@ function significantTokens(s) {
 }
 
 /**
- * The engine-tier structural test: do these two label strings name the same
- * standard key by containment — one's significant token set is a subset of
- * the other's — requiring at least one shared token that ISN'T generic
- * measurement vocabulary. "Affordable Housing Units" contains "Housing
- * Units" — but "Housing Units" and "Broadband Units" do not corefer, because
- * their only shared token ("units") is generic. Mechanical, deterministic,
- * safe to apply without asking — the ONLY thing that produces an "auto" match.
+ * A structural containment test — do these two label strings share a
+ * significant (non-generic) token as a subset relationship. "Affordable
+ * Housing Units" contains "Housing Units"; "Housing Units" and "Broadband
+ * Units" do not corefer, because their only shared token ("units") is
+ * generic. Kept as a RANKING signal (a structural match is offered as the
+ * top candidate) — never as a merge trigger. See the tier note above for why
+ * this stops short of auto-applying, unlike eoreader5's namesCorefer.
  */
 export function keysStructurallyCorefer(a, b) {
   const sa = significantTokens(a), sb = significantTokens(b);
@@ -174,10 +185,9 @@ export const MAX_CANDIDATES = 4;
 /**
  * Compare a raw key string against a registry's canonical keys (each
  * `{ key, label, aliases }`). Returns:
- *   { status: 'exact',      key, score: 1 }
- *   { status: 'auto',       key, score: 1, reason: 'structural' } — mechanical containment match, safe to apply without asking
- *   { status: 'candidates', candidates: [...] } — plausible but unconfirmed (fuzzy score, OR a structural match against more than one key — ambiguous, never guessed)
- *   { status: 'unclear',    candidates: [] }    — nothing plausible found
+ *   { status: 'exact',      key, score: 1 }             — literal identity after normalization; the only thing safe to apply without a human
+ *   { status: 'candidates', candidates: [...] }         — plausible but unconfirmed (structural containment, ranked first and flagged `structural: true`, and/or Jaccard overlap)
+ *   { status: 'unclear',    candidates: [] }             — nothing plausible found
  */
 export function matchKey(rawKey, registryKeys) {
   const norm = normalizeKeyText(rawKey);
@@ -190,29 +200,17 @@ export function matchKey(rawKey, registryKeys) {
     }
   }
 
-  const structural = registryKeys.filter((k) =>
+  const structural = new Set(registryKeys.filter((k) =>
     keysStructurallyCorefer(rawKey, k.label) || (k.aliases || []).some((a) => keysStructurallyCorefer(rawKey, a))
-  );
-  if (structural.length === 1) {
-    return { status: "auto", key: structural[0].key, score: 1, reason: "structural" };
-  }
+  ).map((k) => k.key));
 
   const scored = registryKeys.map((k) => {
     const names = [k.label, ...(k.aliases || [])];
     let score = 0;
     for (const n of names) score = Math.max(score, jaccardSimilarity(rawKey, n));
-    return { key: k.key, label: k.label, score };
-  }).filter((s) => s.score >= CANDIDATE_THRESHOLD)
-    .sort((a, b) => b.score - a.score);
-
-  if (structural.length > 1) {
-    // Ambiguous structural match — "Prince" matching several princes.
-    // Surfaced as candidates (structural ones ranked first, score 1) rather
-    // than guessed into whichever sorted first.
-    const structuralCandidates = structural.map((k) => ({ key: k.key, label: k.label, score: 1 }));
-    const rest = scored.filter((s) => !structural.some((k) => k.key === s.key));
-    return { status: "candidates", candidates: [...structuralCandidates, ...rest].slice(0, MAX_CANDIDATES) };
-  }
+    return { key: k.key, label: k.label, score, structural: structural.has(k.key) };
+  }).filter((s) => s.structural || s.score >= CANDIDATE_THRESHOLD)
+    .sort((a, b) => (b.structural - a.structural) || (b.score - a.score));
 
   if (!scored.length) return { status: "unclear", candidates: [] };
   return { status: "candidates", candidates: scored.slice(0, MAX_CANDIDATES) };
@@ -291,94 +289,47 @@ function asOfSortKey(asOf) {
   return s;
 }
 
-// ── Kind classification — STRONG/WEAK evidence amplitudes ───────────────────
-//
-// Ported from eoreader5's cube/index.js terrain classifier (see its own
-// header): score every candidate kind against a STRONG vocabulary (terms
-// that specifically denote it) and a WEAK one (terms that co-occur with it
-// but are common in running prose), damp repeated hits with log1p so a word
-// used many times doesn't linearly dominate, and take amplitudes across ALL
-// kinds at once rather than a first-match cascade. The prior version of this
-// module was exactly the cascade cube's own header documents as the failure
-// it replaced: a first-pattern-wins scan over section headers only, with no
-// signal at all once a line has no header above it. Notably, cube/index.js's
-// own "Kind" terrain vocabulary (type|kind|category|class|definition|
-// species) and its "DEF" operator (define|declare|specify|stipulate) are,
-// almost verbatim, this module's "definition" kind — real evidence this
-// tier-of-evidence approach generalizes past the terrain/stance/operator
-// dimensions cube was built for, to a fourth: what KIND OF CLAIM a sentence
-// in a plan document is making.
-//
-// cube/index.js's own header calls its outputs advisory: "may inform
-// display, ordering, or a prior weight. They may NEVER gate, veto, route, or
-// address." Applied identically here — see classifyFactKind's `confident`
-// field and its caller in extractCandidateFacts, which records a fact's kind
-// as `kindStatus: 'unclear'` rather than trusting a coin-flip margin whenever
-// no header/table/date-prefix structural signal set it directly.
-
-const WEAK_KIND_WEIGHT = 0.15;
-
-const KIND_TERMS = {
-  goal: {
-    strong: /\b(goals?|targets?|objectives?|aims?|aspires?|committed?\s+to|by\s+20\d\d)\b/gi,
-    weak: /\b(plan(ned)?|will|shall|intends?|hopes?\s+to|seeks?\s+to)\b/gi,
-  },
-  current_state: {
-    strong: /\b(current(ly)?|baseline|as[- ]of|status\s+quo|present\s+state|today)\b/gi,
-    weak: /\b(now|existing|reported|observed|measured)\b/gi,
-  },
-  intervention_metric: {
-    strong: /\b(interventions?|kpis?|indicators?|program(me)?s?|initiatives?)\b/gi,
-    weak: /\b(outcomes?|metrics?|effort|activit(?:y|ies)|service)\b/gi,
-  },
-  definition: {
-    strong: /\b(definitions?|defined\s+as|glossary|means?\s+(?:the|a|an)\b|refers?\s+to|is\s+defined)\b/gi,
-    weak: /\b(terms?|denotes?|constitutes?)\b/gi,
-  },
-};
-
-const hits = (t, re) => (t.match(re) ?? []).length;
-
-function kindEvidence(t, { strong, weak }) {
-  return Math.log1p(hits(t, strong)) + WEAK_KIND_WEIGHT * Math.log1p(hits(t, weak));
-}
-
-/**
- * classifyFactKind(text) -> { kind, confident, amplitudes }
- *
- * `kind` is the argmax kind, or null when there is no evidence at all for
- * any kind — never a silent default. `amplitudes` is every kind's share of
- * the total evidence, strongest first, for a caller that wants to show its
- * reasoning rather than just the winner. `confident` requires the winner to
- * hold both a real plurality (>=0.4) AND a real margin over the runner-up
- * (>=0.15) — a winner at 0.26 against three others at ~0.24 each is
- * "ahead" but not decisive, and is treated as no signal, not as this kind.
- */
-export function classifyFactKind(text) {
-  const t = String(text ?? "");
-  const scored = Object.entries(KIND_TERMS).map(([kind, terms]) => ({ kind, score: kindEvidence(t, terms) }));
-  const total = scored.reduce((s, r) => s + r.score, 0);
-  const amplitudes = scored
-    .map((r) => ({ kind: r.kind, amplitude: total > 0 ? r.score / total : 0 }))
-    .sort((a, b) => b.amplitude - a.amplitude);
-
-  if (total === 0) return { kind: null, confident: false, amplitudes };
-  const top = amplitudes[0], second = amplitudes[1];
-  const confident = top.amplitude >= 0.4 && (top.amplitude - (second?.amplitude ?? 0)) >= 0.15;
-  return { kind: top.kind, confident, amplitudes };
-}
-
 // ── Section-kind / date-prefix detection for extraction ─────────────────────
+//
+// A fact's kind (goal/current_state/intervention_metric/definition) is set
+// ONLY from what the document itself structurally declares — a header, a
+// table column name, a "By <year>" prefix — never from scoring a sentence's
+// own words. An earlier version of this module did the latter: a hand-
+// authored strong/weak keyword vocabulary with log1p-damped, amplitude-
+// scored "confidence," modelled on eoreader5's cube/index.js terrain
+// classifier. That model's own repo (`CUBE.md`, eoreader6) records why it
+// was removed from that engine's runtime entirely rather than merely
+// softened: "shuffling words inside 2,527 paragraphs left 95.7% of cell
+// assignments unchanged... It is not resurrected here. It is promoted out
+// of the code." The identical control run against this module's own
+// classifier reproduced the same signature (7 of 8 real sentences kept an
+// IDENTICAL kind label after a full word-order-destroying shuffle) — a
+// keyword scan cannot distinguish real prose from a meaningless scramble of
+// the same words, because it never looks at anything but word presence. It
+// is not resurrected here either.
+//
+// A short, author-written HEADER is a different kind of object than a
+// scored sentence: its role is literally to declare what follows, the same
+// status a table's own column name already gets here. Matching a header's
+// text against a small set of section-title words is reading what the
+// author wrote, not inferring semantics from word frequency — kept for that
+// reason, while the sentence-level fallback is not.
+
+const HEADER_KIND_WORDS = {
+  goal: /\b(goals?|targets?|objectives?)\b/i,
+  current_state: /\b(current\s+state|baseline|status)\b/i,
+  intervention_metric: /\b(interventions?|metrics?|indicators?)\b/i,
+  definition: /\b(definitions?|glossary)\b/i,
+};
 
 function detectSectionKind(line) {
   const isHeader = /^#{1,6}\s+/.test(line)
     || (line === line.toUpperCase() && /[A-Z]/.test(line) && line.trim().length > 2 && line.trim().length < 80 && !/[.!?]$/.test(line.trim()));
   if (!isHeader) return null;
-  // A header is short, high-signal, DELIBERATE text — treated as a
-  // structural override the same way a table column header is: its
-  // classification is trusted at whatever margin it has, not held to the
-  // 0.4/0.15 bar a bare sentence needs (see classifyFactKind).
-  return classifyFactKind(line).kind;
+  for (const [kind, pattern] of Object.entries(HEADER_KIND_WORDS)) {
+    if (pattern.test(line)) return kind;
+  }
+  return null;
 }
 
 // Strips a leading "By 2030", "As of 2024", "(2026)" clause and reports the
@@ -439,23 +390,13 @@ export function extractCandidateFacts(text, { defaultKind = null } = {}) {
     const value = String(rawValue || "").trim();
     if (!key || !value) return;
     if (key.length > 100 || value.length > 200) return;
-
-    // `kind` here is already a structural decision (a header, a table
+    // `kind` is whatever structural signal is in force (a header, a table
     // column, a "By <year>" prefix, or the document-level default the
-    // caller chose) — trusted as-is, same as detectSectionKind's header
-    // handling. Only when NONE of those set anything does this fall back to
-    // classifyFactKind's sentence-level evidence, and that fallback is the
-    // one case tagged with its own confidence for ingestDocument to act on.
-    let finalKind = kind || null;
-    let kindConfident = !!kind;
-    let kindAmplitudes = null;
-    if (!finalKind) {
-      const classified = classifyFactKind(quote);
-      finalKind = classified.kind;
-      kindConfident = classified.confident;
-      kindAmplitudes = classified.amplitudes;
-    }
-    facts.push({ rawKey: key, rawValue: value, kind: finalKind, kindConfident, kindAmplitudes, quote, line: lineNo, asOfYear });
+    // caller chose) — trusted as-is. When none of those set anything, kind
+    // is an honest null rather than a guess from the line's own words —
+    // see this section's header for why a sentence-level fallback was
+    // removed rather than kept as a softer "advisory" signal.
+    facts.push({ rawKey: key, rawValue: value, kind: kind || null, quote, line: lineNo, asOfYear });
   };
 
   lines.forEach((raw, i) => {
@@ -619,24 +560,24 @@ export async function proposeFactsWithModel(text, { callModel, heuristicFacts = 
       continue;
     }
 
-    // The model's claimed kind is cross-checked against the SAME mechanical
-    // classifier a heuristic-only fact would get, using the quote itself
-    // (real source text, not the model's paraphrase of it). Agreement, or a
-    // mechanical signal that itself isn't confident, trusts the model's
-    // kind. A CONFIDENT mechanical disagreement is real counter-evidence and
-    // downgrades the fact to kindStatus 'unclear' rather than picking a side.
-    const mechanical = classifyFactKind(quote);
-    let kindConfident = true;
-    if (kind && mechanical.confident && mechanical.kind !== kind) kindConfident = false;
-    if (!kind) { kind = mechanical.kind; kindConfident = mechanical.confident; }
     if (!kind) {
-      rejected.push({ reason: "no kind could be determined (model gave none and the quote has no mechanical kind signal)", candidate: c });
+      rejected.push({ reason: "model gave no valid kind (goal/current_state/intervention_metric/definition) for this candidate", candidate: c });
       continue;
     }
 
     proposed.push({
-      rawKey, rawValue: value, kind, kindConfident,
-      kindAmplitudes: mechanical.amplitudes, modelKind: c?.kind ?? null, mechanicalKind: mechanical.kind,
+      rawKey, rawValue: value, kind,
+      // The model's claimed kind is its own semantic judgment about a real,
+      // grounded quote — not a structural fact the document declares (a
+      // header, a table column). It is deliberately NOT mechanically cross-
+      // checked: an earlier version of this function scored the quote
+      // against a hand-authored keyword vocabulary and overrode the model on
+      // disagreement, which is the same measured-and-refuted mechanism
+      // extractCandidateFacts's header explains removing — a keyword scan is
+      // not a check, it is a second guess no more grounded than the first.
+      // The model's claim stands on its own, same tier as its rawKey→
+      // canonical-key guess, and needs the same human confirmation.
+      kindConfident: false,
       quote, line: null, asOfYear: null, extractionMethod: "model",
     });
   }
@@ -787,15 +728,9 @@ export class InsightStore {
         const now = new Date().toISOString();
         let obsKey = null, keyStatus, candidates = [];
 
-        if (match.status === "exact" || match.status === "auto") {
+        if (match.status === "exact") {
           obsKey = match.key;
           keyStatus = "resolved";
-          if (match.status === "auto") {
-            const entry = registry.keys.find((k) => k.key === match.key);
-            if (entry && !entry.aliases.some((a) => normalizeKeyText(a) === normalizeKeyText(fact.rawKey))) {
-              entry.aliases.push(fact.rawKey);
-            }
-          }
         } else if (match.status === "candidates") {
           keyStatus = "unclear";
           candidates = match.candidates;
@@ -808,14 +743,16 @@ export class InsightStore {
         const observation = {
           id: newId(),
           projectId,
-          kind: fact.kind || kind || "current_state",
-          // A fact whose kind came from a structural signal (header, table
-          // column, date-prefix, or the model — cross-checked above) is
-          // 'resolved'; one that fell back to classifyFactKind's sentence-
-          // level guess without clearing its confidence bar is 'unclear' —
-          // symmetric with keyStatus, and just as visible to a reviewer.
-          kindStatus: fact.kindConfident === false ? "unclear" : "resolved",
-          kindAmplitudes: fact.kindAmplitudes || null,
+          // `fact.kind` is set ONLY from a real structural signal (a header,
+          // a table column, a "By <year>" prefix) or the document-level kind
+          // the caller declared — never a guess from the sentence's own
+          // words (see extractCandidateFacts's header on why). No signal at
+          // all means an honest gap: kind stays null, kindStatus 'unclear',
+          // symmetric with an unresolved key. A model-proposed fact's kind
+          // (fact.kindConfident === false, see proposeFactsWithModel) is
+          // present but still 'unclear' — a real claim, not yet confirmed.
+          kind: fact.kind || null,
+          kindStatus: (fact.kind && fact.kindConfident !== false) ? "resolved" : "unclear",
           extractionMethod: fact.extractionMethod || "heuristic",
           rawKey: fact.rawKey,
           key: obsKey,
@@ -862,7 +799,7 @@ export class InsightStore {
       let obsKey = key, keyStatus = "resolved", candidates = [];
       if (!obsKey) {
         const match = matchKey(rawKey, registry.keys);
-        if (match.status === "exact" || match.status === "auto") { obsKey = match.key; }
+        if (match.status === "exact") { obsKey = match.key; }
         else { keyStatus = "unclear"; candidates = match.candidates || []; }
       } else if (!registry.keys.some((k) => k.key === obsKey)) {
         throw new Error(`unknown key: ${obsKey}`);
@@ -873,9 +810,9 @@ export class InsightStore {
         id: newId(), projectId, kind,
         // A human typing this in has already decided what kind it is —
         // always 'resolved', the same way a manual key mapping never goes
-        // through the fuzzy/structural tiers matchKey applies to extracted
-        // text.
-        kindStatus: "resolved", kindAmplitudes: null, extractionMethod: "manual",
+        // through the structural/fuzzy candidate tiers matchKey applies to
+        // extracted text.
+        kindStatus: "resolved", extractionMethod: "manual",
         rawKey: rawKey || (registry.keys.find((k) => k.key === obsKey)?.label) || obsKey,
         key: obsKey, keyStatus, candidates, value, parsed, asOf,
         sourceId, sourceName, quote: quote || null, line: null,
