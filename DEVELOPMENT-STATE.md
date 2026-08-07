@@ -464,6 +464,57 @@ claims in organ documentation should be trusted. Staged in eochat only
 because `eo-constitution` was not reachable from the session that did this
 work — belongs there, not here, once someone with access can move it.
 
+## A sibling initiative: does the holonic spine help NORMAL chatting, not just long-form generation?
+
+Everything above is about one blink of generation — a single long document
+built incrementally. eochat separately already built a holonic mechanism for
+ORDINARY multi-turn chat (not this session's work, pre-existing):
+`server/conversation-memory.js`'s "desk" (a small, bounded, always-injected,
+verbatim fact ledger — the per-turn analogue of `foldToWorkingSet`'s "mouth")
+and `server/conversation-holon.js` (turn promotion via real
+existence-dependency on `task-log.js`'s own spine, never text
+classification). Nothing before this session measured what the desk actually
+buys over the plain windowed-history baseline a normal chat completion
+endpoint gives you once a conversation runs long — the comparison existed as
+an architectural claim, not a measurement.
+
+**`eval/chat/`** — the "normal chatting" counterpart to `eval/`'s Agentic
+Coding Capability Eval, same discipline (mechanical oracles, every run
+recorded, nothing cherry-picked). Two context-assembly pipelines
+(`eval/chat/pipelines.mjs`), both built from the REAL functions
+`turn-controller.js` itself calls (`buildHistoryMessages`, `applyTurn`,
+`buildMemoryMessage` — hoisted to module-level exports in
+`turn-controller.js` this session, same reasoning as the pre-existing
+`buildGroundedSystemMessage` export, so the eval tests the real prompt, not
+a copy of it): a windowed-only baseline vs. windowed-plus-desk. Four
+scenarios replay identical scripted conversations through both and check,
+mechanically, whether a fact/denial/eviction property holds. First run:
+**4/4 scenarios pass, 17/17 checks** — see `eval/chat/README.md` for the
+full breakdown and, importantly, its own "Honest limits" section (no real
+local model was run in this sandbox; this proves context assembly is
+correct and different between conditions, not that a real weak model
+reliably exploits the difference — the same gap `eval/run.mjs --dry-run` has
+relative to a real `--model` run).
+
+One real defect surfaced during construction, in the eval's own scenario
+script rather than the production code under test: `multi-fact-recall`'s
+second fact was originally scripted at a turn index still inside the real
+6-turn window by the time the conversation ended, so the baseline pipeline
+correctly still had it — the scenario's assumption was wrong, not the desk.
+Moving both facts earlier in the script (so filler turns actually push both
+out of the window) fixed it. Left in `eval/chat/README.md` as the same
+"verify the baseline actually failed for the reason you think it did"
+discipline this codebase's other domains already apply to their own
+oracles.
+
+**Deferred, scoped honestly:** a real Ollama-backed run (swapping
+`eval/chat/context-model.mjs`'s deterministic stand-in for
+`eval/adapters/ollama-adapter.mjs`, already built and reusable unchanged)
+and an L1 dead-air/streaming timing scenario (would need to drive
+`server/proxy.js`'s real HTTP/SSE surface, not just the pure
+context-assembly functions this eval isolates) — neither built this session,
+both named rather than silently skipped.
+
 ## Key files, for quick orientation
 
 - `eochat/server/task-log.js` (+`.test.js`) — the spine, do not modify lightly
@@ -477,3 +528,4 @@ work — belongs there, not here, once someone with access can move it.
 - `specs/composition-is-retrieval.md` — the theoretical grounding (main project root)
 - `work-website/` (main project root) — the real generated site, vocabulary fix confirmed working
 - `work-diagram/`, `work-diagram-qwen/` (main project root) — real generated flowcharts, llama3.2 vs qwen2.5:14b comparison
+- `eochat/eval/chat/` — Conversational Memory Capability Eval, the "does the holonic spine help NORMAL chatting" sibling initiative; `node eval/chat/run.mjs` to reproduce
