@@ -112,7 +112,23 @@ export async function runLevelTask(taskDir, { adapter, runId, maxDepth = 1, surf
       selfReportMismatch,
     },
     logEntryCount: run.log.entries.length,
+    // The raw per-step transcript, per leaf -- without this, "the model's
+    // output was malformed" or "it hit the step cap" is an unfalsifiable
+    // claim: nothing on disk shows what it actually emitted. Bounded per
+    // entry (never silently) for the same reason tools.mjs bounds a single
+    // read_file/run_shell result -- a raw transcript across many steps is
+    // real research data, not something to lose to keep the file small.
+    transcripts: run.leafResults.map((r) => ({ taskId: r.taskId, transcript: boundTranscript(r.transcript) })),
   };
+}
+
+const MAX_TRANSCRIPT_ENTRY_CHARS = 2000;
+function boundTranscript(transcript) {
+  return (transcript ?? []).map((entry) => {
+    const json = JSON.stringify(entry);
+    if (json.length <= MAX_TRANSCRIPT_ENTRY_CHARS) return entry;
+    return { ...entry, _truncated: `entry was ${json.length} chars, bounded to ${MAX_TRANSCRIPT_ENTRY_CHARS} for the results file`, raw: typeof entry.raw === "string" ? entry.raw.slice(0, MAX_TRANSCRIPT_ENTRY_CHARS) : entry.raw };
+  });
 }
 
 function countBy(arr) {
