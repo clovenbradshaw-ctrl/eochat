@@ -53,6 +53,7 @@ function summarizeResult(tool, result) {
   if (tool === "list_files") return `ok (${result?.files?.length ?? 0} file(s))`;
   if (tool === "write_file" || tool === "edit_file") return `ok (${result?.bytesWritten ?? "?"} bytes written)`;
   if (tool === "run_shell") return `exit ${result?.exitCode}${result?.truncated ? ", output truncated" : ""}`;
+  if (tool === "search_prior_art") return result?.hit ? `found ${result.local?.length ?? 0} local + ${result.npm?.length ?? 0} npm candidate(s)` : "no candidate found";
   return "ok";
 }
 
@@ -88,11 +89,11 @@ function buildPromptView(system, intro, foldedTurns, foldK) {
   return [system, intro, buildFoldedSummaryMessage(folded.map((t) => t.entry)), ...kept.flatMap((t) => t.msgs)];
 }
 
-const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
+const PROTOCOL = (toolDescriptions, toolNames = []) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
 
 ${toolDescriptions.map((d) => `- ${d}`).join("\n")}
 
-ENVIRONMENT: this sandbox has Node.js built-in modules only — no npm packages are installed and there is no network access to install any. A require()/import of anything other than a Node.js built-in (fs, path, etc.) will fail. Write dependency-free code.
+ENVIRONMENT: this sandbox has Node.js built-in modules only — no npm packages are installed${toolNames.includes("search_prior_art") ? ", though search_prior_art can reach the public npm registry read-only to check for one before you write code" : " and there is no network access to install any"}. A require()/import of anything other than a Node.js built-in (fs, path, etc.) will fail. Write dependency-free code.
 
 RULES:
 - Respond with EXACTLY ONE JSON object per turn: {"tool": "<name>", "args": {...}}. Nothing else — no prose, no markdown fences.
@@ -124,7 +125,7 @@ function formatObservation(toolName, result) {
 export function createSession({ taskPrompt, groundingBlock = null, toolset, foldK = DEFAULT_FOLD_K }) {
   const { tools, toolCalls } = toolset;
   const toolNames = Object.keys(tools);
-  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description)) };
+  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description), toolNames) };
 
   const userIntro = groundingBlock
     ? `TASK:\n${taskPrompt}\n\nRESEARCH (surfaced before you started, folded to what fit the budget):\n${groundingBlock}`

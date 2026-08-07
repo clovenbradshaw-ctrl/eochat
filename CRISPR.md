@@ -205,6 +205,24 @@ unfalsifiable citation as the more serious failure than a missing one.
     10 still fires on that result, so the same kind is never solved twice
     even the first time it's real.
 
+**A constraint that binds every stage above, carried over from day one:
+never inflate the local model's prompt window.** eoCode drives a small
+local model (`server/eocode-agent.js`'s default is `qwen2.5-coder:1.5b`),
+and `react-loop.mjs` already documents the real cost of forgetting this —
+n_tokens measured climbing past 3400 within half a dozen steps because
+every tool observation was replayed in full every turn. Its fix,
+`DEFAULT_FOLD_K`, only bounds *tool results* after they age out of the
+recent window; the *system prompt* — every tool's description — is resent
+verbatim on every single turn for the whole run, unfolded, forever. So a
+tool description belongs in this pipeline only if it earns a permanent,
+per-turn tax, and any stage that returns candidates (steps 3–5 especially,
+once corpus search is real and each hit can carry a much longer blob than
+an npm registry entry) must cap and truncate before returning, not after.
+The first buildable increment (§6, `eval/agent/crispr-search.mjs`) already
+holds to this — short tool description, `MAX_CANDIDATES`-capped and
+truncated results — specifically so this doesn't have to be relearned the
+expensive way once the corpus-search stage is real.
+
 ## 5. Open questions — genuinely unresolved, not rhetorical
 
 - **Does entity-kinds induction work on code unmodified**, the way
