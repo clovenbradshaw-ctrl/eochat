@@ -568,6 +568,7 @@
         <button type="button" onClick="{{ tabGlassBox }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabGlassBoxColor }}; box-shadow: {{ tabGlassBoxUnderline }}; cursor:pointer;">Glass box</button>
         <button type="button" onClick="{{ tabSenses }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabSensesColor }}; box-shadow: {{ tabSensesUnderline }}; cursor:pointer;">Senses</button>
         <button type="button" onClick="{{ tabInsights }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabInsightsColor }}; box-shadow: {{ tabInsightsUnderline }}; cursor:pointer;">Insights</button>
+        <button type="button" onClick="{{ tabEoCode }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabEoCodeColor }}; box-shadow: {{ tabEoCodeUnderline }}; cursor:pointer;">eoCode</button>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
           <sc-if value="{{ proxyDead }}">
             <button type="button" onClick="{{ retryProxy }}" style="border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
@@ -1354,6 +1355,61 @@
           </div>
         </div>
         </sc-if>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isEoCode }}">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:12px; min-height:0; overflow:hidden;">
+        <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">eoCode — agentic coding</span>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A local model plans, writes, and runs its own code in a real sandbox directory — read_file / write_file / edit_file / run_shell, one tool call at a time — with every step disclosed below as it happens, the same live transcript Claude Code or opencode show for their own tool calls. Needs a local Ollama model reachable from the server (<span style="font-family:'IBM Plex Mono', monospace;">ollama serve</span>).</span>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <input type="text" value="{{ eoCodeWorkspace }}" onChange="{{ onEoCodeWorkspaceChange }}" disabled="{{ eoCodeRunning }}" placeholder="workspace name" style="width:150px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"/>
+          <input type="text" value="{{ eoCodeModel }}" onChange="{{ onEoCodeModelChange }}" disabled="{{ eoCodeRunning }}" placeholder="ollama model, e.g. qwen2.5-coder:1.5b" style="width:230px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"/>
+          <sc-if value="{{ eoCodeRunning }}">
+            <button type="button" onClick="{{ stopEoCode }}" style="border:1px solid #C0341A; border-radius:7px; background:none; color:#C0341A; padding:7px 14px; font-family:inherit; font-size:12.5px; cursor:pointer;">Stop</button>
+          </sc-if>
+          <sc-if value="{{ eoCodeNotRunning }}">
+            <button type="button" onClick="{{ runEoCode }}" disabled="{{ eoCodeRunDisabled }}" style="border:0; border-radius:7px; background:#1F5A4C; color:#FFFDFA; padding:7px 14px; font-family:inherit; font-size:12.5px; cursor:pointer;">Run</button>
+          </sc-if>
+        </div>
+
+        <textarea value="{{ eoCodePrompt }}" onChange="{{ onEoCodePromptChange }}" disabled="{{ eoCodeRunning }}" placeholder="Describe the coding task — e.g. &quot;Write a Node.js script that converts CSV to JSON, then run it to verify the output.&quot;" style="min-height:64px; resize:vertical; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:9px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"></textarea>
+
+        <sc-if value="{{ hasEoCodeError }}">
+          <span style="font-size:12px; color:#C0341A;">{{ eoCodeError }}</span>
+        </sc-if>
+        <sc-if value="{{ hasEoCodeResult }}">
+          <span style="font-size:12px; color: {{ eoCodeResultColor }};">{{ eoCodeResultText }}</span>
+        </sc-if>
+
+        <div style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:16px; min-height:0;" class="eo-scrollbar">
+          <sc-if value="{{ hasEoCodeSteps }}">
+          <div style="display:flex; flex-direction:column; gap:1px;">
+            <span style="font-size:12.5px; font-weight:600; color:#26241F; padding-bottom:4px;">Live transcript</span>
+            <sc-for list="{{ eoCodeStepRows }}" as="row">
+              <div style="display:flex; gap:8px; padding:5px 0; border-bottom:1px solid #F4F1EA; align-items:flex-start;">
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:12px; color: {{ row.color }}; width:14px; flex:none;">{{ row.glyph }}</span>
+                <div style="display:flex; flex-direction:column; gap:2px; min-width:0; flex:1;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color: {{ row.color }};">{{ row.label }}</span>
+                  <sc-if value="{{ row.hasDetail }}">
+                    <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#8C877C; word-break:break-all;">{{ row.detail }}</span>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ hasEoCodeFiles }}">
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <span style="font-size:12.5px; font-weight:600; color:#26241F;">Files in workspace</span>
+            <sc-for list="{{ eoCodeFileRows }}" as="f">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#4A463E;">{{ f.path }} — {{ f.bytes }} bytes</span>
+            </sc-for>
+          </div>
+          </sc-if>
+        </div>
       </div>
       </sc-if>
 
@@ -2612,6 +2668,15 @@ class Component extends DCLogic {
     settingsOpen: false,
     _settingsApiKeys: {},
     settingsDraftKeys: {},
+    // eoCode — the agentic-coding tab (see server/eocode-agent.js). A local
+    // Ollama model plans, writes, and runs its own code in a real sandbox
+    // directory via the same tool loop eval/agent/ already grew for the
+    // offline capability eval; every step streams in live over SSE as
+    // react-loop.mjs's onStep fires it, so eoCodeSteps is the live
+    // transcript the panel renders, not a summary computed after the fact.
+    eoCodeWorkspace: 'default', eoCodeModel: 'qwen2.5-coder:1.5b', eoCodePrompt: '',
+    eoCodeRunning: false, eoCodeSteps: [], eoCodeError: null, eoCodeResult: null,
+    eoCodeFiles: [], eoCodeWorkspaces: [],
   };
 
   proxyUrl() {
@@ -3096,6 +3161,128 @@ class Component extends DCLogic {
     } catch (err) {
       this.setState({ _priorsError: `could not reach the proxy: ${err.message}` });
     }
+  }
+
+  // ── eoCode — agentic coding tab (server/eocode-agent.js) ──────────────────
+  //
+  // A local Ollama model plans, writes, and runs its own code in a real
+  // sandbox directory via the same tool loop eval/agent/ already grew for
+  // the offline capability eval — read_file/write_file/edit_file/run_shell,
+  // one tool call per turn. This tab does not run that loop itself; it only
+  // starts POST /api/eocode/run and discloses every step AS THE SERVER
+  // EMITS IT, the same real-time transparency Claude Code / opencode show
+  // for their own tool calls, never a summary reconstructed after the run
+  // finishes.
+  async fetchEoCodeWorkspaces() {
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/eocode/workspaces', { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) return;
+      const data = await res.json();
+      this.setState({ eoCodeWorkspaces: data.workspaces || [] });
+    } catch { /* best-effort — the picker just stays empty */ }
+  }
+
+  eoCodeStepVals(step, i) {
+    const GLYPHS = { generating: '◌', assistant_raw: '◇', malformed: '⚠', tool_call: '→', tool_result: '←', folded: '⊙', finish: '●', aborted: '⊘' };
+    const glyph = GLYPHS[step.phase] || '·';
+    const MUTED = '#8C877C', OK = '#1F5A4C', ERR = '#C0341A';
+    let label = step.phase || 'step', detail = '', color = MUTED;
+    if (step.phase === 'generating') {
+      label = `step ${step.step}: thinking…`;
+    } else if (step.phase === 'assistant_raw') {
+      label = `step ${step.step}: model responded`; detail = `${(step.raw || '').length} char(s)`;
+    } else if (step.phase === 'tool_call') {
+      label = `step ${step.step}: → ${step.tool}`; detail = JSON.stringify(step.args || {}); color = OK;
+    } else if (step.phase === 'tool_result') {
+      const isErr = step.result && typeof step.result === 'object' && 'error' in step.result;
+      label = `step ${step.step}: ← ${step.tool}`;
+      detail = isErr ? `error: ${step.result.error}` : this._eoCodeResultSummary(step.tool, step.result);
+      color = isErr ? ERR : OK;
+    } else if (step.phase === 'malformed') {
+      label = `step ${step.step}: unparseable response`; detail = step.reason || ''; color = ERR;
+    } else if (step.phase === 'folded') {
+      label = `folding ${step.foldedTurns} earlier step(s) to keep the prompt small`; detail = `${step.keptTurns} kept in full`;
+    } else if (step.phase === 'finish') {
+      label = `step ${step.step}: finished`; detail = (step.args && step.args.summary) || ''; color = OK;
+    } else if (step.phase === 'aborted') {
+      label = 'stopped'; detail = step.note || ''; color = ERR;
+    }
+    return { key: `eocode-step-${i}`, glyph, label, detail, hasDetail: !!detail, color };
+  }
+
+  _eoCodeResultSummary(tool, result) {
+    if (!result || typeof result !== 'object') return 'ok';
+    if (tool === 'read_file') return `${result.content ? result.content.length : 0} char(s)${result.truncated ? ', truncated' : ''}`;
+    if (tool === 'list_files') return `${(result.files || []).length} file(s)`;
+    if (tool === 'write_file' || tool === 'edit_file') return `${result.bytesWritten || 0} byte(s) written`;
+    if (tool === 'run_shell') return `exit ${result.exitCode}${result.output ? ': ' + result.output.slice(0, 140) : ''}`;
+    return 'ok';
+  }
+
+  async runEoCode() {
+    const prompt = (this.state.eoCodePrompt || '').trim();
+    if (!prompt || this.state.eoCodeRunning) return;
+    const workspace = (this.state.eoCodeWorkspace || 'default').trim() || 'default';
+    const model = (this.state.eoCodeModel || '').trim() || 'qwen2.5-coder:1.5b';
+    this.setState({ eoCodeRunning: true, eoCodeSteps: [], eoCodeError: null, eoCodeResult: null, eoCodeFiles: [] });
+    this.logAdd('⌁', `eoCode: "${prompt.slice(0, 44)}${prompt.length > 44 ? '…' : ''}" (${model})`, 'eocode');
+    this._eoCodeAbort = new AbortController();
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/eocode/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, workspace, model }),
+        signal: this._eoCodeAbort.signal,
+      });
+      if (!res.ok) throw new Error(`eoCode endpoint returned ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
+        for (const block of events) {
+          const lines = block.split('\n');
+          const typeLine = lines.find(l => l.startsWith('event: '));
+          const dataLine = lines.find(l => l.startsWith('data: '));
+          if (!typeLine || !dataLine) continue;
+          const type = typeLine.slice(7).trim();
+          let data;
+          try { data = JSON.parse(dataLine.slice(6)); } catch { continue; }
+
+          if (type === 'start') {
+            this.setState({ eoCodeWorkspace: data.workspace });
+          } else if (type === 'step') {
+            this.setState(s => ({ eoCodeSteps: s.eoCodeSteps.concat([data]) }));
+          } else if (type === 'end') {
+            this.setState({ eoCodeResult: data, eoCodeFiles: data.files || [] });
+            const outcome = data.finished ? `finished: ${data.summary || '(no summary given)'}`
+              : data.stuckLoopAbort ? 'stopped — stuck in a repeating failure loop'
+              : data.hitStepCap ? 'stopped — ran out of steps before finishing'
+              : 'stopped';
+            this.logAdd(data.finished ? '●' : '⊘', `eoCode ${outcome}`, 'eocode');
+          } else if (type === 'error') {
+            this.setState({ eoCodeError: data.message });
+            this.logAdd('⊘', `eoCode error: ${data.message}`, 'eocode');
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        this.setState({ eoCodeError: err.message });
+        this.logAdd('⊘', `eoCode error: ${err.message}`, 'eocode');
+      }
+    } finally {
+      this.setState({ eoCodeRunning: false });
+      this._eoCodeAbort = null;
+      this.fetchEoCodeWorkspaces();
+    }
+  }
+
+  stopEoCode() {
+    if (this._eoCodeAbort) this._eoCodeAbort.abort();
   }
 
   // ── Community Insights — standardized-key ledger (server/insight-store.js) ──
@@ -7661,7 +7848,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses'), ins = tabStyle('insights');
+    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses'), ins = tabStyle('insights'), ec = tabStyle('eocode');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // The proxy being unreachable only means "no engine" if the in-browser
@@ -8495,7 +8682,7 @@ class Component extends DCLogic {
 
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses', isInsights: t === 'insights',
+      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses', isInsights: t === 'insights', isEoCode: t === 'eocode',
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
       webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
@@ -8785,6 +8972,7 @@ class Component extends DCLogic {
       tabPriors: () => this.setState({ tab: 'priors' }),
       tabSenses: () => this.setState({ tab: 'senses' }),
       tabInsights: () => { this.setState({ tab: 'insights' }); this.fetchInsights(); },
+      tabEoCode: () => { this.setState({ tab: 'eocode' }); this.fetchEoCodeWorkspaces(); },
       tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
       tabChatColor: c.color, tabChatUnderline: c.underline,
       tabOutlineColor: o.color, tabOutlineUnderline: o.underline,
@@ -8793,6 +8981,33 @@ class Component extends DCLogic {
       tabPriorsColor: pr.color, tabPriorsUnderline: pr.underline,
       tabSensesColor: se.color, tabSensesUnderline: se.underline,
       tabInsightsColor: ins.color, tabInsightsUnderline: ins.underline,
+      tabEoCodeColor: ec.color, tabEoCodeUnderline: ec.underline,
+      eoCodePrompt: S.eoCodePrompt || '',
+      onEoCodePromptChange: (e) => this.setState({ eoCodePrompt: e.target.value }),
+      eoCodeWorkspace: S.eoCodeWorkspace || 'default',
+      onEoCodeWorkspaceChange: (e) => this.setState({ eoCodeWorkspace: e.target.value }),
+      eoCodeModel: S.eoCodeModel || 'qwen2.5-coder:1.5b',
+      onEoCodeModelChange: (e) => this.setState({ eoCodeModel: e.target.value }),
+      eoCodeRunning: S.eoCodeRunning,
+      eoCodeNotRunning: !S.eoCodeRunning,
+      eoCodeRunDisabled: S.eoCodeRunning || !(S.eoCodePrompt || '').trim(),
+      runEoCode: () => this.runEoCode(),
+      stopEoCode: () => this.stopEoCode(),
+      hasEoCodeSteps: (S.eoCodeSteps || []).length > 0,
+      eoCodeStepRows: (S.eoCodeSteps || []).map((step, i) => this.eoCodeStepVals(step, i)),
+      hasEoCodeError: !!S.eoCodeError,
+      eoCodeError: S.eoCodeError || '',
+      hasEoCodeResult: !!S.eoCodeResult,
+      eoCodeResultText: S.eoCodeResult
+        ? (S.eoCodeResult.finished ? `Finished — ${S.eoCodeResult.summary || '(no summary given)'}`
+          : S.eoCodeResult.stuckLoopAbort ? 'Stopped — stuck in a repeating failure loop, not a step-budget exhaustion'
+          : S.eoCodeResult.hitStepCap ? 'Stopped — ran out of steps before finishing'
+          : 'Stopped')
+        : '',
+      eoCodeResultColor: S.eoCodeResult && S.eoCodeResult.finished ? '#1F5A4C' : '#A3592B',
+      hasEoCodeFiles: (S.eoCodeFiles || []).length > 0,
+      eoCodeFileRows: (S.eoCodeFiles || []).map((f, i) => ({ key: `eocode-file-${i}`, path: f.path, bytes: f.bytes })),
+      eoCodeWorkspaceOptions: (S.eoCodeWorkspaces || []).map((w, i) => ({ key: `eocode-ws-${i}`, name: w })),
       draft: S.draft, sendBg: S.draft.trim().length ? '#1F5A4C' : '#8C877C',
       inputDisabled: S.streamingLoading,
       stopButtonAnim: S.streamingLoading ? 'animation: eoPulse 1.8s ease-in-out infinite;' : '',

@@ -447,6 +447,17 @@ for Level 3+, is untested.
   future scenario where this agent operates directly on eochat/eoreader6
   itself — it is not part of the Level 1-7 scoring loop.
 
+## `eval/chat/` — the same discipline, applied to normal chatting
+
+This eval is entirely about coding tasks. `eval/chat/` asks a different
+question with the same methodology: does the holonic-task spine that
+`react-loop.mjs`'s own prompt-folding above reuses from `task-log.js` (and
+that `narrative-longform.js`/`code-longform.js`/`svg-longform.js` already
+proved on long-form generation) also measurably improve ORDINARY multi-turn
+chat — specifically the desk (`server/conversation-memory.js`) and turn
+promotion (`server/conversation-holon.js`) already built for it — over a
+naive windowed-history baseline. See `eval/chat/README.md`.
+
 ## Future direction: growing organs constitutionally
 
 The tool set in `agent/tools.mjs` is fixed and hand-built for now. The

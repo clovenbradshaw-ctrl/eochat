@@ -213,6 +213,33 @@ export function buildWebSystemMessage(webResults) {
   return { message: { role: "system", content }, maxCitation: webResults.length, warming: false };
 }
 
+// Recent completed turns from THIS conversation, as real message history —
+// not reconstructed from a keyword memory search. Bounded so a long-running
+// conversation doesn't grow the prompt without limit.
+//
+// Module-level and exported for the same reason buildGroundedSystemMessage
+// is: a harness that reimplements this measures its own copy, not the real
+// windowing behavior a small local model actually gets.
+export function buildHistoryMessages(conv, beforeTurnId) {
+  const turns = (conv.turns || []).filter((t) => t.id !== beforeTurnId);
+  const recent = turns.slice(-HISTORY_TURNS);
+  const out = [];
+  for (const t of recent) {
+    out.push({ role: "user", content: t.question });
+    const active = (t.answers || []).find((a) => a.id === t.activeAnswerId);
+    if (active && active.status === "completed" && active.text) {
+      out.push({ role: "assistant", content: active.text });
+    }
+  }
+  return out;
+}
+
+// The user turns this gate should judge relevance against — the same bounded
+// history the model sees, user messages only.
+export function recentUserQuestions(conv, beforeTurnId) {
+  return (conv.turns || []).filter((t) => t.id !== beforeTurnId).slice(-HISTORY_TURNS).map((t) => t.question);
+}
+
 export function createTurnController(deps) {
   const {
     conversationStore, groundQuery, target, anthropicKey, anthropicModel,
@@ -232,29 +259,6 @@ export function createTurnController(deps) {
   // One in-flight generation per (conversation, turn) at a time — stop/regenerate
   // both need to find it by that key alone, before they know an answerId.
   const activeControllers = new Map();
-
-  // Recent completed turns from THIS conversation, as real message history —
-  // not reconstructed from a keyword memory search. Bounded so a long-running
-  // conversation doesn't grow the prompt without limit.
-  function buildHistoryMessages(conv, beforeTurnId) {
-    const turns = (conv.turns || []).filter((t) => t.id !== beforeTurnId);
-    const recent = turns.slice(-HISTORY_TURNS);
-    const out = [];
-    for (const t of recent) {
-      out.push({ role: "user", content: t.question });
-      const active = (t.answers || []).find((a) => a.id === t.activeAnswerId);
-      if (active && active.status === "completed" && active.text) {
-        out.push({ role: "assistant", content: active.text });
-      }
-    }
-    return out;
-  }
-
-  // The user turns this gate should judge relevance against — the same bounded
-  // history the model sees, user messages only.
-  function recentUserQuestions(conv, beforeTurnId) {
-    return (conv.turns || []).filter((t) => t.id !== beforeTurnId).slice(-HISTORY_TURNS).map((t) => t.question);
-  }
 
   // The desk (conversation-memory.js) and the cabinet (project-memory.js),
   // resolved together for one turn. The desk is always injected, from the

@@ -34,6 +34,45 @@ function freshSandbox() {
   return mkdtempSync(join(tmpdir(), "react-loop-test-"));
 }
 
+test("the prompt sent to the model stays bounded past foldK turns — earlier steps fold to a summary line instead of full replay", async () => {
+  const sandboxDir = freshSandbox();
+  try {
+    writeFileSync(join(sandboxDir, "a.js"), "content\n");
+    const listCall = { tool: "list_files", args: {} };
+    const script = [listCall, listCall, listCall, listCall, listCall, listCall, listCall, listCall, { tool: "finish", args: { summary: "done" } }];
+    const adapter = createSpyAdapter(script);
+
+    const result = await runReactLoop({
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1, foldK: 3,
+    });
+
+    assert.equal(result.finished, true);
+    assert.equal(adapter.calls.length, 9, "8 list_files calls + 1 finish call");
+
+    // Before folding kicks in (foldedTurns.length <= foldK), the prompt is
+    // every turn verbatim: system + intro + 2 turns * 2 messages each.
+    assert.equal(adapter.calls[2].messages.length, 6, "step 2 has only 2 prior turns folded so far — no folding needed yet");
+    assert.ok(!adapter.calls[2].messages.some((m) => /EARLIER STEPS \(folded/.test(m.content)), "no fold summary before foldK is exceeded");
+
+    // By step 7 there are 7 prior turns — more than foldK=3 — so the prompt
+    // must be system + intro + ONE fold summary + the 3 most recent turns
+    // (6 messages), never all 7 turns' full detail (which would be 14+3=17).
+    const lateCall = adapter.calls[7].messages;
+    assert.equal(lateCall.length, 9, "system + intro + fold summary + 3 kept turns (6 messages) — bounded regardless of how many steps ran");
+    const foldMsg = lateCall.find((m) => /EARLIER STEPS \(folded/.test(m.content));
+    assert.ok(foldMsg, "expected a fold summary message once turns exceed foldK");
+    assert.match(foldMsg.content, /list_files/, "the fold summary still names what happened, just compactly");
+
+    // The full, un-folded record returned to the caller must still have
+    // every turn — folding only bounds what's SENT to the model, never what
+    // is remembered/reported.
+    assert.equal(result.transcript.length, 9);
+    assert.equal(result.messages.length, 2 + 8 * 2 + 1, "system+intro, 8 (assistant+observation) pairs, 1 final assistant finish message");
+  } finally {
+    rmSync(sandboxDir, { recursive: true, force: true });
+  }
+});
+
 test("a repeated identical failing call escalates to an explicit nudge, then aborts before exhausting the step budget", async () => {
   const sandboxDir = freshSandbox();
   try {
@@ -100,7 +139,7 @@ test("older steps get folded to a bounded digest once the window is exceeded, bu
     const adapter = createSpyAdapter(script);
 
     const result = await runReactLoop({
-      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1,
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1, foldK: 3,
     });
 
     assert.equal(result.finished, true);
@@ -151,42 +190,42 @@ test("a different failing call does not count toward another call's streak", asy
   }
 });
 
-// AMENDMENT-13-PROPOSAL.md (eo-constitution): folding the conversation
-// history by POSITION alone (whether that's "most recent" or "earliest
-// first") is truncation wearing a fold's report format — it never asks
-// whether the discarded material bears on what the model needs right now.
-// This locks down foldOlderSteps' own relevance-based selection: when even
-// the compact per-step digest exceeds its char budget, a RELEVANT step's
-// digest line must survive regardless of where it falls in the folded
-// range, including deliberately placed LAST among many irrelevant filler
-// steps — exactly where a naive "keep the first N characters" truncation
-// (the shape this whole fix replaced) would have cut it.
-test("foldOlderSteps keeps a relevant digest line over many irrelevant ones, even positioned where naive truncation would drop it", async () => {
+// AMENDMENT-13-PROPOSAL.md (eo-constitution, ratified as II.18 — the
+// surf-before-fold test): folding the conversation history by POSITION
+// alone (whether that's "most recent" or "earliest first") is truncation
+// wearing a fold's report format — it never asks whether the discarded
+// material bears on what the model needs right now. This locks down
+// buildFoldedSummaryMessage's own relevance-based selection: when even the
+// compact per-step digest exceeds MAX_FOLDED_SUMMARY_LINES, a RELEVANT
+// step's digest line must survive regardless of where it falls in the
+// folded range, including deliberately placed FIRST (oldest) among many
+// irrelevant filler steps — exactly where a naive "keep the most recent N
+// lines" truncation (the shape two independent sessions converged on, and
+// the shape this fix replaced) would have dropped it.
+test("buildFoldedSummaryMessage keeps a relevant digest line over many irrelevant ones, even positioned where naive recency truncation would drop it", async () => {
   const sandboxDir = freshSandbox();
   try {
     writeFileSync(join(sandboxDir, "widget.js"), "function widgetFrobnicator() { return 42; }\n");
-    // Enough distinct filler steps to push the combined digest past the
-    // 600-char budget on their own, so relevance-based selection actually
-    // has to choose. Placed FIRST, so a naive "keep the first 600 chars"
-    // truncation would keep these and cut off what comes after.
-    const fillers = Array.from({ length: 16 }, (_, i) => ({
+    const readWidgetOld = { tool: "read_file", args: { path: "widget.js" } }; // relevant, but OLDEST among the folded steps
+    // More than MAX_FOLDED_SUMMARY_LINES (12) distinct filler steps, so the
+    // fold itself must further select, not just show everything.
+    const fillers = Array.from({ length: 13 }, (_, i) => ({
       tool: "list_files", args: { path: `filler-directory-number-${i}` },
     }));
-    const readWidgetOld = { tool: "read_file", args: { path: "widget.js" } }; // relevant, but LAST among the folded steps
-    const readWidgetRecent = { tool: "read_file", args: { path: "widget.js" } }; // the always-kept verbatim step (window=1) — becomes the focus
-    const script = [...fillers, readWidgetOld, readWidgetRecent, { tool: "finish", args: { summary: "done" } }];
+    const readWidgetRecent = { tool: "read_file", args: { path: "widget.js" } }; // the always-kept verbatim step (foldK=1) — becomes the focus
+    const script = [readWidgetOld, ...fillers, readWidgetRecent, { tool: "finish", args: { summary: "done" } }];
     const adapter = createSpyAdapter(script);
 
     const result = await runReactLoop({
-      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: script.length + 2, seed: 1, foldWindowSteps: 1,
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: script.length + 2, seed: 1, foldK: 1,
     });
 
     assert.equal(result.finished, true);
     const lastCallMessages = adapter.calls.at(-1).messages;
     const foldedNotice = lastCallMessages.find((m) => /EARLIER STEPS/.test(m.content));
     assert.ok(foldedNotice, "expected a folded-history notice");
-    assert.match(foldedNotice.content, /widget\.js/, "the relevant step's digest line must survive relevance-based selection even though it is the LAST folded entry, where a first-N-characters truncation would have cut it");
-    assert.match(foldedNotice.content, /withheld by relevance/i, "must report that the digest itself was further folded, and by what criterion — never silent");
+    assert.match(foldedNotice.content, /widget\.js/, "the relevant step's digest line must survive relevance-based selection even though it is the OLDEST folded entry, where a most-recent-N-lines truncation would have dropped it");
+    assert.match(foldedNotice.content, /kept by relevance/i, "must report that the digest itself was further folded, and by what criterion — never silent");
   } finally {
     rmSync(sandboxDir, { recursive: true, force: true });
   }

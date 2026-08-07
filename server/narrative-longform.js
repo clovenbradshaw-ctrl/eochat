@@ -99,14 +99,24 @@
 // experiment that would EARN the omnimodal claim. It has not been run — this
 // header states the seam, not the result.
 
-import { createTaskLog, append, projectTasks, produce, foldToWorkingSet, ENTRY_KINDS, OPERATOR_BASIS } from "./task-log.js";
+import {
+  createTaskLog, append, projectTasks, produce, foldToWorkingSet,
+  proposeDiscovered, checkCubeProgression, ENTRY_KINDS, OPERATOR_BASIS,
+} from "./task-log.js";
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const TEMPERATURE = 0.75;
 // Measured: 340 cut a scene off mid-sentence ("a journey into the unknown
 // beckoned, one that only she") on a 220-260 word target — llama3.2 runs
 // verbose enough that 340 tokens for ~250 words left no closing headroom.
-const SCENE_TOKENS = 420;
+// DEFAULT only — a world with a bigger targetWords range (chapter-scale
+// prose, not LIGHTHOUSE_WORLD's 220-260-word scenes) needs a bigger budget
+// or every real scene truncates mid-sentence regardless of what the prompt
+// asks for. Declared as an overridable option on writeNarrative (below)
+// rather than left a silent constant a bigger world would collide with —
+// the same "declared budget, not a buried constant" discipline
+// foldToWorkingSet's own `k` argument already models.
+const DEFAULT_SCENE_TOKENS = 420;
 const TAIL_WORDS = 80;
 const WORKING_SET_K = 7; // task-log.js's own declared default; named here so it's visible as a choice
 const MAX_SCENES_GUARD = 40; // a runaway guard, never the intended stopping condition — see haltedBy
@@ -563,26 +573,77 @@ function buildContinuityCorrectionPrompt(priorText, flags, world) {
  * longform.js's `fidelityResidual` already uses (capitalized, not sentence
  * furniture), reused rather than reinvented.
  *
- * MEASURED DEFECT, FIXED HERE: a real run on real llama3.2 output registered
- * "One", "Was", "Grief", "Had", "Did", "Not", "Tonight" as characters —
- * sentence-initial or emphasis-initial capitals no stopword list will ever
- * fully enumerate, because English has too many capitalizable common words
- * in too many positions to close by exclusion. The fix is not a longer
- * stopword list (a losing battle, tried first). It is a RECURRENCE
- * requirement: a genuine character name gets used more than once in the
- * scene that introduces it; a stray sentence-initial capital does not. This
- * is a cheap sense organ nominating candidates, not a verdict — the
- * constitution's II.9 shape (a cheap sense organ is legal, promoting it to
- * the verdict is refused) applied to naming instead of significance.
+ * MEASURED DEFECT, FIXED HERE (round 1): a real run on real llama3.2 output
+ * registered "One", "Was", "Grief", "Had", "Did", "Not", "Tonight" as
+ * characters — sentence-initial or emphasis-initial capitals no stopword
+ * list will ever fully enumerate, because English has too many
+ * capitalizable common words in too many positions to close by exclusion.
+ * The fix is not a longer stopword list (a losing battle, tried first). It
+ * is a RECURRENCE requirement: a genuine character name gets used more than
+ * once in the scene that introduces it; a stray sentence-initial capital
+ * does not. This is a cheap sense organ nominating candidates, not a
+ * verdict — the constitution's II.9 shape (a cheap sense organ is legal,
+ * promoting it to the verdict is refused) applied to naming instead of
+ * significance.
+ *
+ * MEASURED DEFECT, FIXED HERE (round 2): a real run on a structurally
+ * different, institution-dense thriller world (campaign-finance/Derby, not
+ * lighthouse's spare literary style) found the round-1 fix was itself
+ * incomplete in two ways, on real generated prose:
+ *
+ *   1. A multi-word proper noun ("Blue Larkspur Farm", "Sunlight Desk",
+ *      "Bluegrass Forward Fund") fragmented into ONE SPURIOUS ENTITY PER
+ *      WORD under the old word-at-a-time regex — "Blue", "Larkspur", and
+ *      "Farm" each individually recurred >= 2 times and each got registered
+ *      as its own separate "character", polluting the established-roster
+ *      line every later scene sees with nonsense fragments standing in for
+ *      one real entity. Fixed: match a RUN of consecutive capitalized words
+ *      as one candidate phrase, not one word at a time.
+ *   2. The recurrence requirement alone was not enough in denser prose: on
+ *      this real run, "None", "One", "You", "Names", "Not", and "Man" each
+ *      legitimately recurred >= 2 times — coincidentally, always as the
+ *      FIRST word of a sentence, which proves nothing about properness
+ *      (every sentence starts capitalized regardless of what the word is).
+ *      A genuine name recurs at least once somewhere that is NOT a sentence
+ *      start; round 1's counter could not tell "Merritt" (which does) from
+ *      "None" (which, in this run, never did). Fixed: track sentence-initial
+ *      and non-sentence-initial occurrences separately, and require at
+ *      least one non-sentence-initial occurrence before a candidate counts.
+ *
+ * MEASURED DEFECT, FIXED HERE (round 3): round 2's own sentence-initial
+ * check missed dialogue. A quotation mark sits BETWEEN the sentence-ending
+ * punctuation and the first word of a line of dialogue ('He said. "You
+ * heard me."'), so the 3-character lookbehind saw `. "` — ending in the
+ * quote mark, not whitespace — and wrongly called it non-initial. On this
+ * run, real dialogue-heavy prose let "You" and "Not" both slip through this
+ * gap (each recurred once as a TRUE sentence start and once as a
+ * quote-masked dialogue start, which this bug counted as "non-initial").
+ * Fixed: the lookbehind now tolerates an optional straight or curly quote
+ * character between the whitespace and the word. Also fixed in the same
+ * pass: a possessive join ("Ledger's Daughter") broke the multi-word run at
+ * the apostrophe, fragmenting one real name into two spurious ones — the
+ * run pattern now optionally bridges a `'s ` between two capitalized words.
  */
 function extractNewNames(text, known) {
-  const counts = new Map();
-  for (const m of text.matchAll(/\b[A-Z][a-z]{2,}\b/g)) {
-    const w = m[0].toLowerCase();
-    if (NAME_STOP.has(w) || known.has(w)) continue;
-    counts.set(m[0], (counts.get(m[0]) ?? 0) + 1);
+  const counts = new Map(); // phrase -> { total, nonInitial }
+  const runRe = /\b[A-Z][a-z]{2,}(?:(?:'s)?\s+[A-Z][a-z]{2,})*\b/g;
+  const SENTENCE_INITIAL_RE = /[.!?]\s+["'‘“]?$/;
+  let m;
+  while ((m = runRe.exec(text))) {
+    const phrase = m[0];
+    const words = phrase.replace(/'s\b/g, "").split(/\s+/).filter(Boolean);
+    // Any word in the run being stop-listed or already known disqualifies
+    // the WHOLE phrase — "The Sunlight Desk" would otherwise register the
+    // clean "Sunlight Desk" AND separately flag stop-listed "The".
+    if (words.some((w) => NAME_STOP.has(w.toLowerCase()) || known.has(w.toLowerCase()))) continue;
+
+    const sentenceInitial = m.index === 0 || SENTENCE_INITIAL_RE.test(text.slice(Math.max(0, m.index - 4), m.index));
+    const entry = counts.get(phrase) ?? { total: 0, nonInitial: 0 };
+    entry.total += 1;
+    if (!sentenceInitial) entry.nonInitial += 1;
+    counts.set(phrase, entry);
   }
-  return [...counts.entries()].filter(([, n]) => n >= 2).map(([name]) => name);
+  return [...counts.entries()].filter(([, c]) => c.total >= 2 && c.nonInitial >= 1).map(([name]) => name);
 }
 
 /**
@@ -590,7 +651,7 @@ function extractNewNames(text, known) {
  * declared anywhere in this function — `nextMove` decides one step at a
  * time from the log's own state, and the loop stops when it says `close`.
  */
-export async function writeNarrative(world, { model = "llama3.2:latest", seed = 20260801, onProgress = null, maxScenes = MAX_SCENES_GUARD } = {}) {
+export async function writeNarrative(world, { model = "llama3.2:latest", seed = 20260801, onProgress = null, maxScenes = MAX_SCENES_GUARD, sceneTokens = DEFAULT_SCENE_TOKENS } = {}) {
   validateWorld(world);
   const progress = onProgress || ((msg) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${msg}`));
   const system = buildSystem(world);
@@ -617,7 +678,7 @@ export async function writeNarrative(world, { model = "llama3.2:latest", seed = 
 
     progress(`scene ${sceneCount} (${move.kind}${move.commitmentId ? ":" + move.commitmentId : ""}) — calling model...`);
     const t0 = Date.now();
-    let text = await callModel(model, [{ role: "system", content: system }, { role: "user", content: prompt }], SCENE_TOKENS, { seed: seed + sceneCount });
+    let text = await callModel(model, [{ role: "system", content: system }, { role: "user", content: prompt }], sceneTokens, { seed: seed + sceneCount });
     progress(`scene ${sceneCount} done — ${wc(text)} words in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 
     // Trial checks use a COPY of lockedNumbers — checkNumericLocks locks the
@@ -634,7 +695,7 @@ export async function writeNarrative(world, { model = "llama3.2:latest", seed = 
       text = await callModel(
         model,
         [{ role: "system", content: system }, { role: "user", content: correctionPrompt }],
-        SCENE_TOKENS,
+        sceneTokens,
         { seed: seed + sceneCount * 100 + revisionAttempts },
       );
       flags = [...checkContinuity(world, text), ...checkNumericLocks(world, text, { ...lockedNumbers })];
@@ -673,21 +734,42 @@ export async function writeNarrative(world, { model = "llama3.2:latest", seed = 
       ...world.roster.flatMap((r) => r.toLowerCase().match(/[a-z]+/g) ?? []),
       ...projectTasks(log).filter((t) => t.task_id.startsWith("entity:")).map((t) => t.task_id.slice(7).toLowerCase()),
     ]);
-    for (const name of extractNewNames(text, knownLower)) {
-      const id = `entity:${name.toLowerCase()}`;
-      if (projectTasks(log).some((t) => t.task_id === id)) continue;
-      log = append(log, { kind: ENTRY_KINDS.PROPOSE, task_id: id, description: `${name} (introduced by the model, scene ${sceneCount})`, depends_on: [sceneId] });
-      progress(`  new character surfaced: ${name} — registered so later scenes see it`);
+    // "Entities are entities": the SAME registration primitive
+    // code-longform.js's discoverReferencedFiles now also uses (see
+    // task-log.js's proposeDiscovered header) — a character surfaced
+    // unasked and a file referenced unasked resolve to the identical cube
+    // cell (SEG, Figure), not merely an analogous one.
+    const newNames = extractNewNames(text, knownLower).filter(
+      (name) => !projectTasks(log).some((t) => t.task_id === `entity:${name.toLowerCase()}`),
+    );
+    if (newNames.length) {
+      log = proposeDiscovered(log, newNames.map((name) => ({
+        task_id: `entity:${name.toLowerCase()}`,
+        description: `${name} (introduced by the model, scene ${sceneCount})`,
+        depends_on: [sceneId],
+      })));
+      for (const name of newNames) progress(`  new character surfaced: ${name} — registered so later scenes see it`);
     }
 
     if (move.kind === "introduce") {
-      log = append(log, { kind: ENTRY_KINDS.PROPOSE, task_id: `entity:${move.entityId}`, description: world.entities[move.entityId].description, depends_on: [sceneId] });
+      // A single distinguished thing pulled into the story and individually
+      // named — SEG (Differentiate) at Figure grain, the same cell every
+      // OTHER "something got noticed and named" act in this codebase now
+      // resolves to (see proposeDiscovered).
+      log = append(log, {
+        kind: ENTRY_KINDS.PROPOSE, task_id: `entity:${move.entityId}`, description: world.entities[move.entityId].description,
+        depends_on: [sceneId], operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Figure",
+      });
     }
     if (move.kind === "plant") {
       const c = world.commitments[move.commitmentId];
+      // CON (Relate): planting a commitment is the story declaring that THIS
+      // scene now bears on some future payoff scene — a link entering the
+      // field, not yet the payoff itself.
       log = append(log, {
         kind: ENTRY_KINDS.PROPOSE, task_id: `commitment:${move.commitmentId}`, description: c.fact,
         evidence: [c.fact], depends_on: [sceneId], plantedAtScene: sceneCount, resolved: false,
+        operator: "CON", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Figure",
       });
     }
     if (move.kind === "resolve") {
@@ -712,6 +794,12 @@ export async function writeNarrative(world, { model = "llama3.2:latest", seed = 
       log = append(log, {
         kind: ENTRY_KINDS.EVIDENCE, task_id: `commitment:${move.commitmentId}`,
         resolved: confirmed, resolvedAtScene: confirmed ? sceneCount : null,
+        // SYN (Generate), Figure grain — ONLY when actually confirmed: an
+        // unconfirmed attempt synthesized nothing, so tagging it a
+        // production act would be exactly the false-positive "labeled after
+        // the fact instead of produced" mistake OPERATOR_BASIS.PRODUCED
+        // exists to rule out. Left untagged (absent), never defaulted.
+        ...(confirmed ? { operator: "SYN", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Figure" } : {}),
       });
       // SYN: a scene that resolves this thread AND another still-open one in
       // the same text is a genuine convergence — discovered post hoc, never
@@ -724,7 +812,7 @@ export async function writeNarrative(world, { model = "llama3.2:latest", seed = 
             kind: ENTRY_KINDS.PROPOSE, task_id: `convergence:${sceneCount}`,
             description: `scene ${sceneCount} resolved ${move.commitmentId} and touched ${otherId} together`,
             depends_on: [`commitment:${move.commitmentId}`, `commitment:${otherId}`],
-            operator: "SYN", operator_basis: OPERATOR_BASIS.PRODUCED,
+            operator: "SYN", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Figure",
           });
         }
       }
@@ -738,7 +826,13 @@ export async function writeNarrative(world, { model = "llama3.2:latest", seed = 
     .map((t) => `## Scene ${t.task_id.split(":")[1]}\n\n${t.result}\n`)
     .join("\n");
 
-  return { log, manuscript, texts, checks, continuityFlags, sceneCount, haltedBy };
+  // Advisory only, same as checkContinuity/checkNumericLocks: reports
+  // whether any single entity/commitment thread coarsened its own cube
+  // grain or ran its own operator backward against SEG->CON->SYN production
+  // order (task-log.js's checkCubeProgression) — never blocks the run.
+  const cubeFlags = checkCubeProgression(log);
+
+  return { log, manuscript, texts, checks, continuityFlags, cubeFlags, sceneCount, haltedBy };
 }
 
 function isOpenStill(log, commitmentId) {

@@ -64,11 +64,23 @@ test("a revision supersedes without erasing — the prior entry is still in the 
 const KNOWN_SAFE_EXPORTS = [
   "STRUCTURE_OPERATORS", "OPERATOR_BASIS", "ENTRY_KINDS", "GRAINS",
   "createTaskLog", "append", "projectTasks", "deriveLevels", "produce", "foldToWorkingSet",
+  "proposeDiscovered", "GRAIN_RANK", "STRUCTURE_PRODUCTION_ORDER", "isGrainProgression",
+  "isProductionOrder", "checkCubeProgression",
 ].sort();
 // GRAINS (added alongside eo-cube.js's 27-cell wiring): re-exported from
 // eo-cube.js, itself Object.freeze(["Ground", "Figure", "Pattern"]) — a
 // frozen, read-only constant, the same safe shape as STRUCTURE_OPERATORS/
 // OPERATOR_BASIS/ENTRY_KINDS already on this list, not a mutator.
+//
+// proposeDiscovered: builds via `next = append(next, ...)` in a loop and
+// returns the new log — a convenience wrapper over append(), not a mutator
+// (never assigns into `log` itself).
+// GRAIN_RANK / STRUCTURE_PRODUCTION_ORDER: frozen constant lookup tables,
+// same safe shape as GRAINS.
+// isGrainProgression / isProductionOrder: pure functions over their
+// arguments, no log access at all.
+// checkCubeProgression: reads `log.entries` into local Maps/arrays and
+// returns a `flags` analysis array — never writes to `log` or any entry.
 
 test("task-log.js exposes no mutator beyond the known safe surface", () => {
   assert.deepEqual(Object.keys(taskLog).sort(), KNOWN_SAFE_EXPORTS,

@@ -69,6 +69,7 @@ import { cabinetStats } from "./project-memory.js";
 import { buildMemoryMessage, emptyMemory } from "./conversation-memory.js";
 import { webSearchAndFetch, flattenDdgTopics } from "./web-search.js";
 import { runSessionMessage } from "./code-longform-session.js";
+import { runEoCodeTask, listWorkspaces, listWorkspaceFiles } from "./eocode-agent.js";
 import { loadMorphologyPrior, discoverNarratorContext } from "./longform-node-context.js";
 
 // ── CLI args with validation ──
@@ -5350,6 +5351,103 @@ const server = http.createServer((req, res) => {
         sendSSE("error", { message: err.message });
       }
       res.end();
+    });
+    return;
+  }
+
+  // eoCode — the agentic-coding tab. GET lists workspaces / a workspace's
+  // files (used to populate the picker and the "files touched" panel); POST
+  // runs one task and discloses every step live over SSE as react-loop.mjs's
+  // onStep fires it, the same real-time transparency Claude Code / opencode
+  // show for their own tool calls.
+  if (req.method === "GET" && req.url === "/api/eocode/workspaces") {
+    try {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ workspaces: listWorkspaces() }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (req.method === "GET" && req.url.startsWith("/api/eocode/workspaces/")) {
+    try {
+      const name = decodeURIComponent(req.url.slice("/api/eocode/workspaces/".length).split("?")[0]);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ workspace: name, files: listWorkspaceFiles(name) }));
+    } catch (err) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/eocode/run") {
+    let body = "";
+    let bodySize = 0;
+    req.on("data", chunk => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(new Error("Request body too large")); return; }
+      body += chunk.toString("utf8");
+    });
+    req.on("end", async () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
+        return;
+      }
+      if (!data.prompt || !String(data.prompt).trim()) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "'prompt' is required" }));
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      // Small, sparse writes (one per whole tool call, seconds apart, unlike
+      // chat's dense token deltas) get more benefit from skipping Nagle's
+      // send-side coalescing delay than they lose from it -- cheap and safe
+      // to disable here since every SSE frame is already a complete, whole
+      // write.
+      res.socket.setNoDelay(true);
+      const sendSSE = (event, payload) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+      };
+      // A client that navigates away mid-run should not leave a local model
+      // grinding on a step nobody is watching disclose. MUST be res.on
+      // ("close"), not req.on("close"): the request's own readable side
+      // closes as soon as its (tiny, already-consumed) body finishes
+      // reading -- which happens almost immediately, well before the
+      // response is done -- so req.on("close") set `aborted` true right at
+      // the start of every run, silently swallowing every SSE event after
+      // the first couple. res.on("close") fires when the actual underlying
+      // connection to the client ends, which is the real signal wanted here.
+      let aborted = false;
+      res.on("close", () => { aborted = true; });
+
+      try {
+        await runEoCodeTask({
+          workspace: data.workspace || "default",
+          prompt: data.prompt,
+          model: data.model || "qwen2.5-coder:1.5b",
+          maxSteps: Number.isFinite(data.maxSteps) ? data.maxSteps : 20,
+          maxTokensPerStep: Number.isFinite(data.maxTokensPerStep) ? data.maxTokensPerStep : 400,
+          seed: Number.isFinite(data.seed) ? data.seed : Date.now() % 100000,
+          onEvent: (type, payload) => { if (!aborted) sendSSE(type, payload); },
+        });
+      } catch (err) {
+        if (!aborted) sendSSE("error", { message: err.message });
+      } finally {
+        if (!aborted) res.end();
+      }
     });
     return;
   }

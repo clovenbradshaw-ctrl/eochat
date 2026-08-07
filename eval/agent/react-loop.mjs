@@ -20,113 +20,105 @@
 // per-step error, since a REPEATED identical error is itself evidence a
 // gentler nudge already failed), and an honest early abort if it still
 // does not budge — the same "do not silently burn the rest of the budget"
-// discipline the malformed-response abort below already uses.
-
+// discipline the malformed-response abort below already uses. Counting is
+// CUMULATIVE per exact (tool, args) across the whole attempt, never reset
+// by an intervening successful call: the real failure pattern is
+// edit_file(fail) -> read_file(succeed) -> edit_file(SAME fail) repeated,
+// and a naive "reset on anything non-matching" streak counter never once
+// saw it as a repeat, because the successful read in between reset it back
+// to 1 every single time. Reading the file again is normal and not itself
+// the problem; what matters is whether one SPECIFIC action keeps recurring
+// regardless of what else happens around it.
 //
-// BOUNDED CONTEXT. Every other budget in this harness is declared and
-// folded — surf()'s token budget, holon-coder.mjs's MAX_HANDOFF_CHARS,
-// foldToWorkingSet's k. This loop's own `messages` array was the one place
-// that was NOT: it grew by two entries every single step, forever, with no
-// fold and no report. That is not a cosmetic gap — the local server this
-// eval actually runs against (`ollama serve`) is started with a 4096-TOKEN
-// context window and `--context-shift` enabled, which SILENTLY drops the
-// oldest tokens once the conversation overflows it. Two independent
-// sessions found and fixed this on the same day: one (against
-// qwen2.5-coder:0.5b) landed `buildPromptMessages`/`foldOlderSteps` below —
-// keep the last FOLD_WINDOW_STEPS steps verbatim, compress everything older
-// into one honest digest line per step, nothing ever fully vanishes without
-// a trace. The other (this branch, against qwen2.5-coder:7b) landed a
-// relevance-scored keep-the-most-relevant-N version — bounded and reported,
-// but capable of dropping an older step's content entirely, with only a
-// count left behind. Merged: the digest-everything structure is the better
-// base (a compressed trace survives for every step, which the drop-entirely
-// version could not guarantee), but its OWN internal budget enforcement
-// (`digest.slice(0, MAX_FOLDED_DIGEST_CHARS)`) had the identical defect
-// this whole fix exists to name — bounded, reported, and still picking what
-// to keep by POSITION (truncate the tail) rather than relevance. Fixed by
-// scoring each digest line's lexical overlap with the current window (the
-// same lexical-presence discipline ingest.mjs's real corpus search already
-// uses) and keeping the highest-scoring lines when even the compact digest
-// does not fit — see AMENDMENT-13-PROPOSAL.md (eo-constitution) for the
-// full accounting of why "bounded and reported" is not sufficient on its
-// own.
+// SURF AND FOLD, applied to the running conversation. Ollama's /api/chat is
+// stateless per request, so every turn resends the WHOLE prompt — left
+// unbounded, a real run measured n_tokens climbing past 3400 within half a
+// dozen steps, most of a small local model's entire context window spent
+// replaying its own history rather than reasoning about the next step.
+// Three independent sessions converged on the same fix, the same day: keep
+// the most recent turns verbatim (recency is what a ReAct step actually
+// needs to act on right now) and fold everything older into one compact
+// summary line per step, the same task-log.js foldToWorkingSet discipline
+// applied to conversation turns instead of tasks. What did NOT converge on
+// the first attempt: two of those three sessions independently bounded the
+// fold ITSELF by keeping only the most recent N folded lines and dropping
+// anything older — bounded, reported, and still picking what survives by
+// POSITION rather than relevance, the identical defect one layer down.
+// Fixed by scoring each folded line's lexical overlap with the current
+// window (the same lexical-presence discipline ingest.mjs's real corpus
+// search already uses) and keeping the highest-scoring lines when even the
+// compact digest does not fit — see AMENDMENT-13-PROPOSAL.md (eo-
+// constitution, ratified as II.18, the surf-before-fold test) for the full
+// accounting of why "bounded and reported" is not sufficient on its own.
 
 import { parseAction } from "./lib/parse-action.mjs";
 import { significantTerms, overlapScore } from "./lib/lexical-relevance.mjs";
 
 const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
 const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
+const DEFAULT_FOLD_K = 6;          // most recent turns kept verbatim — the same 4-7 "mouth" range task-log.js's foldToWorkingSet documents
+const MAX_FOLDED_SUMMARY_LINES = 12; // even the fold itself is bounded
 
-// PROMPT FOLDING. `messages` accumulates every raw response and every full
-// observation with no bound -- fine for the harness's own record
-// (`result.messages`, untouched by any of this), but sent WHOLE to the
-// adapter every single step it becomes exactly the unbounded-context growth
-// `ingest.mjs`'s surf/fold and task-log.js's foldToWorkingSet exist to
-// prevent. Keep the last FOLD_WINDOW_STEPS steps verbatim (recent tool
-// results are what the next decision actually turns on), fold everything
-// older into one bounded, relevance-selected digest line per step -- never
-// silently dropped, always says how much was condensed.
-const FOLD_WINDOW_STEPS = 3;
-const MAX_FOLDED_DIGEST_CHARS = 600;
+function summarizeResult(tool, result) {
+  if (result && typeof result === "object" && "error" in result) {
+    return `ERROR: ${String(result.error).slice(0, 140)}`;
+  }
+  if (tool === "read_file") return `ok (${result?.content?.length ?? 0} chars${result?.truncated ? ", truncated" : ""})`;
+  if (tool === "list_files") return `ok (${result?.files?.length ?? 0} file(s))`;
+  if (tool === "write_file" || tool === "edit_file") return `ok (${result?.bytesWritten ?? "?"} bytes written)`;
+  if (tool === "run_shell") return `exit ${result?.exitCode}${result?.truncated ? ", output truncated" : ""}`;
+  return "ok";
+}
 
-function digestTranscriptEntry(entry) {
-  if (entry.malformed) return `step ${entry.step}: (unparseable response) ${entry.reason}`;
-  if (entry.tool === "finish") return `step ${entry.step}: finish`;
-  const argsStr = JSON.stringify(entry.args ?? {});
-  const briefArgs = argsStr.length > 100 ? `${argsStr.slice(0, 100)}…` : argsStr;
-  const outcome = entry.result && typeof entry.result === "object" && "error" in entry.result
-    ? `error: ${String(entry.result.error).slice(0, 100)}`
-    : "ok";
-  return `step ${entry.step}: ${entry.tool}(${briefArgs}) -> ${outcome}`;
+function summarizeFoldedEntry(e) {
+  if (e.malformed) return `step ${e.step}: (unparseable response) — ${e.reason}`;
+  if (e.note) return `step ${e.step}: ${e.note}`;
+  return `step ${e.step}: ${e.tool}(${JSON.stringify(e.args)}) -> ${summarizeResult(e.tool, e.result)}`;
 }
 
 /**
- * One digest line per folded step, newline-joined. If that whole digest
- * still exceeds the char budget, SURF before folding further: score each
- * line's lexical overlap with `focusText` (what the model is actually
- * looking at right now — the verbatim recent window) and keep the
- * highest-scoring lines, restored to chronological order, rather than
- * truncating the tail by position.
+ * One compact user message standing in for everything folded out. If the
+ * full set of folded summary lines fits the budget, show them all — every
+ * step still leaves a trace, nothing vanishes silently. If it does not,
+ * SURF before folding further: score each line's lexical overlap with
+ * `focusText` (the verbatim recent window the model is actually looking at
+ * right now) and keep the highest-scoring lines, restored to chronological
+ * order — not the most recent lines by position, which is exactly the
+ * truncation-wearing-a-fold's-report-format defect this whole mechanism
+ * exists to avoid.
  */
-function foldOlderSteps(transcript, foldedCount, focusText) {
-  const lines = transcript.slice(0, foldedCount).map((entry, index) => ({ index, line: digestTranscriptEntry(entry) }));
-  const joined = lines.map((l) => l.line).join("\n");
-  if (joined.length <= MAX_FOLDED_DIGEST_CHARS) return joined;
+function buildFoldedSummaryMessage(entries, focusText) {
+  const lines = entries.map((e, index) => ({ index, line: summarizeFoldedEntry(e) }));
+  if (lines.length <= MAX_FOLDED_SUMMARY_LINES) {
+    return { role: "user", content: `EARLIER STEPS (folded to keep this prompt small — ${lines.length} step(s), full detail withheld):\n${lines.map((l) => l.line).join("\n")}` };
+  }
 
   const focusTerms = significantTerms(focusText);
-  const kept = [];
-  let used = 0;
-  for (const item of [...lines].map((l) => ({ ...l, score: overlapScore(focusTerms, l.line) }))
-    .sort((a, b) => b.score - a.score || b.index - a.index)) {
-    if (used + item.line.length + 1 > MAX_FOLDED_DIGEST_CHARS) continue;
-    kept.push(item);
-    used += item.line.length + 1;
-  }
-  kept.sort((a, b) => a.index - b.index); // restore chronological order
-  const withheldCount = lines.length - kept.length;
-  const keptText = kept.map((k) => k.line).join("\n");
-  return `${keptText}\n(${withheldCount} more folded step-digest line(s) withheld by relevance — kept by lexical overlap with the current window, not just recency; folded to the ${MAX_FOLDED_DIGEST_CHARS}-char budget, not silently grown)`;
+  const kept = [...lines]
+    .map((l) => ({ ...l, score: overlapScore(focusTerms, l.line) }))
+    .sort((a, b) => b.score - a.score || b.index - a.index)
+    .slice(0, MAX_FOLDED_SUMMARY_LINES)
+    .sort((a, b) => a.index - b.index); // restore chronological order
+  const withheld = lines.length - kept.length;
+  const header = `EARLIER STEPS (folded to keep this prompt small — showing ${kept.length} of ${lines.length} folded step(s), kept by relevance to what you are looking at right now, not just recency; ${withheld} more folded step(s) withheld):`;
+  return { role: "user", content: `${header}\n${kept.map((k) => k.line).join("\n")}` };
 }
 
 /**
- * The actual prompt sent to the model each step: fixed prefix (system +
- * task), a folded digest of everything older than the window (only once
- * there IS anything to fold), then the last `windowSteps` steps verbatim.
- * `messages` itself (the harness's full record) is left untouched by this —
- * folding only changes what the model is actually shown, never what gets
- * recorded.
+ * Build what's actually SENT to the model this turn: system + task intro,
+ * always; then either every turn verbatim (a short run) or the most recent
+ * `foldK` turns verbatim plus one folded summary message standing in for
+ * everything older. `foldedTurns` pairs each transcript entry with the raw
+ * message(s) it produced, so folding never has to re-derive them.
  */
-function buildPromptMessages(messages, transcript, windowSteps) {
-  const stepsSoFar = transcript.length;
-  if (stepsSoFar <= windowSteps) return messages;
-  const foldedCount = stepsSoFar - windowSteps;
-  const recent = messages.slice(2 + foldedCount * 2);
-  const focusText = recent.map((m) => m.content).join(" ");
-  const foldedMsg = {
-    role: "user",
-    content: `EARLIER STEPS (${foldedCount} step(s) folded to keep this prompt small, not silently dropped):\n${foldOlderSteps(transcript, foldedCount, focusText)}`,
-  };
-  return [messages[0], messages[1], foldedMsg, ...recent];
+function buildPromptView(system, intro, foldedTurns, foldK) {
+  if (foldedTurns.length <= foldK) {
+    return [system, intro, ...foldedTurns.flatMap((t) => t.msgs)];
+  }
+  const kept = foldedTurns.slice(-foldK);
+  const folded = foldedTurns.slice(0, -foldK);
+  const focusText = kept.flatMap((t) => t.msgs).map((m) => m.content).join(" ");
+  return [system, intro, buildFoldedSummaryMessage(folded.map((t) => t.entry), focusText), ...kept.flatMap((t) => t.msgs)];
 }
 
 const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
@@ -155,24 +147,37 @@ function formatObservation(toolName, result) {
  * @param {number} [opts.maxSteps]
  * @param {number} [opts.maxTokensPerStep]
  * @param {number} [opts.seed]
- * @param {number} [opts.foldWindowSteps] how many of the most recent steps are shown verbatim before older ones fold to a digest — see buildPromptMessages
+ * @param {number} [opts.foldK] how many recent turns are replayed to the
+ *   model verbatim before older ones fold to a one-line summary each (see
+ *   buildPromptView above). Default 6 — the same 4-7 "mouth" range
+ *   task-log.js's foldToWorkingSet documents.
+ * @param {Function} [opts.onStep] optional (transcriptEntry) => void, called
+ *   the instant each transcript entry is recorded — the live-disclosure hook.
+ *   Purely observational: it cannot alter the loop's own decisions, and a
+ *   throwing onStep is never allowed to break a real eval run, so it is
+ *   called inside a try/catch that only logs.
  */
 export async function runReactLoop({
   taskPrompt, groundingBlock = null, toolset, adapter, maxSteps = 8, maxTokensPerStep = 200, seed = 0,
-  foldWindowSteps = FOLD_WINDOW_STEPS,
+  foldK = DEFAULT_FOLD_K, onStep = null,
 }) {
+  const emit = onStep
+    ? (entry) => { try { onStep(entry); } catch (err) { console.error(`[react-loop] onStep handler threw: ${err.message}`); } }
+    : () => {};
   const { tools, toolCalls } = toolset;
   const toolNames = Object.keys(tools);
-  const system = PROTOCOL(toolNames.map((n) => tools[n].description));
+  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description)) };
 
   const userIntro = groundingBlock
     ? `TASK:\n${taskPrompt}\n\nRESEARCH (surfaced before you started, folded to what fit the budget):\n${groundingBlock}`
     : `TASK:\n${taskPrompt}`;
+  const intro = { role: "user", content: userIntro };
 
-  const messages = [
-    { role: "system", content: system },
-    { role: "user", content: userIntro },
-  ];
+  // The full, honest, append-only record of everything said — never
+  // truncated, returned whole in the result. What's actually SENT to the
+  // model each turn is the separate, bounded `foldedTurns` view below.
+  const messages = [system, intro];
+  const foldedTurns = []; // { entry, msgs }[] — one per step that needs another generate() call after it
 
   const transcript = [];
   let finished = false;
@@ -180,35 +185,37 @@ export async function runReactLoop({
   let step = 0;
   let malformedStreak = 0;
   // Keyed by exact (tool, args) — how many times THIS specific call has
-  // failed, total, across the whole attempt so far. Deliberately NOT reset
-  // by an intervening successful call to something else: a real transcript
-  // showed edit_file(fail) -> read_file(succeed) -> edit_file(SAME fail)
-  // repeated 11 times, and a naive "reset on anything non-matching" streak
-  // counter never once saw it as a repeat, because the successful read
-  // in between reset it back to 1 every single time. Reading the file
-  // again is normal, expected, and not itself the problem; what matters is
-  // whether THIS exact failing action keeps recurring regardless of what
-  // else happened around it.
+  // failed, total, across the whole attempt so far. See the STUCK-LOOP
+  // DETECTION note at the top of this file for why this must be cumulative
+  // rather than reset by an intervening successful call.
   const failureCounts = new Map();
   let stuckLoopAbort = false;
 
   for (; step < maxSteps; step++) {
-    // `messages` keeps the FULL history for the returned transcript (real
-    // research data, per the same reasoning harness.mjs bounds-but-never-
-    // discards transcripts) — only what is actually SENT to the model is
-    // folded.
-    const promptMessages = buildPromptMessages(messages, transcript, foldWindowSteps);
-    const raw = await adapter.generate(promptMessages, { maxTokens: maxTokensPerStep, seed: seed + step });
-    messages.push({ role: "assistant", content: raw });
+    const promptView = buildPromptView(system, intro, foldedTurns, foldK);
+    if (foldedTurns.length > foldK) {
+      emit({ step, phase: "folded", keptTurns: Math.min(foldedTurns.length, foldK), foldedTurns: foldedTurns.length - foldK });
+    }
+    emit({ step, phase: "generating" });
+    const raw = await adapter.generate(promptView, { maxTokens: maxTokensPerStep, seed: seed + step });
+    const assistantMsg = { role: "assistant", content: raw };
+    messages.push(assistantMsg);
+    emit({ step, phase: "assistant_raw", raw });
 
     const parsed = parseAction(raw, toolNames);
     if (!parsed.ok) {
       malformedStreak += 1;
-      transcript.push({ step, raw, malformed: true, reason: parsed.reason });
+      const entry = { step, raw, malformed: true, reason: parsed.reason };
+      transcript.push(entry);
+      emit({ ...entry, phase: "malformed" });
       const nudge = `Your last response could not be parsed: ${parsed.reason}. Respond with exactly one JSON object: {"tool": "<name>", "args": {...}}.`;
-      messages.push({ role: "user", content: nudge });
+      const nudgeMsg = { role: "user", content: nudge };
+      messages.push(nudgeMsg);
+      foldedTurns.push({ entry, msgs: [assistantMsg, nudgeMsg] });
       if (malformedStreak >= 3) {
-        transcript.push({ step, note: "aborted after 3 consecutive malformed responses" });
+        const abortEntry = { step, note: "aborted after 3 consecutive malformed responses" };
+        transcript.push(abortEntry);
+        emit({ ...abortEntry, phase: "aborted" });
         break;
       }
       continue;
@@ -218,27 +225,36 @@ export async function runReactLoop({
     if (parsed.tool === "finish") {
       finished = true;
       summary = typeof parsed.args.summary === "string" ? parsed.args.summary : "(no summary given)";
-      transcript.push({ step, tool: "finish", args: parsed.args });
+      const entry = { step, tool: "finish", args: parsed.args };
+      transcript.push(entry);
+      emit({ ...entry, phase: "finish" });
       break;
     }
 
+    emit({ step, phase: "tool_call", tool: parsed.tool, args: parsed.args });
     const result = tools[parsed.tool].run(parsed.args);
     const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
     const isFailure = result && typeof result === "object" && "error" in result;
     const repeatCount = isFailure ? (failureCounts.get(callKey) ?? 0) + 1 : 0;
     if (isFailure) failureCounts.set(callKey, repeatCount);
 
-    transcript.push({ step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatCount || undefined });
+    const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatCount || undefined };
+    transcript.push(entry);
+    emit({ ...entry, phase: "tool_result" });
 
     let observation = formatObservation(parsed.tool, result);
     if (repeatCount >= STUCK_LOOP_NUDGE_AT) {
       observation += `\n\nSTUCK LOOP: this exact ${parsed.tool} call (the SAME arguments) has now failed ${repeatCount} times, the same way every time — reading the file in between has not changed what you try next. Repeating it again will fail again. Stop: re-read the OBSERVATION above and base your next argument on what it actually says, not on what you expect it to say.`;
     }
-    messages.push({ role: "user", content: observation });
+    const observationMsg = { role: "user", content: observation };
+    messages.push(observationMsg);
+    foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
 
     if (repeatCount >= STUCK_LOOP_ABORT_AT) {
       stuckLoopAbort = true;
-      transcript.push({ step, note: `aborted after ${repeatCount} total identical failing ${parsed.tool} calls across the attempt (stuck loop, not a step-budget exhaustion)` });
+      const abortEntry = { step, note: `aborted after ${repeatCount} total identical failing ${parsed.tool} calls across the attempt (stuck loop, not a step-budget exhaustion)` };
+      transcript.push(abortEntry);
+      emit({ ...abortEntry, phase: "aborted" });
       break;
     }
   }
