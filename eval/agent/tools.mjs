@@ -12,6 +12,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, resolve, relative, dirname } from "node:path";
+import { sniffBinary, looksLikeWav, parseWav } from "./media.mjs";
 
 const MAX_READ_CHARS = 4000;
 const MAX_SHELL_OUTPUT_CHARS = 3000;
@@ -52,22 +53,45 @@ export function createTools(sandboxDir) {
       },
     },
     read_file: {
-      description: `read_file({"path": "relative/path.js"}) — read a file's content (truncated to ${MAX_READ_CHARS} chars, with a stated truncation count, never silent).`,
+      description: `read_file({"path": "relative/path.js"}) — read a TEXT file's content (truncated to ${MAX_READ_CHARS} chars, with a stated truncation count, never silent). Refuses honestly on binary content (e.g. a WAV file) instead of silently corrupting it as garbled text — use perceive_audio to inspect a WAV file's real structure instead.`,
       run({ path }) {
         let result;
         try {
           const abs = resolveInSandbox(sandboxDir, path);
-          const full = readFileSync(abs, "utf8");
-          const truncated = full.length > MAX_READ_CHARS;
-          result = {
-            content: full.slice(0, MAX_READ_CHARS),
-            truncated,
-            withheldChars: truncated ? full.length - MAX_READ_CHARS : 0,
-          };
+          const raw = readFileSync(abs);
+          if (sniffBinary(raw)) {
+            const hint = looksLikeWav(raw)
+              ? "this looks like a WAV audio file — use perceive_audio to inspect its real structure"
+              : "read_file only reads text; this content cannot be shown without corrupting it";
+            result = { error: `"${path}" is binary content (${raw.length} bytes), not text — ${hint}` };
+          } else {
+            const full = raw.toString("utf8");
+            const truncated = full.length > MAX_READ_CHARS;
+            result = {
+              content: full.slice(0, MAX_READ_CHARS),
+              truncated,
+              withheldChars: truncated ? full.length - MAX_READ_CHARS : 0,
+            };
+          }
         } catch (err) {
           result = { error: err.message };
         }
         record("read_file", { path }, result);
+        return result;
+      },
+    },
+    perceive_audio: {
+      description: 'perceive_audio({"path": "relative/clip.wav"}) — inspect a WAV (RIFF/WAVE) audio file\'s REAL structure: every chunk found in file order (id, byte size), the fmt chunk\'s sample rate/channels/bits-per-sample, and the computed duration in seconds (data chunk bytes / byte rate). Only WAV is supported; anything else, or a malformed file, reports a typed error honestly rather than a guess.',
+      run({ path }) {
+        let result;
+        try {
+          const abs = resolveInSandbox(sandboxDir, path);
+          const raw = readFileSync(abs);
+          result = parseWav(raw);
+        } catch (err) {
+          result = { error: err.message };
+        }
+        record("perceive_audio", { path }, result);
         return result;
       },
     },

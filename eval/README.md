@@ -85,15 +85,20 @@ The redirect that shaped this design: don't build a generic ReAct scaffold
 from scratch — build the agent out of primitives this codebase already has.
 
 - **`agent/tools.mjs`** — the agent's "organs": `read_file`, `write_file`,
-  `edit_file`, `run_shell`, `finish`, each bound to one sandbox directory.
-  This is a fixed, hand-grown set for now (see "Future direction" below).
-  `edit_file` (old_string/new_string, unique-match-or-refuse — the same
-  discipline this very harness's own editing tool uses) was grown once
-  real, larger files entered the picture at Level 3+: `write_file` requires
-  retyping the COMPLETE file, which is fine for a 20-line script but
-  physically does not fit a CPU-bound model's per-step token budget once the
-  file is a real few-hundred-line module. Without it, "real codebase" tasks
-  were impossible by construction, not a measured capability gap.
+  `edit_file`, `run_shell`, `perceive_audio`, `finish`, each bound to one
+  sandbox directory. This is a fixed, hand-grown set for now (see "Future
+  direction" below). `edit_file` (old_string/new_string, unique-match-or-
+  refuse — the same discipline this very harness's own editing tool uses)
+  was grown once real, larger files entered the picture at Level 3+:
+  `write_file` requires retyping the COMPLETE file, which is fine for a
+  20-line script but physically does not fit a CPU-bound model's per-step
+  token budget once the file is a real few-hundred-line module. Without it,
+  "real codebase" tasks were impossible by construction, not a measured
+  capability gap. `perceive_audio` (backed by `agent/media.mjs`, see
+  "Omnimodal organs" below) was grown once `read_file`'s blind
+  `readFileSync(..., "utf8")` turned out to silently corrupt any binary
+  asset instead of refusing honestly — a real, non-text-shaped gap, not a
+  hypothetical one.
 - **`agent/react-loop.mjs`** — the actual read-execute-observe-correct loop.
   The model emits exactly one JSON tool call per turn; the tool actually
   runs; the real result (including real errors) is appended as an
@@ -172,12 +177,16 @@ eval/
   agent/            the agent itself — tools, react loop, holonic wrapper, ingest
                     (holon-coder.test.mjs: offline coverage of the bidirectional
                     nesting — run with `node --test eval/agent/holon-coder.test.mjs`)
+                    media.mjs: honest binary sniff + from-scratch WAV parser/
+                    writer, no ffmpeg — see "Omnimodal organs" below
+                    (media.test.mjs, tools.test.mjs cover it)
   adapters/         ollama-adapter.mjs (real), scripted-adapter.mjs (dry-run)
   levels/           Level 1-7 task definitions + independent oracles
     level1-csv-to-json/       task.json, test.mjs
     level1-fizzbuzz/
     level2-csv-quoted-comma/  task.json, seed/check.mjs, test.mjs
     level2-jsonl-quirk/
+    level2-wav-duration-bug/  task.json, seed/check.mjs, test.mjs — see "Omnimodal organs" below
   results/
     runs/*.jsonl    raw per-run, per-task results
     scoreboard.md   human-readable history, newest first
@@ -225,6 +234,72 @@ trusting the oracle (see git history for that verification).
   the replan decomposed. `retryConsidered`/`retryDeclined` — the replan ran
   but, even with real failure evidence, still judged the task undecomposable
   (an honest "no," not forced).
+
+## Omnimodal organs (started, narrow, honestly scoped)
+
+The agent's original tool set was entirely text-shaped: `read_file` ran every
+file through `readFileSync(abs, "utf8")` unconditionally, and `ingest.mjs`
+treats "source code ingests exactly like prose does" as the whole story. For
+a real binary asset (audio, an image) that doesn't fail loudly — `Buffer`
+decoding of non-UTF-8 bytes silently returns garbled replacement characters
+instead of throwing, so the agent would see garbage and reasonably treat it
+as garbage *text*, never as "this is a different medium, not text at all."
+eo-constitution's II.1 names exactly this failure for text specifically
+("stable spans are a false permanency"); forcing every OTHER medium through
+that same text-shaped tool without saying so is the same failure by another
+road.
+
+Two real, tested changes close that specific gap, at the tool layer, for one
+format:
+
+- **`read_file` now refuses binary content honestly** (`agent/media.mjs`'s
+  `sniffBinary` — the same NUL-byte-in-the-first-8000-bytes heuristic `git`
+  itself uses) instead of returning corrupted text. See
+  `agent/tools.test.mjs`.
+- **`perceive_audio`, a new organ, reads a WAV (RIFF/WAVE) file's real
+  structure** — every chunk in file order, sample rate, channels, bits per
+  sample, and computed duration — via a from-scratch, dependency-free RIFF
+  chunk walker (`agent/media.mjs`'s `parseWav`/`writeWav`). No ffmpeg, no
+  npm package: WAV's on-disk format is a small, fully public byte layout
+  simple enough to decode correctly by hand, which matters because ffmpeg
+  isn't installed in every environment this harness runs in (this one
+  included) — eoreader6's own
+  `packages/engine/perceiver/{audio,image,video}/material.js` already do
+  real perceptual reduction (RMS/flux energy, luminance, frame-difference)
+  over ffmpeg-decoded media, and this is a companion for the environments
+  where that decode step isn't available, not a replacement for it.
+- **A new scored task, `level2-wav-duration-bug`**, exercises this for
+  real: the agent must write a script that computes a WAV file's duration
+  by walking its RIFF chunks, against a fixture that has a `LIST` metadata
+  chunk sitting between `fmt ` and `data` — the exact real-world wrinkle
+  that breaks the common "audio data starts at byte 44" shortcut. The oracle
+  (`test.mjs`) was hand-verified against both a correct chunk-walking
+  solution and a naive fixed-offset one before being trusted: the naive
+  version passes the no-extra-chunk case and fails exactly the two
+  extra-chunk cases, which is the intended discriminating behavior, not an
+  accident.
+
+**What this does and doesn't establish.** It establishes that the agent's
+tool layer can now tell a real non-text asset apart from text instead of
+silently mangling it, and that a genuinely non-textual fact (a WAV's true
+chunk layout, not a guessed offset) can change whether a scored coding task
+passes. It does **not** establish that the agentic-coding harness's core
+mechanisms — the ReAct loop, `holon-coder.mjs`'s decomposition, `ingest.mjs`'s
+surf/fold — are medium-agnostic in the sense eo-constitution's II.11 (the
+omnimodal *earning* test) means for engine-tier claims: that survival is
+earned by an invariance fixture across every text and every host, the way
+`eoreader6/goldens/multimodal` measured it for the *reading* engine's
+boundary-detection mechanism (`runTurn`) across text/audio/image/video. This
+harness is application tier (`eochat`, per Constitution I.4), not engine, so
+that specific bar does not apply to it directly — but the honest comparison
+still stands: eoreader6 has a real, run, scored cross-modal invariance
+fixture for its core reading mechanism; this eval, before this change, had
+none for its core coding mechanism, in either direction. One narrow, ffmpeg-
+free, WAV-specific organ and one scored task is a real start, not that
+fixture. It has not been run against a real local model (only the dry-run
+scripted adapter and the unit/oracle tests above, all offline) — whether
+`qwen2.5-coder:7b` can actually use `perceive_audio` productively, the same
+open question this README already tracks honestly for Level 3+, is untested.
 
 ## Known scope and honest limitations
 

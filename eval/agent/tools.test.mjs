@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTools } from "./tools.mjs";
+import { writeWav } from "./media.mjs";
 
 function freshSandbox() {
   return mkdtempSync(join(tmpdir(), "tools-test-"));
@@ -74,6 +75,63 @@ test("edit_file cannot escape the sandbox", () => {
     const { tools } = createTools(dir);
     const result = tools.edit_file.run({ path: "../../etc/passwd", old_string: "root", new_string: "x" });
     assert.match(result.error, /escapes the sandbox/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("read_file refuses a binary (WAV) file honestly instead of returning corrupted text", () => {
+  const dir = freshSandbox();
+  try {
+    writeFileSync(join(dir, "clip.wav"), writeWav({ samples: new Int16Array(100) }));
+    const { tools } = createTools(dir);
+    const result = tools.read_file.run({ path: "clip.wav" });
+    assert.equal(result.content, undefined, "must never hand back garbled binary content as if it were text");
+    assert.match(result.error, /binary content/);
+    assert.match(result.error, /perceive_audio/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("read_file still reads ordinary text files exactly as before", () => {
+  const dir = freshSandbox();
+  try {
+    writeFileSync(join(dir, "a.js"), "const x = 1;\n");
+    const { tools } = createTools(dir);
+    const result = tools.read_file.run({ path: "a.js" });
+    assert.equal(result.content, "const x = 1;\n");
+    assert.equal(result.truncated, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("perceive_audio reports a WAV file's real chunk layout and duration, walking past an extra chunk", () => {
+  const dir = freshSandbox();
+  try {
+    const samples = new Int16Array(1600); // 0.2s @ 8000Hz mono
+    writeFileSync(join(dir, "clip.wav"), writeWav({
+      sampleRate: 8000, channels: 1, bitsPerSample: 16, samples,
+      extraChunks: [{ id: "LIST", data: Buffer.from("INFOISFT", "ascii") }],
+    }));
+    const { tools } = createTools(dir);
+    const result = tools.perceive_audio.run({ path: "clip.wav" });
+    assert.deepEqual(result.chunks.map((c) => c.id), ["fmt ", "LIST", "data"]);
+    assert.equal(result.fmt.sampleRate, 8000);
+    assert.equal(result.durationSeconds, 0.2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("perceive_audio reports a typed error for a non-WAV file, not a guess", () => {
+  const dir = freshSandbox();
+  try {
+    writeFileSync(join(dir, "notes.txt"), "just some text\n");
+    const { tools } = createTools(dir);
+    const result = tools.perceive_audio.run({ path: "notes.txt" });
+    assert.match(result.error, /not a RIFF\/WAVE file/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
