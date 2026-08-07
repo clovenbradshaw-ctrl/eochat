@@ -579,6 +579,9 @@
         <button type="button" onClick="{{ tabSenses }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabSensesColor }}; box-shadow: {{ tabSensesUnderline }}; cursor:pointer;">Senses</button>
         <button type="button" onClick="{{ tabInsights }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabInsightsColor }}; box-shadow: {{ tabInsightsUnderline }}; cursor:pointer;">Insights</button>
         <button type="button" onClick="{{ tabEoCode }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabEoCodeColor }}; box-shadow: {{ tabEoCodeUnderline }}; cursor:pointer;">eoCode</button>
+        <sc-if value="{{ monitorTabEnabled }}">
+        <button type="button" onClick="{{ tabMonitor }}" style="border:0; background:none; padding:7px 12px 10px; font-family:inherit; font-size:13px; font-weight:500; color: {{ tabMonitorColor }}; box-shadow: {{ tabMonitorUnderline }}; cursor:pointer;">Monitor</button>
+        </sc-if>
         <div style="margin-left:auto; display:flex; align-items:center; gap:6px;">
           <sc-if value="{{ proxyDead }}">
             <button type="button" onClick="{{ retryProxy }}" style="border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
@@ -1397,6 +1400,71 @@
           </div>
         </div>
         </sc-if>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isMonitor }}">
+      <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:12px; min-height:0; overflow:hidden;">
+        <div style="display:flex; align-items:baseline; justify-content:space-between;">
+          <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">Monitor</span>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#A39D91;">{{ monitorHint }}</span>
+        </div>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">Live load this machine is under — the proxy itself (<b>app</b>), the model backend (<b>ollama</b>), everything else (<b>other</b>), and the <b>GPU</b>. Anything the host can't measure is hidden, not guessed.</span>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <div style="display:flex; flex-direction:column; gap:2px; background:#F4F8F6; border:1px solid #DDEAE6; border-radius:9px; padding:8px 12px; min-width:96px;">
+            <span style="font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#6E8880; font-weight:600;">System CPU</span>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:18px; color:#1F5A4C;">{{ monitorSysCpu }}<span style="font-size:10px; color:#8C877C;"> {{ monitorCores }} cores</span></span>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:2px; background:#F4F8F6; border:1px solid #DDEAE6; border-radius:9px; padding:8px 12px; min-width:96px;">
+            <span style="font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#6E8880; font-weight:600;">App CPU</span>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:18px; color:#1F5A4C;">{{ monitorAppCpu }}%</span>
+          </div>
+          <sc-if value="{{ monitorOllamaVisible }}">
+          <div style="display:flex; flex-direction:column; gap:2px; background:#F4F8F6; border:1px solid #DDEAE6; border-radius:9px; padding:8px 12px; min-width:96px;">
+            <span style="font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#6E8880; font-weight:600;">Ollama CPU</span>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:18px; color:#5A8BB0;">{{ monitorOllamaCpu }}%</span>
+          </div>
+          </sc-if>
+          <sc-if value="{{ monitorGpuVisible }}">
+          <div style="display:flex; flex-direction:column; gap:2px; background:#FBF6F8; border:1px solid #EBD9E3; border-radius:9px; padding:8px 12px; min-width:96px;">
+            <span style="font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#96607C; font-weight:600;">GPU</span>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:18px; color:#B05A8B;">{{ monitorGpuCpu }}%<span style="font-size:10px; color:#8C877C;"> {{ monitorGpuMem }}</span></span>
+          </div>
+          </sc-if>
+          <div style="display:flex; flex-direction:column; gap:2px; background:#F4F8F6; border:1px solid #DDEAE6; border-radius:9px; padding:8px 12px; min-width:96px;">
+            <span style="font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#6E8880; font-weight:600;">Memory</span>
+            <span style="font-family:'IBM Plex Mono', monospace; font-size:18px; color:#1F5A4C;">{{ monitorMemPct }}%<span style="font-size:10px; color:#8C877C;"> {{ monitorMemTotal }}</span></span>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <sc-if value="{{ monitorGenerating }}">
+            <span class="eo-pulse" style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#1F5A4C; font-weight:600;">⊨ generating</span>
+          </sc-if>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#4A463E;">{{ monitorTokRate }} tok/s</span>
+          <span style="font-size:11.5px; color:#A39D91;">·</span>
+          <span style="font-size:11.5px; color:#4A463E;">{{ monitorTokTotal }} tokens generated</span>
+          <span style="font-size:10.5px; color:#A39D91;">(estimate · ~4 chars each — Ollama doesn't report eval counts per chunk)</span>
+          <sc-if value="{{ monitorModel }}">
+            <span style="font-size:11.5px; color:#6E6A60;">· last model: {{ monitorModel }}</span>
+          </sc-if>
+          <sc-if value="{{ monitorVram }}">
+            <span style="font-size:11.5px; color:#6E6A60;">· {{ monitorVram }}</span>
+          </sc-if>
+        </div>
+
+        <div style="flex:1; border:1px solid #EBE6DC; border-radius:12px; background:#FAF8F4; min-height:220px; position:relative; overflow:hidden;">
+          <canvas ref="{{ setMonitorCanvas }}" style="width:100%; height:100%; display:block;"></canvas>
+        </div>
+        <div style="font-size:11.5px; color:#8C877C; font-family:'IBM Plex Mono', monospace; display:flex; gap:14px; flex-wrap:wrap;">
+          <span><span style="color:#1F5A4C;">━</span> app</span>
+          <sc-if value="{{ monitorOllamaVisible }}"><span><span style="color:#5A8BB0;">━</span> ollama</span></sc-if>
+          <span><span style="color:#C9A227;">━</span> other</span>
+          <span><span style="color:#8C877C;">━</span> system</span>
+          <sc-if value="{{ monitorGpuVisible }}"><span><span style="color:#B05A8B;">━</span> gpu</span></sc-if>
+          <span style="margin-left:auto;">last ~4 min · 1s samples</span>
+        </div>
       </div>
       </sc-if>
 
@@ -2606,6 +2674,16 @@ const SPACES_KEY = 'eochat.spaces.v2';
 // what the reader already built" fallback SPACES_KEY gives conversations.
 const PROJECTS_KEY = 'eochat.projects.v1';
 
+// The glass box is a per-project activity trace, so a refresh must not erase
+// it: every logAdd stamps the entry into this store under the active project
+// (null = outside any project, the Room), and switching projects swaps the
+// box to that project's own trace. Capped per project so full prompt rows
+// (which can be several KB each) can't blow the localStorage quota; on a
+// quota failure the persisted copy trims the oldest half.
+const GLASSLOG_KEY = 'eochat.glasslog.v1';
+const GLASSLOG_NONE = '__none__';
+const GLASS_LOG_MAX = 600;
+
 // GitHub Pages serves this file as a static site with no backend of its
 // own, so this is a synchronous, best-guess head start for that specific
 // deployment — before the first health check has had a chance to run,
@@ -2658,6 +2736,11 @@ class Component extends DCLogic {
     view: 'projects', // 'projects' | 'chat'
     projects: [], activeProjectId: null,
     tab: 'chat', draft: '',
+    // Monitor surface: raw /api/system/stats snapshot plus whether the engine
+    // even exposes it. The tab stays hidden until the first poll succeeds, so
+    // deployments without the endpoint (old proxy, pure-browser GH Pages) never
+    // show a Monitor that can't work.
+    monitor: null, monitorTabEnabled: false,
     webSearch: true,
     provider: 'local', model: null, _availableModels: [], modelMenuOpen: false,
     _ollamaModels: [], _ollamaFetching: false, _ollamaError: null, _ollamaAuthorized: false, _ollamaShowPermission: false, _ollamaUrl: '',
@@ -2674,6 +2757,11 @@ class Component extends DCLogic {
     // for everyone else too once the first health check finds no engine at
     // all (see _defaultToLocalModelIfNoEngine).
     localModel: ON_GH_PAGES || readStoredLocalIntent() === true, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
+    // Set only in the 'standby' status (see webllm-client.js _enterStandby):
+    // why the real model isn't up right now, while the zero-dependency
+    // standby responder answers basic chat in its place and a background
+    // timer keeps quietly retrying the real thing.
+    localModelStandbyReason: null,
     // Mirrors of window.EOWebLLM's catalog: which in-browser models can be
     // installed, which is active, which are already on disk, and how much
     // storage this origin is using. Only one model is ever kept — installing
@@ -2850,6 +2938,10 @@ class Component extends DCLogic {
     if (typeof window !== 'undefined' && window.innerWidth <= 900) {
       this.setState({ leftCollapsed: true });
     }
+    // The glass box is per-project and persisted; bring back whatever this
+    // tab was tracing before the reload. fetchProjects() later swaps it for
+    // the first project's own trace once projects resolve.
+    this._loadGlassLog(null);
     this.checkHealth();
     this.fetchProjects();
     this.loadConversations();
@@ -2859,6 +2951,9 @@ class Component extends DCLogic {
     this.fetchRecycleBin();
     this.fetchModels();
     this.loadSettings();
+    // One-shot probe: on any device with the stats endpoint the Monitor tab
+    // appears; where the endpoint is absent it stays hidden.
+    this._pollMonitor();
     // math.js bridge for chat answers: a guarded evaluator on window, so any
     // caller (or the model, via a future tool) can evaluate client-side
     // expressions without reaching into the component instance.
@@ -2895,9 +2990,9 @@ class Component extends DCLogic {
     // page is ever loaded without it.
     if (window.EOWebLLM) {
       const seed = window.EOWebLLM.snapshot();
-      this.setState({ localModelStatus: seed.status, localModelProgress: seed.progress, localModelError: seed.error, localModelId: seed.modelId, localCatalog: seed.catalog, localStorageEstimate: seed.storage });
+      this.setState({ localModelStatus: seed.status, localModelProgress: seed.progress, localModelError: seed.error, localModelStandbyReason: seed.standbyReason, localModelId: seed.modelId, localCatalog: seed.catalog, localStorageEstimate: seed.storage });
       this._unsubLocalModel = window.EOWebLLM.subscribe((snap) => {
-        this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error, localModelId: snap.modelId, localCatalog: snap.catalog, localStorageEstimate: snap.storage });
+        this.setState({ localModelStatus: snap.status, localModelProgress: snap.progress, localModelError: snap.error, localModelStandbyReason: snap.standbyReason, localModelId: snap.modelId, localCatalog: snap.catalog, localStorageEstimate: snap.storage });
       });
       // Read the model cache right away, not only once Settings is opened —
       // otherwise the Settings panel's first paint shows every row with no
@@ -2929,6 +3024,7 @@ class Component extends DCLogic {
   componentWillUnmount() {
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this._healthTimer) clearInterval(this._healthTimer);
+    if (this._monitorTimer) clearInterval(this._monitorTimer);
     if (this._onWindowKeyDown) document.removeEventListener('keydown', this._onWindowKeyDown);
     if (this._unsubLocalModel) this._unsubLocalModel();
     if (this._unsubBrowserSenses) this._unsubBrowserSenses();
@@ -3084,6 +3180,7 @@ class Component extends DCLogic {
   }
   componentDidUpdate() {
     this.manageOrbitLoop();
+    this.manageMonitorLoop();
     this.scrollToBottom();
   }
 
@@ -3129,6 +3226,95 @@ class Component extends DCLogic {
     }, 15000);
   }
   proxyLive() { return (Date.now() - this.state.proxyAlive.getTime()) < 20000; }
+
+  // ── Monitor surface ─────────────────────────────────────────────────────
+  // Polls /api/system/stats at 1Hz while the Monitor tab is open, never
+  // otherwise. The tab only appears after the first poll succeeds, so hosts
+  // without the endpoint (old proxy, pure-browser deployment) hide it entirely.
+  async _pollMonitor() {
+    let snap = null;
+    try {
+      const res = await fetch(this.proxyUrl() + '/api/system/stats', { signal: AbortSignal.timeout(4000) });
+      if (res.ok) snap = await res.json();
+    } catch {}
+    const had = this.state.monitorTabEnabled;
+    this.setState({ monitor: snap, monitorTabEnabled: had || !!snap });
+    if (this.monitorCanvasEl) this.drawMonitor();
+  }
+
+  manageMonitorLoop() {
+    const running = this.state.tab === 'monitor';
+    if (running && !this._monitorTimer) {
+      this._pollMonitor();
+      this._monitorTimer = setInterval(() => this._pollMonitor(), 1000);
+    } else if (!running && this._monitorTimer) {
+      clearInterval(this._monitorTimer);
+      this._monitorTimer = null;
+    }
+  }
+
+  drawMonitor() {
+    const canvas = this.monitorCanvasEl;
+    if (!canvas) return;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== w * dpr || canvas.height !== h * dpr) { canvas.width = w * dpr; canvas.height = h * dpr; }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const hist = this.state.monitor && this.state.monitor.history ? this.state.monitor.history : null;
+    if (!hist || hist.length < 2) {
+      ctx.fillStyle = '#A39D91'; ctx.font = '13px "Instrument Sans", sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText('waiting for samples…', w / 2, h / 2);
+      return;
+    }
+
+    const padL = 34, padR = 10, padT = 10, padB = 16;
+    const plotW = w - padL - padR, plotH = h - padT - padB;
+    const n = hist.length;
+    const x = (i) => padL + plotW * (i / (n - 1));
+    const y = (v) => padT + plotH * (1 - Math.max(0, Math.min(100, v)) / 100);
+
+    // Grid + left axis (0–100%, "% of one core" for the CPU series).
+    ctx.strokeStyle = '#EBE6DC'; ctx.lineWidth = 1;
+    ctx.font = '9.5px "IBM Plex Mono", monospace'; ctx.fillStyle = '#A39D91'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (const v of [0, 25, 50, 75, 100]) {
+      const gy = y(v);
+      ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(w - padR, gy); ctx.stroke();
+      ctx.fillText(String(v), padL - 5, gy);
+    }
+
+    const series = [
+      { key: 'app', color: '#1F5A4C', width: 2 },
+      { key: 'gpu', color: '#B05A8B', width: 2 },
+      { key: 'ollama', color: '#5A8BB0', width: 1.5 },
+      { key: 'other', color: '#C9A227', width: 1.5 },
+      { key: 'sys', color: '#8C877C', width: 1 },
+    ];
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (const s of series) {
+      // Split on nulls so a host that can't report a series just shows a gap,
+      // never a fabricated line down to zero.
+      ctx.strokeStyle = s.color; ctx.lineWidth = s.width;
+      let pen = false;
+      for (let i = 0; i < n; i++) {
+        const v = hist[i][s.key];
+        if (v == null) { pen = false; continue; }
+        const px = x(i), py = y(v);
+        if (!pen) { ctx.beginPath(); ctx.moveTo(px, py); pen = true; }
+        else ctx.lineTo(px, py);
+      }
+      if (pen) ctx.stroke();
+      const last = hist[n - 1][s.key];
+      if (last != null) {
+        ctx.fillStyle = s.color;
+        ctx.beginPath(); ctx.arc(x(n - 1), y(last), 2.2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.textBaseline = 'alphabetic';
+  }
 
   // Corpus pool ONLY. Priors are witness-tier knowledge that steers surf and
   // fold; they are not things to ask questions of. An older proxy that ignores
@@ -3571,11 +3757,26 @@ class Component extends DCLogic {
 
       let promptView = started.promptView;
       let done = false;
+      let clientStep = 0;
       while (!done) {
+        // The Ollama path shows "step N: thinking…" the instant generation
+        // starts (react-loop.mjs emits {phase:"generating"} server-side,
+        // before calling the model — see LAWS.md L1, "no dead air"). This
+        // path had no equivalent: hasEoCodeSteps gates the entire "Live
+        // transcript" section on eoCodeSteps.length, and nothing was pushed
+        // to it until an ENTIRE WebLLM generation (which can run 10s of
+        // seconds on a local model under load) finished AND the /step round
+        // trip after it resolved — a real, reproduced silence: "Ready",
+        // click Run, the panel shows nothing at all until the first full
+        // step completes, indistinguishable from broken. Mirrors the
+        // server's own event shape exactly so eoCodeStepVals renders both
+        // paths identically.
+        this.setState(s => ({ eoCodeSteps: s.eoCodeSteps.concat([{ phase: 'generating', step: clientStep }]) }));
         let raw = '';
         for await (const delta of window.EOWebLLM.stream(promptView, { signal: this._eoCodeAbort.signal })) {
           raw += delta;
         }
+        clientStep += 1;
         const stepRes = await fetch(this.proxyUrl() + `/api/eocode/session/${sessionId}/step`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ raw }),
@@ -4316,6 +4517,7 @@ class Component extends DCLogic {
       if (merged.length && !this.state.activeProjectId) {
         this.setState({ activeProjectId: merged[0].id });
       }
+      this._loadGlassLog(this.state.activeProjectId ?? null, { announce: true });
     } catch {
       // Offline/unreachable proxy — fall back to whatever was local so
       // project setup still works; checkHealth()'s retry banner covers the rest.
@@ -4323,6 +4525,7 @@ class Component extends DCLogic {
         this.setState({ projects: localProjects });
         if (!this.state.activeProjectId) this.setState({ activeProjectId: localProjects[0].id });
       }
+      this._loadGlassLog(this.state.activeProjectId ?? null, { announce: true });
     }
   }
 
@@ -4366,6 +4569,9 @@ class Component extends DCLogic {
     // stale enough that a reader who switches and immediately checks
     // Documents sees the wrong project's list.
     this.fetchSources();
+    // The glass box follows the project: each project keeps its own trace, so
+    // switching projects swaps the box rather than mixing activity across them.
+    this._loadGlassLog(id);
     if (project) {
       this.logAdd('●', `Switched to project "${project.name}"`, 'chat');
     }
@@ -4386,7 +4592,11 @@ class Component extends DCLogic {
     const nextActive = this.state.activeProjectId === id ? (remaining[0] ? remaining[0].id : null) : this.state.activeProjectId;
     this.setProjects(() => remaining, { activeProjectId: nextActive, view: 'projects' });
     fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {});
+    // The project's trace dies with it; the box then shows whatever project is
+    // active next (or the Room's own trace when none is).
+    this._purgeGlassLog(id);
     this.logAdd('⊘', 'Project deleted', 'chat');
+    this._loadGlassLog(this.state.activeProjectId ?? null);
   }
 
   goToProjects() {
@@ -4946,6 +5156,49 @@ class Component extends DCLogic {
     try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
   }
 
+  // ── Glass-box persistence ────────────────────────────────────────────────
+  // The glass box must survive a refresh: it is the trace of everything the
+  // engine did for a project, and a trace that starts empty every reload is a
+  // trace that lies about the past. Entries live in one localStorage store
+  // keyed by project id (GLASSLOG_NONE when no project is active), and the
+  // box shows only the active project's slice — switching projects swaps the
+  // box, exactly like the chat surface swaps conversations.
+  _glassLogKey(projectId) {
+    return projectId ?? GLASSLOG_NONE;
+  }
+  _glassLogForProject(projectId) {
+    const store = this._loadLocal(GLASSLOG_KEY) || {};
+    return store[this._glassLogKey(projectId)] || [];
+  }
+  _persistGlassLog(projectId, log) {
+    const key = this._glassLogKey(projectId);
+    const store = this._loadLocal(GLASSLOG_KEY) || {};
+    store[key] = log.slice(-GLASS_LOG_MAX);
+    try {
+      localStorage.setItem(GLASSLOG_KEY, JSON.stringify(store));
+    } catch {
+      // Quota exhausted — full prompt rows are big. Keep the freshest half,
+      // truncating each row, rather than silently dropping the whole project
+      // trace the next time it is read.
+      store[key] = store[key].slice(-Math.floor(GLASS_LOG_MAX / 2))
+        .map(e => ({ ...e, text: typeof e.text === 'string' ? e.text.slice(0, 2000) : e.text }));
+      try { localStorage.setItem(GLASSLOG_KEY, JSON.stringify(store)); } catch {}
+    }
+  }
+  _purgeGlassLog(projectId) {
+    const key = this._glassLogKey(projectId);
+    const store = this._loadLocal(GLASSLOG_KEY);
+    if (store && store[key]) { delete store[key]; this._saveLocal(GLASSLOG_KEY, store); }
+  }
+  _loadGlassLog(projectId, { announce = false } = {}) {
+    const restored = this._glassLogForProject(projectId);
+    const priorLen = this.state.log.length;
+    this.setState({ log: restored });
+    if (announce && restored.length && restored.length !== priorLen) {
+      this.logAdd('⌁', `Glass box restored — ${restored.length} event(s) from before this reload`, 'chat');
+    }
+  }
+
   // Project instructions are server-authoritative when the proxy answers, but
   // this app is also designed to run with no engine at all (GitHub Pages, the
   // WebLLM local model). A project TITLE already survives that world because
@@ -5017,7 +5270,35 @@ class Component extends DCLogic {
   // pre-update value.
   updateActiveSpace(fn) {
     this.setState(
-      s => ({ spaces: s.spaces.map(sp => (sp.id === s.activeSpaceId ? fn(sp) : sp)) }),
+      s => {
+        const id = s.activeSpaceId;
+        const hasMatch = s.spaces.some(sp => sp.id === id);
+        // activeSpace() fabricates a { id: 'default', turns: [], ... }
+        // stand-in for rendering whenever the active project has zero real
+        // conversations yet (see its own comment) — that stand-in is never
+        // written into s.spaces. send() now guards its own entry point by
+        // awaiting newConversation() first (see send()'s comment), but this
+        // function is the ONE choke point every write path (24 call sites
+        // and counting: turns, sources, retrievals, summaries, toggles...)
+        // goes through, present and future. Mapping over the real array
+        // below with no match would silently drop the write — rather than
+        // rely on every future caller remembering its own guard, materialize
+        // a real local space here too, same shape newConversation()'s own
+        // offline fallback already uses, so a write NEVER vanishes for want
+        // of a home.
+        const spaces = hasMatch ? s.spaces : s.spaces.concat([{
+          id: id || ('local-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)),
+          name: 'New conversation', spaceId: s.activeProjectId || null,
+          pool: (s.projects.find(p => p.id === s.activeProjectId) || {}).pool || 'corpus',
+          parentId: null, path: null, mode: 'chat', childIds: [],
+          turns: [], retrievals: [], sources: [], sourcesOff: {}, _loaded: true,
+        }]);
+        const targetId = hasMatch ? id : spaces[spaces.length - 1].id;
+        return {
+          spaces: spaces.map(sp => (sp.id === targetId ? fn(sp) : sp)),
+          activeSpaceId: targetId,
+        };
+      },
       () => this._saveLocal(SPACES_KEY, this.state.spaces)
     );
   }
@@ -5904,6 +6185,77 @@ class Component extends DCLogic {
     this.logAdd('⊘', 'Conversation deleted', 'chat');
   }
 
+  // One glass-box row per engine SSE event. The box's whole job is to show
+  // what the system did — too much rather than too little — so every server
+  // event that has anything to say gets a row here, in the order it happened.
+  // Pure narration of server facts, never throws; shared by the askConversation
+  // and regenerateAnswer SSE loops so both narrate the full trace.
+  _glassTrace(type, data) {
+    if (type === 'accepted') return this.logAdd('⌐', `Engine accepted — ${data.mode || 'chat'}${data.webSearch ? ' · web search on' : ''}`, 'chat');
+    if (type === 'retrieval_started') return this.logAdd('→', `Retrieval started${data.mode ? ` (${data.mode})` : ''}${data.webSearch ? ' — web search requested' : ''}`, 'sources');
+    if (type === 'witnesses_selected') {
+      this.logAdd('⋈', `Evidence surf: ${data.sourceCount ?? 0} source(s) found, ${data.foldedCount ?? 0} folded, ${data.tokens ?? 0} tokens${data.dropped ? `, ${data.dropped} dropped` : ''}${data.empty ? ' — nothing matched' : ''}${data.priorWidening ? ' · priors widened the pull' : ''}`, 'sources');
+      (data.gaps || []).forEach(g => this.logAdd('⊘', `Gap: ${g.reason || g.type}`, 'sources'));
+      this._logSurf(data.citations || data.retrieved || [], 'sources');
+      return;
+    }
+    if (type === 'writing_started') return this.logAdd('→', `Writing started — ${data.passageCount ?? 0} passage(s) in hand`, 'chat');
+    if (type === 'draft_info') return this.logAdd('◱', `Draft: ${data.draftModel}${data.correctionModel ? ` · correction pass by ${data.correctionModel}` : ''}`, 'chat');
+    if (type === 'prompt_sent') {
+      const msgs = data.messages || [];
+      this.logAdd('⌁', `Prompt sent — ${data.label || `${msgs.length} message(s)`}${data.model ? ` · ${data.model}` : ''}${data.maxTokens ? ` · ${data.maxTokens} token cap` : ''}`, 'chat');
+      msgs.forEach(m => {
+        const role = m.role || '?';
+        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        this.logAdd(role === 'system' ? '⚙' : role === 'assistant' ? '◑' : '▸', `${role}: ${content}`, 'chat');
+      });
+      return;
+    }
+    if (type === 'gate_report') {
+      return this.logAdd('§', `Instruction gate: ${(data.activeIds || []).length} rule(s) in force, ${(data.foldedIds || []).length} folded — ${data.blockTokens ?? 0} tokens of ${data.budget ?? 0} budget${data.overflow ? ` (overflow ${data.overflow})` : ''}${(data.corpora || []).map(c => ` · ${c.corpus || 'corpus'}: ${c.activeIds?.length ?? 0} in force, ${c.foldedIds?.length ?? 0} folded`).join('')}`, 'sources');
+    }
+    if (type === 'cross_turn_correction') return this.logAdd('⊘', `Cross-turn correction: previous answer flagged (${(data.flags || []).join(', ')}) — carried into this question`, 'chat');
+    if (type === 'citation_verified') {
+      return this.logAdd(data.resolved ? '●' : '⊘', data.resolved
+        ? `[${data.num}] verified — ${data.sourceId ? this._shortSource(data.sourceId) : 'web source'}`
+        : `[${data.num}] unresolved — no passage backs it`, 'sources');
+    }
+    if (type === 'verbatim_snippet') return this.logAdd('◱', `[${data.num}] verbatim snippet attached`, 'chat');
+    if (type === 'grounding_checked') {
+      return this.logAdd(data.clean ? '●' : '⊘', `Grounding check: ${data.sentences ?? 0} sentence(s), ${data.atomsChecked ?? 0} atom(s) checked, ${data.quotesVerified ?? 0}/${data.quotesChecked ?? 0} quotes verbatim${data.unresolvedNums?.length ? ` · ${data.unresolvedNums.length} bracket(s) unresolved` : ''}${data.findings?.length ? ` · ${data.findings.length} finding(s)` : ''}`, 'chat');
+    }
+    if (type === 'review_report') {
+      return this.logAdd(data.verdict === 'FLAGGED' ? '⊘' : '●', `Output review: ${data.verdict} — ${(data.flags || []).length} flag(s)${data.corrected ? ' · corrected' : ''}${data.iterations ? ` · ${data.iterations} round(s)` : ''}`, 'chat');
+    }
+    if (type === 'discourse_review') return this.logAdd('⊘', `Discourse review: ${data.verdict} — ${(data.flags || []).length} flag(s)${data.corrected ? ' · corrected' : ''}`, 'chat');
+    if (type === 'discourse_report') return this.logAdd('◱', `Desk: ${data.facts ?? 0} fact(s)${data.acknowledged ? ' · acknowledged' : ' · not acknowledged'}${data.denial ? ` · denial ${data.denial.verdict}` : ''}${data.deskTokens ? ` · ${data.deskTokens} tokens` : ''}`, 'chat');
+    if (type === 'gap') return this.logAdd('⊘', `Gap: ${data.reason || data.type}`, 'sources');
+    if (type === 'holonic_plan' || type === 'holonic_section_research' || type === 'holonic_section_written' || type === 'holonic_section_ungrounded' || type === 'holonic_assemble') {
+      const log = this._holonicLogEntry(type, data);
+      if (log) this.logAdd(type === 'holonic_section_ungrounded' ? '⊘' : '⊸', log, 'chat');
+      if (type === 'holonic_section_research') {
+        this._logSurf(data.localPassages || [], 'sources');
+        this._logSurf(data.webPassages || [], 'sources');
+      }
+      return;
+    }
+    if (type === 'completed') return this.logAdd('●', `Answer ${data.status === 'interrupted' ? 'interrupted' : 'complete'}${data.summary ? ` — ${data.summary}` : ''}`, 'chat');
+  }
+
+  // Logs each passage the surf actually returned, verbatim, so the reader can
+  // see what the fold had to work with — not just the counts. `citations` is
+  // the passage table (span/source/score/text), `retrieved` the web form.
+  _logSurf(passages, category = 'sources') {
+    (passages || []).forEach((p, i) => {
+      const n = p.index ?? i + 1;
+      const who = p.title ? `${p.title} — ${p.url || ''}` : this._shortSource(p.source_id || p.sourceId || 'source');
+      const score = p.score !== undefined && p.score !== null ? ` · score ${Number(p.score).toFixed(2)}` : '';
+      const span = p.byte_start !== undefined ? ` · bytes ${p.byte_start}–${p.byte_end ?? ''}` : '';
+      const text = (p.text || p.snippet || p.title || '').trim();
+      this.logAdd('▸', `[${n}] ${who}${score}${span} — ${text}`, category);
+    });
+  }
+
   // Maps a typed SSE event from turn-controller.js onto a terse phase label
   // shown inline — surfing (retrieval), folding (witness processing), thinking
   // (generation). Collapses to null so the indicator disappears once the answer
@@ -5942,7 +6294,14 @@ class Component extends DCLogic {
   // modal's running history of what the answer actually did, the same events
   // that drive the phase pill. Null for events with nothing worth logging.
   _holonicLogEntry(type, data) {
-    if (type === 'holonic_plan') return `Plan: ${data.depth} · ${(data.sections || []).join(' / ')}`;
+    // sections is array-shaped here (turn-controller's holonic_plan sends
+    // section TITLES) but a bare count on holonic_assemble below (same field
+    // name, deliberately different shape per event — see that branch). This
+    // function's own comment promises callers it never throws; Array.isArray
+    // keeps that promise even if a future event ever crosses the two shapes,
+    // rather than trusting `|| []` to save a non-array truthy value from
+    // reaching .join, which it does not.
+    if (type === 'holonic_plan') return `Plan: ${data.kind || data.depth} · ${(Array.isArray(data.sections) ? data.sections : []).join(' / ')}`;
     if (type === 'holonic_section_research') {
       const web = data.web !== undefined ? ` · ${data.web} web` : '';
       return `Section "${data.id}": ${data.local} local${web}`;
@@ -6007,11 +6366,27 @@ class Component extends DCLogic {
             renameTurn(data.turnId);
             liveId = data.turnId;
             this.setState({ streamingTurnId: data.turnId });
+            this._glassTrace(type, data);
+          }
+          if (type === 'retrieval_started') {
+            this._glassTrace(type, data);
           }
           if (type === 'witnesses_selected') {
             grounding = data;
             patchTurn({ grounding: data });
-            (data.gaps || []).forEach(g => this.logAdd('⊘', `Gap: ${g.reason || g.type}`, 'sources'));
+            this._glassTrace(type, data);
+          }
+          if (type === 'writing_started') {
+            this._glassTrace(type, data);
+          }
+          if (type === 'draft_info') {
+            this._glassTrace(type, data);
+          }
+          if (type === 'gate_report') {
+            this._glassTrace(type, data);
+          }
+          if (type === 'cross_turn_correction') {
+            this._glassTrace(type, data);
           }
           if (type === 'answer_delta') {
             // The prose itself is now visible in the turn's own bubble — the
@@ -6022,17 +6397,34 @@ class Component extends DCLogic {
           if (type === 'citation_verified') {
             citations = citations.filter(c => c.num !== data.num).concat([this._clientCitation(data, grounding)]);
             patchTurn({ citations: citations.slice() });
+            this._glassTrace(type, data);
           }
           if (type === 'verbatim_snippet') {
             snippets = snippets.filter(s => s.num !== data.num).concat([this._clientSnippet(data)]);
             patchTurn({ snippets: snippets.slice() });
+            this._glassTrace(type, data);
+          }
+          if (type === 'grounding_checked') {
+            this._glassTrace(type, data);
+          }
+          if (type === 'review_report') {
+            this._glassTrace(type, data);
+          }
+          if (type === 'discourse_review') {
+            this._glassTrace(type, data);
+          }
+          if (type === 'discourse_report') {
+            this._glassTrace(type, data);
           }
           if (type === 'gap') {
-            this.logAdd('⊘', `Gap: ${data.reason || data.type}`, 'sources');
+            this._glassTrace(type, data);
           }
           if (type === 'holonic_plan' || type === 'holonic_section_research' || type === 'holonic_section_written' || type === 'holonic_section_ungrounded' || type === 'holonic_assemble') {
             const log = this._holonicLogEntry(type, data);
-            if (log) this.setState(s => ({ thinkingLog: (s.thinkingLog || []).concat([{ glyph: type === 'holonic_section_ungrounded' ? '⊘' : '⊸', text: log }]) }));
+            if (log) {
+              this.setState(s => ({ thinkingLog: (s.thinkingLog || []).concat([{ glyph: type === 'holonic_section_ungrounded' ? '⊘' : '⊸', text: log }]) }));
+              this._glassTrace(type, data);
+            }
           }
           if (type === 'failed') {
             throw new Error(data.message || 'turn failed');
@@ -6053,6 +6445,7 @@ class Component extends DCLogic {
               }));
               this.logAdd('⋈', `${retrieval.summary}`, 'sources');
             }
+            this._glassTrace(type, data);
             this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null, thinkingLog: [] });
           }
 
@@ -6062,7 +6455,14 @@ class Component extends DCLogic {
       }
     } catch (err) {
       this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
-      patchTurn({ a: '(Proxy unavailable — ' + err.message + ')', citations: [], snippets: [], retrieval: null });
+      // "Proxy unavailable" is a specific, falsifiable claim — and was false
+      // every time a bug in THIS function's own SSE-event handling threw
+      // (see LAWS.md L10b): the proxy answered every fetch fine, the crash
+      // was purely client-side. logAdd two lines below already used the
+      // honest, cause-agnostic "Chat failed" wording; this now matches it
+      // instead of pointing the next debugger at the proxy for a bug that
+      // was never there.
+      patchTurn({ a: '(Answer failed — ' + err.message + ')', citations: [], snippets: [], retrieval: null });
       this.logAdd('○', `Chat failed — ${err.message}`, 'chat');
     }
   }
@@ -6112,16 +6512,20 @@ class Component extends DCLogic {
           const type = typeLine.slice(7).trim();
           let data;
           try { data = JSON.parse(dataLine.slice(6)); } catch { continue; }
-          if (type === 'witnesses_selected') { grounding = data; patchTurn({ grounding: data }); }
+          if (type === 'witnesses_selected') { grounding = data; patchTurn({ grounding: data }); this._glassTrace(type, data); }
           if (type === 'answer_delta') { this.setState({ thinkingPhase: null, thinkingMeta: null }); patchTurn({ a: data.text }); }
           if (type === 'citation_verified') {
             citations = citations.filter(c => c.num !== data.num).concat([this._clientCitation(data, grounding)]);
             patchTurn({ citations: citations.slice() });
+            this._glassTrace(type, data);
           }
           if (type === 'verbatim_snippet') {
             snippets = snippets.filter(s => s.num !== data.num).concat([this._clientSnippet(data)]);
             patchTurn({ snippets: snippets.slice() });
+            this._glassTrace(type, data);
           }
+          if (type === 'gap') this._glassTrace(type, data);
+          if (type === 'retrieval_started' || type === 'writing_started' || type === 'draft_info' || type === 'gate_report' || type === 'grounding_checked' || type === 'review_report' || type === 'discourse_review' || type === 'discourse_report' || type === 'cross_turn_correction' || type === 'holonic_plan' || type === 'holonic_section_research' || type === 'holonic_section_written' || type === 'holonic_section_ungrounded' || type === 'holonic_assemble') this._glassTrace(type, data);
           if (type === 'failed') throw new Error(data.message || 'regenerate failed');
           if (type === 'completed') {
             const resolved = citations.filter(c => c.resolved);
@@ -6132,6 +6536,8 @@ class Component extends DCLogic {
               model: data.model, retrieval, answerStatus: data.status,
               holonic: data.holonic || null,
             });
+            if (retrieval) this.logAdd('⋈', `${retrieval.summary}`, 'sources');
+            this._glassTrace(type, data);
             this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
           }
           const phase = this._phaseForEvent(type, data);
@@ -6166,6 +6572,17 @@ class Component extends DCLogic {
     if (this.state.streamingLoading) return;
     const q = this.state.draft.trim();
     if (!q && !this.state.draftAttachments.length) return;
+    // A brand-new project (opened without first pressing "+ New chat") has
+    // zero real conversations, so activeSpace() fabricates a stand-in that is
+    // never written into this.state.spaces (see updateActiveSpace's own
+    // comment on why that matters). Ensure a real, persisted conversation
+    // exists up front — same fallback newConversation() already uses for
+    // "+ New chat" with no proxy reachable — so this turn lands somewhere a
+    // render can show it, rather than surviving only as a completed fetch
+    // nobody ever sees.
+    if (!this.state.spaces.some(sp => sp.id === this.state.activeSpaceId)) {
+      await this.newConversation({ silent: true });
+    }
     const mode = this.state.chatMode || 'chat';
     // Captured before the clear below — the reader panel needs to know which
     // files rode along with THIS question after it scrolls into history, and
@@ -6178,7 +6595,14 @@ class Component extends DCLogic {
     this.logAdd('→', `Sending ${mode !== 'chat' ? mode + ' ' : ''}question…`, 'chat');
     const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
     const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
-    const localReady = this.state.localModel && this.state.localModelStatus === 'ready';
+    // 'standby' counts as usable here: the plain conversational path only
+    // ever calls window.EOWebLLM.stream(), which answers from the
+    // zero-dependency standby responder in that status instead of throwing
+    // (see webllm-client.js). The tool-executing eoCode path and the
+    // fidelity-checked long-form pipeline deliberately keep requiring true
+    // 'ready' — see their own status checks — since a canned standby reply
+    // cannot drive either of those.
+    const localUsable = this.state.localModel && (this.state.localModelStatus === 'ready' || this.state.localModelStatus === 'standby');
     if (anthropic) {
       // Static build, Anthropic selected: generation happens in this tab via a
       // direct browser call to the Anthropic API with the reader's own key.
@@ -6191,7 +6615,7 @@ class Component extends DCLogic {
       // Static build, Ollama connected: generation happens in this tab via a
       // direct browser call to the reader's Ollama instance.
       await this.localAskConversation(q, attachments);
-    } else if (localReady) {
+    } else if (localUsable) {
       await this.localAskConversation(q, attachments);
     } else if (ON_GH_PAGES) {
       // Static build: the in-browser WebLLM model is the ONLY other answer
@@ -6220,17 +6644,16 @@ class Component extends DCLogic {
     }));
 
     const status = this.state.localModelStatus;
+    // status === 'standby' is deliberately absent here: localUsable (see the
+    // caller) already routes it to localAskConversation, which answers from
+    // the standby responder instead of landing on this "no answer path" turn.
     const reason = reasonKey === 'no-anthropic-key'
       ? 'Anthropic is selected as the answer provider but no API key is set. Open Settings, add your Anthropic API key, and try again.'
-      : status === 'unsupported'
-        ? (this.state.localModelError || 'This browser has no WebGPU, which the in-browser model needs.')
-        : status === 'error'
-          ? (this.state.localModelError || 'The in-browser model failed to download.')
-          : status === 'loading'
-            ? 'The in-browser model is still downloading — wait for it to finish, then ask again.'
-            : ON_GH_PAGES
-              ? 'The in-browser model has not started. Reload this tab and it will download automatically.'
-              : 'The in-browser model is not turned on. Open Settings and turn on Local, then wait for the download to finish.';
+      : status === 'loading'
+        ? 'The in-browser model is still downloading — wait for it to finish, then ask again.'
+        : ON_GH_PAGES
+          ? 'The in-browser model has not started. Reload this tab and it will download automatically.'
+          : 'The in-browser model is not turned on. Open Settings and turn on Local, then wait for the download to finish.';
 
     this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
     patchTurn({
@@ -6269,7 +6692,7 @@ class Component extends DCLogic {
     this.setState(s => ({ chatMode: s.chatMode === 'think' ? 'chat' : 'think' }));
   }
   retryLocalModel() {
-    if (window.EOWebLLM) window.EOWebLLM.init();
+    if (window.EOWebLLM) window.EOWebLLM.retryNow();
   }
 
   // Install a different in-browser model. The old one's weights are deleted
@@ -6316,43 +6739,44 @@ class Component extends DCLogic {
   _localModelProps(S) {
     const status = S.localModelStatus;
     const on = S.localModel && status === 'ready';
+    // 'standby' reads as its own state, not a flavor of "on" or "off": the
+    // toggle is lit differently, and the label says outright that replies are
+    // coming from the lightweight fallback, not the real model, and that a
+    // retry is already running in the background (see _enterStandby in
+    // webllm-client.js — there is no manual click required for it to resolve).
+    const standby = S.localModel && status === 'standby';
     const label = ON_GH_PAGES
-      ? (status === 'unsupported'
-        ? 'Local (WebLLM) — cannot run in this browser'
-        : status === 'error'
-          ? 'Local (WebLLM) — download failed, click to retry'
-          : status === 'loading'
-            ? 'Local (WebLLM) — downloading…'
-            : on
-              ? 'Local (WebLLM) — in-browser model'
-              : 'Local (WebLLM) — the static build has no engine')
-      : status === 'unsupported'
-        ? 'Local model unavailable — in-browser model cannot run here'
-        : status === 'error'
-          ? 'Local model download failed — click to retry'
-          : status === 'loading'
-            ? 'Local model downloading…'
-            : on
-              ? 'Local model on — click to turn off'
-              : 'Local model off — click to download and use it for this reply';
-    const active = on;
+      ? (standby
+        ? 'Local (WebLLM) — standby mode, retrying in the background'
+        : status === 'loading'
+          ? 'Local (WebLLM) — downloading…'
+          : on
+            ? 'Local (WebLLM) — in-browser model'
+            : 'Local (WebLLM) — the static build has no engine')
+      : standby
+        ? 'Local model — standby mode, retrying in the background'
+        : status === 'loading'
+          ? 'Local model downloading…'
+          : on
+            ? 'Local model on — click to turn off'
+            : 'Local model off — click to download and use it for this reply';
+    const active = on || standby;
     return {
       localModel: S.localModel,
       localLabel: label,
-      localBg: active ? '#1F5A4C' : 'none',
-      localColor: active ? '#FFFDFA' : (status === 'unsupported' ? '#C9C4B8' : '#8C877C'),
-      localBorder: status === 'error' ? '#c0341a' : (active ? '#1F5A4C' : '#E0DACE'),
-      localIcon: status === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
-      toggleLocalModel: (ON_GH_PAGES || status === 'unsupported') ? () => {} : () => this.toggleLocalModel(),
+      localBg: on ? '#1F5A4C' : standby ? '#8C6A1F' : 'none',
+      localColor: active ? '#FFFDFA' : '#8C877C',
+      localBorder: standby ? '#8C6A1F' : (active ? '#1F5A4C' : '#E0DACE'),
+      localIcon: status === 'loading' ? 'ph ph-spinner eo-spin' : standby ? 'ph ph-clock-countdown' : 'ph ph-cpu',
+      toggleLocalModel: ON_GH_PAGES ? () => {} : () => this.toggleLocalModel(),
       retryLocalModel: () => this.retryLocalModel(),
-      localShowRetry: status === 'error',
+      localShowRetry: standby,
       localStatusText: !S.localModel ? null
-        : status === 'unsupported' ? S.localModelError
+        : standby ? `Standby mode — the real model is retrying automatically (${S.localModelStandbyReason || 'unavailable right now'}). Basic chat still works; deeper reading and eoCode need the real model.`
         : status === 'loading' ? `${S.localModelProgress.text} ${S.localModelProgress.percent}%`.trim()
-        : status === 'error' ? `Local model: ${S.localModelError}`
         : status === 'ready' ? `Local model ready — ${window.EOWebLLM ? window.EOWebLLM.modelLabel() : ''} (answers stay in this tab, not saved)`
         : null,
-      localStatusColor: (status === 'error' || status === 'unsupported') ? '#c0341a' : '#8C877C',
+      localStatusColor: standby ? '#8C6A1F' : '#8C877C',
     };
   }
 
@@ -6376,17 +6800,17 @@ class Component extends DCLogic {
         busy,
         progressWidth: `${Math.max(2, S.localModelProgress.percent || 0)}%`,
         state: busy ? `downloading · ${S.localModelProgress.percent}%`
-          : active ? (status === 'ready' ? 'ready now' : status === 'error' ? 'failed' : 'selected')
+          : active ? (status === 'ready' ? 'ready now' : status === 'standby' ? 'standby' : 'selected')
           : m.cached === true ? 'on disk'
           : m.cached === false ? 'not downloaded'
           : '',
         stateColor: busy ? '#1F5A4C'
           : active && status === 'ready' ? '#1F5A4C'
-          : active && status === 'error' ? '#A3592B'
+          : active && status === 'standby' ? '#8C6A1F'
           : m.cached === true ? '#6E6A60'
           : '#A39D91',
         stateBg: busy || (active && status === 'ready') ? '#E5EDE9'
-          : active && status === 'error' ? '#FBEFE3'
+          : active && status === 'standby' ? '#F5EEDC'
           : m.cached === true ? '#F2EFE8'
           : 'transparent',
         border: active ? '#1F5A4C' : '#E4DFD5',
@@ -6398,8 +6822,7 @@ class Component extends DCLogic {
     const gb = (n) => (n / 1073741824).toFixed(1) + ' GB';
     const activeRow = rows.find(r => r.active);
     const cardStatusText = !S.localModelId ? 'Not started yet'
-      : status === 'unsupported' ? (S.localModelError || 'Cannot run in this browser')
-      : status === 'error' ? (S.localModelError || 'Download failed')
+      : status === 'standby' ? `Standby mode — ${S.localModelStandbyReason || 'the real model is unavailable right now'}. Retrying automatically in the background; basic chat still works from a lightweight fallback.`
       : status === 'loading' ? `${S.localModelProgress.text || 'Downloading…'} ${S.localModelProgress.percent}%`.trim()
       : status === 'ready' ? 'Ready — running in this tab, weights stay cached for next time'
       : 'Not started yet';
@@ -6416,20 +6839,19 @@ class Component extends DCLogic {
       // it") answered in one place, instead of having to match the active
       // row's border color against the rest of the list.
       localCardModelName: window.EOWebLLM ? window.EOWebLLM.modelLabel() : (activeRow ? activeRow.label : ''),
-      localCardCanRename: status !== 'unsupported' && !!S.localModelId,
+      localCardCanRename: !!S.localModelId,
       localCardStatusText: cardStatusText,
-      localCardStatusColor: (status === 'error' || status === 'unsupported') ? '#A3592B' : (status === 'ready' ? '#1F5A4C' : '#6E6A60'),
+      localCardStatusColor: status === 'standby' ? '#8C6A1F' : (status === 'ready' ? '#1F5A4C' : '#6E6A60'),
       localCardIcon: status === 'loading' ? 'ph ph-spinner eo-spin'
         : status === 'ready' ? 'ph ph-check-circle'
-        : status === 'error' ? 'ph ph-warning-circle'
-        : status === 'unsupported' ? 'ph ph-x-circle'
+        : status === 'standby' ? 'ph ph-clock-countdown'
         : 'ph ph-cpu',
-      localCardIconColor: status === 'ready' ? '#1F5A4C' : (status === 'error' || status === 'unsupported') ? '#A3592B' : '#8C877C',
-      localCardBorder: status === 'ready' ? '#CFE0D8' : (status === 'error' || status === 'unsupported') ? '#E7C9AE' : '#E4DFD5',
+      localCardIconColor: status === 'ready' ? '#1F5A4C' : status === 'standby' ? '#8C6A1F' : '#8C877C',
+      localCardBorder: status === 'ready' ? '#CFE0D8' : status === 'standby' ? '#EEE0BC' : '#E4DFD5',
       localCardBg: status === 'ready' ? '#F1F5F3' : '#FFFDFA',
       localCardShowProgress: status === 'loading',
       localCardProgressWidth: `${Math.max(2, S.localModelProgress.percent || 0)}%`,
-      localCardShowRetry: status === 'error',
+      localCardShowRetry: status === 'standby',
       localCardShowStart: status === 'idle' && !!S.localModelId,
       startLocalModel: () => { if (window.EOWebLLM) window.EOWebLLM.init(); },
       // Cosmetic only — see webllm-client.js setNickname/modelLabel. Renaming
@@ -6575,6 +6997,7 @@ class Component extends DCLogic {
       const parsed = JSON.parse(m[0]);
       const needsWeb = typeof parsed.needsWeb === 'boolean' ? parsed.needsWeb : null;
       const query = String(parsed.query || '').trim().slice(0, 200);
+      this._thinkingLog('→', `Web gate vote: ${needsWeb === true ? 'needs live research' : needsWeb === false ? 'no web needed' : 'model returned no verdict'} — query "${query || question}"`);
       return { needsWeb, query: query || question };
     } catch {
       return { needsWeb: null, query: question };
@@ -6613,8 +7036,12 @@ class Component extends DCLogic {
   // step and cleared at the end — so opening "details →" on a local turn
   // always showed "Waiting for engine activity… 0 step(s)" no matter how much
   // real work (web searches included) had actually happened.
+  //
+  // Every entry lands in the glass box too — this is the local-mode trace, and
+  // the box exists to show everything the engine did, in order.
   _thinkingLog(glyph, text) {
     this.setState(s => ({ thinkingLog: (s.thinkingLog || []).concat([{ glyph, text }]) }));
+    this.logAdd(glyph, text, 'chat');
   }
 
   // Mirrors the server's deliberate streaming experience: every section that
@@ -6659,7 +7086,6 @@ class Component extends DCLogic {
         break;
       }
     }
-    this.logAdd('→', `Deliberate: ${e.phase}${e.title ? ' — ' + e.title : ''}${e.sections !== undefined ? ' · ' + e.sections + ' section(s)' : ''}`, 'chat');
   }
 
   // Local mode: retrieval only through the proxy — POST /api/ground (against
@@ -6743,6 +7169,7 @@ class Component extends DCLogic {
     } else {
       this._thinkingLog('⊸', `Retrieval found ${groundData.total ?? 0} passage(s), ${groundData.folded ?? 0} folded`);
     }
+    if (groundData?.citations?.length) this._logSurf(groundData.citations);
 
     // The proxy gates project instructions into the server answer; in local
     // mode it never sees the generation call, so the reader's rules are loaded
@@ -8180,10 +8607,15 @@ class Component extends DCLogic {
   }
 
   logAdd(glyph, text, category) {
-    this.setState(s => {
-      const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      return { log: s.log.concat([{ time, glyph, text, category }]) };
-    });
+    this.setState(
+      s => ({
+        log: s.log.concat([{
+          time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+          glyph, text, category,
+        }]),
+      }),
+      () => this._persistGlassLog(this.state.activeProjectId ?? null, this.state.log)
+    );
   }
 
   goToApp() { window.location.href = './index.html'; }
@@ -8654,7 +9086,7 @@ class Component extends DCLogic {
     const S = this.state;
     const t = S.tab;
     const tabStyle = (name) => ({ color: t === name ? '#1B1A17' : '#8C877C', underline: t === name ? 'inset 0 -2px 0 0 #1F5A4C' : 'none' });
-    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses'), ins = tabStyle('insights'), ec = tabStyle('eocode');
+    const d = tabStyle('documents'), c = tabStyle('chat'), o = tabStyle('outline'), r = tabStyle('orbit'), g = tabStyle('glassbox'), pr = tabStyle('priors'), se = tabStyle('senses'), ins = tabStyle('insights'), ec = tabStyle('eocode'), mo = tabStyle('monitor');
     const active = this.activeSpace();
     const live = this.proxyLive();
     // The proxy being unreachable only means "no engine" if the in-browser
@@ -8663,7 +9095,7 @@ class Component extends DCLogic {
     // static build, the reader has Anthropic selected with a key — there is a
     // working answer path, and the alarming "no engine" banner and its
     // Retry/Set engine URL controls would be actively misleading there.
-    const usingLocalModel = S.localModel && (S.localModelStatus === 'ready' || S.localModelStatus === 'loading');
+    const usingLocalModel = S.localModel && (S.localModelStatus === 'ready' || S.localModelStatus === 'loading' || S.localModelStatus === 'standby');
     const usingAnthropic = ON_GH_PAGES && S.provider === 'anthropic' && !!this._anthropicApiKey();
     const engineUnavailable = !live && !usingLocalModel && !usingAnthropic;
     // Selection is by referent id — the identity the engine assigned — so two
@@ -9474,7 +9906,7 @@ class Component extends DCLogic {
         ? 'asserted by a per-text prior · aliases resolved'
         : 'engine-discovered · name variants merged, pronouns not';
 
-    const catList = ['all', 'sources', 'chat', 'spaces', 'reader', 'perception'];
+    const catList = ['all', 'sources', 'chat', 'spaces', 'reader', 'perception', 'eocode'];
     const categoryChips = catList.map(cat => ({
       label: cat === 'all' ? 'All' : cat[0].toUpperCase() + cat.slice(1),
       select: () => this.setState({ glassBoxCategory: cat }),
@@ -9486,9 +9918,43 @@ class Component extends DCLogic {
     // Chronological, as logged — the trace is read in the order it happened.
     const filteredLog = S.log.filter(e => S.glassBoxCategory === 'all' || e.category === S.glassBoxCategory);
 
+    // ── Monitor surface bindings ──
+    // Everything is driven off the snapshot's own availability flags: GPU only
+    // where the host reported it, Ollama where /api/ps or ps answered, nothing
+    // fabricated on devices that can't measure it.
+    const mon = S.monitor;
+    const monHas = !!mon;
+    const mfmt = (v, d) => (v == null ? '—' : v.toFixed(d));
+    const monitorGpuVisible = monHas && mon.gpuAvailable === true && mon.gpu.devicePct != null;
+    const monitorOllamaVisible = monHas && (mon.ollama.available || mon.ollama.cpuAvailable);
+    const monitorModel = monHas && mon.tokens.lastModel ? mon.tokens.lastModel : '';
+    const monitorVram = monHas && mon.ollama.available
+      ? (mon.ollama.loaded
+        ? `${mon.ollama.loaded} · ${mon.ollama.vramMb} MB VRAM`
+        : (mon.ollama.models.length ? `${mon.ollama.models.join(', ')} · ${mon.ollama.vramMb} MB VRAM` : 'no model loaded in VRAM'))
+      : '';
+
     return {
       showGlyphs: this.props.showGlyphs ?? true,
-      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses', isInsights: t === 'insights', isEoCode: t === 'eocode',
+      isDocuments: t === 'documents', isChat: t === 'chat', isOutline: t === 'outline', isOrbit: t === 'orbit', isGlassBox: t === 'glassbox', isPriors: t === 'priors', isSenses: t === 'senses', isInsights: t === 'insights', isEoCode: t === 'eocode', isMonitor: t === 'monitor',
+      monitorTabEnabled: S.monitorTabEnabled === true,
+      monitorHint: monHas ? `live · ${mon.ncpu} cores${mon.gpuAvailable ? ' · ' + (mon.gpuName || 'GPU') : ''}` : '…',
+      monitorSysCpu: monHas ? mfmt(mon.system.cpuPct, 0) : '…',
+      monitorCores: monHas ? mfmt(mon.system.cpuCores, 1) : '…',
+      monitorAppCpu: monHas ? mfmt(mon.app.cpuPct, 0) : '…',
+      monitorOllamaCpu: monHas && mon.ollama.cpuPct != null ? mfmt(mon.ollama.cpuPct, 0) : '—',
+      monitorOllamaVisible,
+      monitorGpuCpu: monHas && mon.gpu.devicePct != null ? mfmt(mon.gpu.devicePct, 0) : '—',
+      monitorGpuVisible,
+      monitorGpuMem: monHas && mon.gpu.memUsedMb != null ? `${mon.gpu.memUsedMb} MB` : '',
+      monitorMemPct: monHas ? mfmt(mon.system.memPct, 0) : '…',
+      monitorMemTotal: monHas ? `${Math.round(mon.system.memTotalMb / 1024)} GB` : '',
+      monitorTokRate: monHas ? mfmt(mon.tokens.rate, 1) : '…',
+      monitorTokTotal: monHas ? mon.tokens.total.toLocaleString() : '…',
+      monitorModel,
+      monitorVram,
+      monitorGenerating: monHas && (mon.app.generating || mon.tokens.generating),
+      setMonitorCanvas: (el) => { this.monitorCanvasEl = el; if (el) this.drawMonitor(); },
       webSearch: S.webSearch,
       // Web is opt-in: off until the reader asks for it, per turn-level consent.
       webLabel: S.webSearch ? 'Web search on — click to turn off' : 'Web search off — click to search the web too',
@@ -9498,9 +9964,17 @@ class Component extends DCLogic {
       toggleWebSearch: () => this.setState(s => ({ webSearch: !s.webSearch })),
       provider: S.provider,
       model: S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : ''),
-      modelPickerLabel: (S.provider === 'local' && window.EOWebLLM)
+      // Must mirror send()'s own routing exactly (localReady there =
+      // S.localModel && S.localModelStatus === 'ready') — this used to key
+      // off `S.provider === 'local'`, which is true by DEFAULT (see initial
+      // state) regardless of whether WebLLM was ever turned on, so the pill
+      // claimed "local · <WebLLM model>" for every reader on the ordinary
+      // proxy/Ollama path, never the model actually answering their turns.
+      modelPickerLabel: (S.localModel && S.localModelStatus === 'ready' && window.EOWebLLM)
         ? `local · ${window.EOWebLLM.modelLabel()}`
-        : `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`,
+        : (S.localModel && S.localModelStatus === 'standby')
+          ? 'local · standby'
+          : `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`,
       onProviderChange: (e) => {
         const id = e.target.value;
         if (id === 'ollama' && !S._ollamaAuthorized) {
@@ -9762,7 +10236,9 @@ class Component extends DCLogic {
       usingLocalModelBadge: !live && usingLocalModel,
       localModelBadgeText: S.localModelStatus === 'loading'
         ? `local model · loading ${S.localModelProgress.percent}%`
-        : 'local model · ready',
+        : S.localModelStatus === 'standby'
+          ? 'local model · standby'
+          : 'local model · ready',
       retryProxy: () => this.retryProxy(), goToApp: () => this.goToApp(),
       proxyUrlLabel: this.proxyUrl(),
       // Static (GitHub Pages) builds have no engine to reach at all — the
@@ -9797,6 +10273,7 @@ class Component extends DCLogic {
       tabSenses: () => this.setState({ tab: 'senses' }),
       tabInsights: () => { this.setState({ tab: 'insights' }); this.fetchInsights(); },
       tabEoCode: () => { this.setState({ tab: 'eocode' }); this.fetchEoCodeWorkspaces(); },
+      tabMonitor: () => this.setState({ tab: 'monitor' }),
       tabDocumentsColor: d.color, tabDocumentsUnderline: d.underline,
       tabChatColor: c.color, tabChatUnderline: c.underline,
       tabOutlineColor: o.color, tabOutlineUnderline: o.underline,
@@ -9806,6 +10283,7 @@ class Component extends DCLogic {
       tabSensesColor: se.color, tabSensesUnderline: se.underline,
       tabInsightsColor: ins.color, tabInsightsUnderline: ins.underline,
       tabEoCodeColor: ec.color, tabEoCodeUnderline: ec.underline,
+      tabMonitorColor: mo.color, tabMonitorUnderline: mo.underline,
       eoCodePrompt: S.eoCodePrompt || '',
       onEoCodePromptChange: (e) => this.setState({ eoCodePrompt: e.target.value }),
       eoCodeWorkspace: S.eoCodeWorkspace || 'default',
@@ -9822,17 +10300,19 @@ class Component extends DCLogic {
       eoCodeSourceOllamaBg: S.eoCodeSource !== 'webllm' ? '#F4F8F6' : 'none',
       eoCodeSourceWebLLMColor: S.eoCodeSource === 'webllm' ? '#1F5A4C' : '#8C877C',
       eoCodeSourceWebLLMBg: S.eoCodeSource === 'webllm' ? '#F4F8F6' : 'none',
+      // eoCode drives real tool calls from the model's structured output — the
+      // standby responder's canned replies cannot do that, so this stays
+      // gated to true 'ready' even though plain chat already accepts
+      // 'standby' (see localUsable in sendMessage).
       eoCodeWebLLMReady: S.localModelStatus === 'ready',
       eoCodeWebLLMStatusText: S.localModelStatus === 'ready'
         ? `Ready — ${(typeof window !== 'undefined' && window.EOWebLLM) ? window.EOWebLLM.modelLabel() : 'the local model'} will plan this run.`
         : S.localModelStatus === 'loading'
           ? `Downloading… ${(S.localModelProgress && S.localModelProgress.percent) || 0}%`
-          : S.localModelStatus === 'unsupported'
-            ? (S.localModelError || 'Not supported in this browser.')
-            : S.localModelStatus === 'error'
-              ? (S.localModelError || 'Failed to load.')
-              : 'Not started — turn it on under Settings → Local model.',
-      eoCodeWebLLMStatusColor: S.localModelStatus === 'ready' ? '#1F5A4C' : S.localModelStatus === 'error' || S.localModelStatus === 'unsupported' ? '#C0341A' : '#8C877C',
+          : S.localModelStatus === 'standby'
+            ? `Standby mode — ${S.localModelStandbyReason || 'the real model is unavailable right now'}. eoCode needs the real model; it's retrying automatically in the background.`
+            : 'Not started — turn it on under Settings → Local model.',
+      eoCodeWebLLMStatusColor: S.localModelStatus === 'ready' ? '#1F5A4C' : S.localModelStatus === 'standby' ? '#8C6A1F' : '#8C877C',
       eoCodeWebLLMNotStarted: S.localModelStatus === 'idle',
       startEoCodeWebLLM: () => { if (window.EOWebLLM) window.EOWebLLM.init(); },
       eoCodeRunning: S.eoCodeRunning,

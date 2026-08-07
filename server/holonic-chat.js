@@ -42,6 +42,14 @@
 import { autoAttachCitations } from "./citation-check.js";
 
 // ── bounds ──
+// These are infrastructure ceilings (cost, latency, context budget), not
+// content targets — the DEFINE evaluation decides what a given answer
+// actually needs (see PLANNER_SYSTEM_PROMPT); nothing here is suggested to
+// it as a shape to aim for.
+//
+// The hard ceiling on how many sections one answer may split into, no matter
+// how many the planner's units array actually names — a runaway/malformed
+// reply must not turn into an unbounded research-and-write loop.
 export const MAX_ESSAY_SECTIONS = 6;
 // Each section's folded context window — the writer sees only its OWN
 // evidence, capped here, never the whole research pool.
@@ -57,43 +65,59 @@ export const DEFAULT_RECONCILE_ROUNDS = 2;
 // The smallest a unit may be and still count as written, unless the DEFINE
 // evaluation asks for more.
 export const DEFAULT_MIN_WORDS = 15;
+// defineAnswerSpec's own parse-recovery threshold: a reply with no units but
+// a self-chosen compliance.minWords at or above this clearly wanted a
+// structured answer and just failed to enumerate it — see defineAnswerSpec.
+// Not a length the model is ever told about.
+export const STRUCTURED_MIN_WORDS = 100;
 
 // ── the DEFINE evaluation ────────────────────────────────────────────────────
 //
-// One model call decides depth, FORM, units, and the compliance contract for
-// this ask. Form is a first-class decision here — an ask that wants a
-// screenplay or working code must produce prose-shaped instructions for it,
-// and EVA then tests the writer against exactly that contract.
-const PLANNER_SYSTEM_PROMPT = `You are the evaluator-planner for a writing assistant. Read the reader's question and decide how this ONE ask should be answered.
+// One model call decides KIND, whether outside evidence is needed, FORM,
+// units, and the compliance contract for this ask — including what "done"
+// even means for it, since that's not a fixed template either (a greeting
+// and a report aren't two slots in a menu; "riff" vs "essay" was the old,
+// too-rigid version of this and no longer exists as a category the model is
+// asked to pick from — see PLANNER_SYSTEM_PROMPT). Form is a first-class
+// decision here — an ask that wants a screenplay or working code must
+// produce prose-shaped instructions for it, and EVA then tests the writer
+// against exactly that contract.
+//
+// `depth` still appears on the RETURNED plan shape ("riff"/"essay") because
+// the rest of the pipeline (the essay-vs-single-reply branch, the UI's
+// loading copy, this module's own tests) needs *some* stable signal for
+// "does this get the multi-section treatment" — but it's now derived from
+// whether the model actually produced units, never asked of the model
+// directly.
+const PLANNER_SYSTEM_PROMPT = `You are the evaluator-planner for a writing assistant. Read the reader's question and decide how this ONE ask should be answered. There is no fixed template for "a good answer" — you are deciding, for THIS ask specifically, what shape, length, and criteria would actually satisfy it. A greeting and a request for a research report are not two slots in a fixed menu; they're two points on a continuum you're free to place anywhere.
 
 DECIDE:
 
-1. depth — "riff" (a short, direct conversational reply: simple questions, greetings, acknowledgments, follow-ups, clarifications) or "essay" (a structured multi-section piece: explicit requests for an essay/report/paper/"N pages", OR questions that need several distinct facts or angles).
+1. kind — a short label, in your own words, for what this response actually is. Not a fixed category — whatever fits best. Examples: greeting, small talk, factual question, how-to, clarification, opinion, research essay, code request, creative writing. Keep it to a few words.
 
-2. form — how the answer is DELIVERED:
-   - "prose": normal paragraphs. The default for an essay.
-   - "screenplay": scene-based script with INT./EXT. scene headings, action lines, and ALL-CAPS character dialogue. Only when the reader asks for a script or screenplay.
-   - "code": working source (JavaScript/CSS/HTML). Only when the reader asks for code.
-   - "reply": the riff form.
+2. lookup — does answering this WELL require outside evidence (the reader's own documents, or a web search)? true for anything hinging on a specific, checkable fact — current events, statistics, names/dates, "what does X say about Y", anything that could be wrong if guessed. false for greetings, small talk, opinions, requests to reformat/continue/explain what the assistant already said, and questions about the assistant itself — searching the literal sentence for those just pulls in noise and forces fake citations against irrelevant results.
 
-3. units — ONLY when depth is "essay": 3-6 sections, each with:
+3. units — the sections this answer is actually made of. Most asks need none: an empty list means one direct, unstructured reply — the right shape for a greeting, a short answer, a clarification, or anything else without distinct parts. Give one or more units only when the ask genuinely breaks into that many distinct pieces, and let the ask's own complexity decide how many — could be two, could be a dozen. Never pad a short answer with sections it doesn't need, and never flatten a genuinely multi-part ask into one. Each unit:
    - "id": a short title for the section
    - "instruction": what THIS section must do (cover this angle, follow this form rule, meet this structural requirement)
    - "topic": a specific, self-contained research query for that section — the engine will look it up on its own.
 
-4. compliance — the contract the finished answer must meet to count as done:
-   - "minWords": a reasonable minimum length for the whole answer
-   - "require": any structural requirements (scene headings, dialogue blocks, runnable code, etc.)
-   - "forbid": anything the answer must not contain.
+4. form — how the answer is DELIVERED:
+   - "prose": normal paragraphs.
+   - "screenplay": scene-based script with INT./EXT. scene headings, action lines, and ALL-CAPS character dialogue. Only when the reader asks for a script or screenplay.
+   - "code": working source (JavaScript/CSS/HTML). Only when the reader asks for code.
+   - "reply": a direct answer with no units.
 
-Follow-up questions that reference what the assistant just said are riffs even if the original question was an essay.
+5. compliance — YOUR OWN definition of what would make this specific answer complete. This is part of what you're deciding, not a preset target:
+   - "minWords": the length THIS answer actually needs to do its job — could be under ten words for a greeting, could be whatever a real treatment of the topic takes. Never copy a template number.
+   - "require": any structural requirements this ask specifically calls for (scene headings, dialogue blocks, runnable code, etc.) — empty when nothing applies.
+   - "forbid": anything the answer must specifically avoid — empty when nothing applies.
 
-Reply with ONLY a JSON object. No prose, no code fences, no commentary:
+Follow-up questions that reference what the assistant just said usually need no units even when the original question did.
 
-{"depth":"riff"|"essay","form":"prose"|"screenplay"|"code"|"reply","reason":"one short sentence justifying the depth and form","units":[{"id":"short section title","instruction":"what this section must do","topic":"focused research query for this section"}],"compliance":{"minWords":150,"require":["..."],"forbid":["..."]}}
+Reply with ONLY a JSON object. No prose, no code fences, no commentary. The values below illustrate field TYPES, not recommended settings:
 
-- For "riff" set "units":[] and "compliance":{"minWords":15,"require":[],"forbid":[]}.
-- For "essay" give 3-6 units and an explicit compliance contract.`;
+{"kind":"a few words","lookup":true|false,"form":"prose"|"screenplay"|"code"|"reply","reason":"one short sentence justifying the kind, lookup, and form","units":[{"id":"short section title","instruction":"what this section must do","topic":"focused research query for this section"}],"compliance":{"minWords":42,"require":["..."],"forbid":["..."]}}`;
 
 // ── canonical shapes ─────────────────────────────────────────────────────────
 //
@@ -126,20 +150,49 @@ function normalizeCompliance(c, form) {
 // Normalize a parsed planner object into the canonical shape. `sections` is
 // kept as a derived view so legacy consumers keep working.
 function normalizePlan(p) {
-  const depth = p.depth === "essay" ? "essay" : "riff";
+  const rawUnits = Array.isArray(p.units) ? p.units : (Array.isArray(p.sections) ? p.sections : []);
+  const units = rawUnits.map(normalizeUnit).filter(Boolean).slice(0, MAX_ESSAY_SECTIONS);
+  // The model is no longer asked for "depth" (see PLANNER_SYSTEM_PROMPT) — it
+  // emerges from whatever units the model actually gave this ask. A reply
+  // that DOES carry an explicit legacy "depth" (older callers, hand-built
+  // fixtures, salvage recovery) is honored as-is rather than overridden.
+  const depth = (p.depth === "riff" || p.depth === "essay") ? p.depth : (units.length > 0 ? "essay" : "riff");
+  // Keyed off depth (not units.length directly) so an explicit legacy
+  // depth with as-yet-empty units — before defineAnswerSpec's own fallback
+  // derives real sections for it — still defaults to the shape that depth
+  // implies, exactly as before this module stopped asking for depth itself.
   const form = /^(prose|screenplay|code|reply)$/i.test(p.form || "")
     ? String(p.form).toLowerCase()
     : (depth === "essay" ? "prose" : "reply");
-  const rawUnits = Array.isArray(p.units) ? p.units : (Array.isArray(p.sections) ? p.sections : []);
-  const units = rawUnits.map(normalizeUnit).filter(Boolean).slice(0, MAX_ESSAY_SECTIONS);
+  // The model's own free-text label for this response; falls back to the
+  // derived depth string only when the reply carried no kind at all.
+  const kind = String(p.kind || "").trim().slice(0, 60) || depth;
+  // A missing/unparseable field defaults to true — the old always-search
+  // behavior — so this only ever SUPPRESSES a search the planner positively
+  // identified as unnecessary, never adds a new failure mode.
+  const lookup = p.lookup !== false;
   return {
     depth,
+    kind,
+    lookup,
     form,
     reason: String(p.reason || "").slice(0, 240),
     units,
     compliance: normalizeCompliance(p.compliance, form),
     sections: units.map((u) => ({ title: u.id, topic: u.topic })),
   };
+}
+
+// A parsed object counts as a plan when it carries a legacy depth, a kind
+// label, or a units/sections array — any one of them is enough signal to
+// normalize; an object with none of those is something else (a stray JSON
+// blob elsewhere in the reply) and must not be accepted as the plan.
+function isPlanShaped(obj) {
+  if (!obj || typeof obj !== "object") return false;
+  if (obj.depth === "riff" || obj.depth === "essay") return true;
+  if (typeof obj.kind === "string" && obj.kind.trim()) return true;
+  if (Array.isArray(obj.units) || Array.isArray(obj.sections)) return true;
+  return false;
 }
 
 // Robust JSON extraction: strip fences, then accept a whole-object reply or
@@ -152,7 +205,7 @@ export function parsePlannerReply(raw) {
 
   try {
     const whole = JSON.parse(text);
-    if (whole && (whole.depth === "riff" || whole.depth === "essay")) return normalizePlan(whole);
+    if (isPlanShaped(whole)) return normalizePlan(whole);
   } catch { /* scan below */ }
 
   for (let i = 0; i < text.length; i++) {
@@ -166,7 +219,7 @@ export function parsePlannerReply(raw) {
         if (depth === 0) {
           try {
             const p = JSON.parse(text.slice(i, j + 1));
-            if (p && (p.depth === "riff" || p.depth === "essay")) return normalizePlan(p);
+            if (isPlanShaped(p)) return normalizePlan(p);
           } catch { /* keep scanning */ }
           break;
         }
@@ -175,10 +228,11 @@ export function parsePlannerReply(raw) {
   }
 
   // A numbered/bulleted plan without JSON is still a plan when it names 2+
-  // sections — better than the generic fallback below.
+  // sections — better than the generic fallback below. normalizePlan derives
+  // "essay" depth on its own once units.length > 0, so no depth is passed here.
   const list = parseListPlan(text);
   if (list.length >= 2) {
-    return normalizePlan({ depth: "essay", reason: "planner reply was a section list, not JSON", units: list });
+    return normalizePlan({ reason: "planner reply was a section list, not JSON", units: list });
   }
 
   // Small models emit JSON-shaped near-misses: a section object closed one
@@ -192,18 +246,22 @@ export function parsePlannerReply(raw) {
     };
   }
 
-  // Heuristic fallback: an essay-shaped ask the model failed to parse.
-  const depth = /(essay|report|paper|"\d+\s*pages?"|five\s+page|5\s+page|long[\s-]form)/i.test(text) ? "essay" : "riff";
-  return normalizePlan({ depth, reason: "planner reply unparseable — heuristic depth" });
+  // Last resort: nothing recognizable parsed at all. This heuristic reads
+  // the model's own failed reply text (not the user's question) for a sign
+  // it was reaching for something structured; normalizePlan derives units:[]
+  // → depth "riff" either way unless that's true.
+  const essayish = /(essay|report|paper|"\d+\s*pages?"|five\s+page|5\s+page|long[\s-]form)/i.test(text);
+  return normalizePlan({ depth: essayish ? "essay" : "riff", reason: "planner reply unparseable — heuristic depth" });
 }
 
-// Tolerant piece recovery from malformed planner JSON: the depth key, the
-// reason, the form, and every {"id":...,"topic":...,"instruction":...} unit
-// object, read straight off the raw text. Returns null when the reply is not
-// JSON-shaped at all.
+// Tolerant piece recovery from malformed planner JSON: kind/depth, lookup,
+// reason, form, and every {"id":...,"topic":...,"instruction":...} unit
+// object, read straight off the raw text. Returns null when the reply has
+// none of the plan-shaped signals isPlanShaped looks for.
 function salvagePlan(text) {
   const depthM = text.match(/"depth"\s*:\s*"(riff|essay)"/i);
-  if (!depthM) return null;
+  const kindM = text.match(/"kind"\s*:\s*"([^"]*)"/i);
+  const lookupM = text.match(/"lookup"\s*:\s*(true|false)/i);
   const reasonM = text.match(/"reason"\s*:\s*"([^"]*)"/i);
   const formM = text.match(/"form"\s*:\s*"(prose|screenplay|code|reply)"/i);
   const arrM = text.match(/"sections"\s*:\s*\[\s*(.*)$/is) || text.match(/"units"\s*:\s*\[\s*(.*)$/is);
@@ -218,8 +276,11 @@ function salvagePlan(text) {
       units.push({ id: titles[i], instruction: instructions[i] || "", topic: topics[i] });
     }
   }
+  if (!depthM && !kindM && !units.length) return null;
   return {
-    depth: depthM[1].toLowerCase(),
+    depth: depthM ? depthM[1].toLowerCase() : undefined,
+    kind: kindM ? kindM[1] : undefined,
+    lookup: lookupM ? lookupM[1].toLowerCase() === "true" : undefined,
     form: formM ? formM[1].toLowerCase() : undefined,
     reason: reasonM ? reasonM[1] : "",
     units,
@@ -303,16 +364,23 @@ export async function defineAnswerSpec({
 
   const raw = await generate(PLANNER_SYSTEM_PROMPT, user, 220);
   const parsed = parsePlannerReply(raw);
-  const depth = parsed.depth === "essay" ? "essay" : "riff";
   let units = parsed.units;
-  if (depth === "essay") {
-    // A weak planner reply that survives to essay depth still yields a real
-    // multi-section plan anchored to the question's subject — never an empty
-    // plan, and never the raw reader sentence as a research query.
-    units = units.length ? units : deriveSectionsFromQuestion(question);
-    units = units.slice(0, MAX_ESSAY_SECTIONS);
+  // A reply that came back with no units but DID independently ask for real
+  // length (its own compliance.minWords, not a value we suggested) still
+  // wanted structure and just didn't enumerate it — recovered as a real,
+  // subject-anchored section breakdown rather than shipped as an empty plan.
+  // parsed.depth === "essay" covers the legacy/salvaged-reply case where an
+  // explicit depth survived without units.
+  const wantsStructure = parsed.depth === "essay" || (parsed.compliance?.minWords || 0) >= STRUCTURED_MIN_WORDS;
+  if (!units.length && wantsStructure) {
+    units = deriveSectionsFromQuestion(question);
   }
-  return { depth, form: parsed.form, reason: parsed.reason, units, compliance: parsed.compliance, sections: units.map((u) => ({ title: u.id, topic: u.topic })), raw };
+  units = units.slice(0, MAX_ESSAY_SECTIONS);
+  const depth = units.length > 0 ? "essay" : "riff";
+  return {
+    depth, kind: parsed.kind, lookup: parsed.lookup, form: parsed.form, reason: parsed.reason,
+    units, compliance: parsed.compliance, sections: units.map((u) => ({ title: u.id, topic: u.topic })), raw,
+  };
 }
 
 // Normalize web research (researchTopic shape) into the evidence table.
@@ -611,7 +679,7 @@ export async function runHolonicEssay({
         web = ((await webResearch(unit.topic)) || []).map(webEvidenceFromTopic).flat();
       } catch { web = []; }
     }
-    emit({ phase: "section_research", id: unit.id, local: local.length, web: web.length, thin });
+    emit({ phase: "section_research", id: unit.id, local: local.length, web: web.length, thin, localPassages: local, webPassages: web });
 
     const evidence = [...local, ...web];
 

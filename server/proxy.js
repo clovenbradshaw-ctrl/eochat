@@ -71,6 +71,7 @@ import { webSearchAndFetch, flattenDdgTopics } from "./web-search.js";
 import { runSessionMessage } from "./code-longform-session.js";
 import { runEoCodeTask, listWorkspaces, listWorkspaceFiles, startEoCodeSession, stepEoCodeSession, cancelEoCodeSession } from "./eocode-agent.js";
 import { loadMorphologyPrior, discoverNarratorContext } from "./longform-node-context.js";
+import { startTelemetry, systemSnapshot, recordTokens, endGeneration } from "./telemetry.js";
 
 // ── CLI args with validation ──
 
@@ -2383,6 +2384,9 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
             if (delta) {
               content += delta;
               if (onEvent) onEvent({ type: "content", content: delta, model });
+              // Token telemetry: count what the reader is watching arrive.
+              // ~4 chars/token (Ollama doesn't report eval counts per chunk).
+              recordTokens(delta.length / 4, model);
             }
           }
           if (ollamaErr) break;
@@ -2397,6 +2401,7 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
         }
         const data = await resp.json();
         msg = data.message || {};
+        if (msg.content) recordTokens(msg.content.length / 4, model); // non-streamed (tool rounds): count whole content
       }
 
       // Smaller local models routinely emit a tool call as prose — a bare or
@@ -2509,6 +2514,11 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
   } catch (err) {
     await revealOutcome("failure");
     throw err;
+  } finally {
+    // Generation is over (answer complete, tool loop done, or error) — let
+    // the monitor's live "generating" flag drop instead of waiting out the
+    // 3s idle timeout.
+    endGeneration();
   }
 }
 
@@ -3044,6 +3054,15 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", store_size: store.size, uptime: process.uptime().toFixed(1) }));
+    return;
+  }
+
+  // System telemetry for the Monitor surface. Always answers — the sampler
+  // degrades to whatever the host can report and flags what it can't (GPU on
+  // non-Apple, ollama CPU on Windows), and the UI hides what's unavailable.
+  if (req.method === "GET" && req.url === "/api/system/stats") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(systemSnapshot()));
     return;
   }
 
@@ -5465,7 +5484,10 @@ const server = http.createServer((req, res) => {
           prompt: data.prompt,
           model: data.model || "qwen2.5-coder:1.5b",
           maxSteps: Number.isFinite(data.maxSteps) ? data.maxSteps : 20,
-          maxTokensPerStep: Number.isFinite(data.maxTokensPerStep) ? data.maxTokensPerStep : 400,
+          // Kept in sync with eocode-agent.js's own runEoCodeTask default —
+          // see its comment for why 400 silently truncated content-heavy
+          // write_file calls into invalid JSON.
+          maxTokensPerStep: Number.isFinite(data.maxTokensPerStep) ? data.maxTokensPerStep : 1600,
           seed: Number.isFinite(data.seed) ? data.seed : Date.now() % 100000,
           onEvent: (type, payload) => { if (!aborted) sendSSE(type, payload); },
         });
@@ -5885,6 +5907,11 @@ async function start() {
     // Print ready message on stdout for consumers
     process.stdout.write(`EO_PROXY_READY:${PORT}\n`);
   });
+
+  // System telemetry for the Monitor surface — CPU/memory/GPU/token sampler.
+  // Degrades to what the host can report (no GPU on non-Apple, no ollama CPU
+  // on Windows); the UI hides whatever the snapshot flags as unavailable.
+  startTelemetry({ target: TARGET });
 
   // Load code (async, error-isolated) — happens AFTER server starts
   try {

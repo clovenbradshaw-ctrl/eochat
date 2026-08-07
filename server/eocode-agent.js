@@ -81,7 +81,18 @@ export function listWorkspaceFiles(name) {
  * @param {Function} [opts.onEvent]  (type: string, payload: object) => void
  */
 export async function runEoCodeTask({
-  workspace, prompt, model = "qwen2.5-coder:1.5b", maxSteps = 20, maxTokensPerStep = 400, seed = 0, onEvent = null,
+  // 400 had no write_file call in mind: Ollama's format:"json" grammar-
+  // constrains SYNTAX, not length, so a content-heavy write_file (a whole
+  // styled HTML/CSS/JS file as one JSON string field) gets cut off mid-
+  // string at the token cap before its braces/quotes ever close — invalid
+  // JSON every time, indistinguishable from the model actually failing.
+  // Measured: a Pomodoro-timer-app prompt against qwen2.5-coder:7b produced
+  // an identical ~1195-char (~400-token) truncated response on 3 straight
+  // steps and tripped the stuck-loop abort — not a model failure, a token
+  // budget too small for the tool call it was asked to make. 1600 gives a
+  // single write_file room for a modest single-file app without letting one
+  // step run unbounded on local hardware.
+  workspace, prompt, model = "qwen2.5-coder:1.5b", maxSteps = 20, maxTokensPerStep = 1600, seed = 0, onEvent = null,
 }) {
   const emit = onEvent || (() => {});
   if (!prompt || !String(prompt).trim()) throw new Error("prompt is required");

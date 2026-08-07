@@ -38,6 +38,7 @@ import { createConversationHolon, recordTurn } from "./conversation-holon.js";
 import { generateAnswer } from "./turn-generation.js";
 import { defineAnswerSpec, runHolonicEssay } from "./holonic-chat.js";
 import { researchTopic } from "./web-search.js";
+import { recordTokens, endGeneration } from "./telemetry.js";
 
 // Every blink can be longform — these are ceilings, not targets; the model
 // still decides when to stop. DEFAULT is generous headroom for the common
@@ -531,7 +532,7 @@ export function createTurnController(deps) {
         try { j = JSON.parse(t); } catch { continue; }
         if (j.error) throw new Error(`Ollama: ${j.error}`);
         const delta = j.message?.content || "";
-        if (delta) { text += delta; onDelta(delta, text); }
+        if (delta) { text += delta; onDelta(delta, text); recordTokens(delta.length / 4, model); }
       }
     }
     return { text, model };
@@ -580,6 +581,7 @@ export function createTurnController(deps) {
         if (j.type === "content_block_delta" && j.delta?.text) {
           text += j.delta.text;
           onDelta(j.delta.text, text);
+          recordTokens(j.delta.text.length / 4, model);
         }
       }
     }
@@ -602,9 +604,16 @@ export function createTurnController(deps) {
       model = heuristicModel(messages);
     }
     const startedAt = Date.now();
-    const result = useAnthropic
-      ? await callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens })
-      : await callOllamaStreaming(model, messages, { signal, onDelta, maxTokens });
+    let result;
+    try {
+      result = useAnthropic
+        ? await callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens })
+        : await callOllamaStreaming(model, messages, { signal, onDelta, maxTokens });
+    } finally {
+      // The token-emitting phase is over — drop the live "generating" flag
+      // now rather than waiting out the monitor's 3s idle timeout.
+      endGeneration();
+    }
     const elapsedMs = Date.now() - startedAt;
     if (routerCtx) {
       const outcome = elapsedMs > latencyBudgetMs ? "failure" : "success";
@@ -643,7 +652,10 @@ export function createTurnController(deps) {
       });
       if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
       const j = await resp.json();
-      return (j.content?.map((c) => c.text).join("") || "").trim();
+      const txt = (j.content?.map((c) => c.text).join("") || "").trim();
+      if (txt) recordTokens(txt.length / 4, model);
+      endGeneration();
+      return txt;
     }
     const body = {
       model, messages, stream: false,
@@ -657,7 +669,10 @@ export function createTurnController(deps) {
     });
     if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
     const j = await resp.json();
-    return (j.message?.content || "").trim();
+    const txt = (j.message?.content || "").trim();
+    if (txt) recordTokens(txt.length / 4, model);
+    endGeneration();
+    return txt;
   }
 
   // Finalize the model's raw output AND review it against the instruction
@@ -927,6 +942,14 @@ export function createTurnController(deps) {
         model: modelOverride || "phi4-mini:latest",
         engine: engineAdapter,
         ollamaUrl: target,
+        // Transparency: every model call this task makes (plan, learn, each
+        // section draft and iteration) streams its full messages to the
+        // reader-facing glass box, in the order it was sent.
+        onModelCall: (messages, maxTokens) => sendEvent("prompt_sent", {
+          turnId: turn.id, answerId,
+          messages, model: modelOverride || "phi4-mini:latest",
+          label: `think · ${messages.length} message(s)`, maxTokens,
+        }),
       });
 
       // Pipe holonic progress events through to the SSE stream
@@ -992,10 +1015,20 @@ export function createTurnController(deps) {
     const controller = new AbortController();
     activeControllers.set(key, controller);
     const userQuestionForMemory = originalQuestion || question;
-    const generate = (system, user, maxTokens) => callModelNonStreaming(
-      [{ role: "system", content: system }, { role: "user", content: user }],
-      { provider, modelOverride, maxTokens },
-    );
+    const generate = (system, user, maxTokens) => {
+      // Every essay model call (per-section drafts and evaluations) streams
+      // its full prompt to the glass box, in the order it was sent.
+      sendEvent("prompt_sent", {
+        turnId: turn.id, answerId,
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        model: modelOverride || null,
+        label: `essay · 2 message(s)`, maxTokens,
+      });
+      return callModelNonStreaming(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        { provider, modelOverride, maxTokens },
+      );
+    };
 
     try {
       const localRetrieve = async (topic) => {
@@ -1212,14 +1245,24 @@ export function createTurnController(deps) {
       });
       sendEvent("holonic_plan", {
         turnId: turn.id, answerId,
-        depth: planning.depth, form: planning.form, reason: planning.reason,
+        depth: planning.depth, kind: planning.kind, form: planning.form, reason: planning.reason,
         sections: planning.sections.map((s) => s.title),
       });
       if (planning.depth === "essay") {
         return runEssayAnswer({ conv, turn, answerId, question, originalQuestion, sourceScope, pool, provider, model: modelOverride, draftModel, webSearch, planning }, sendEvent);
       }
 
-      if (webSearch && webSearchFn) {
+      // A riff the planner flagged as not needing outside evidence
+      // (planning.lookup === false) skips web search even when the
+      // conversation's webSearch toggle is on — searching the literal text of
+      // a greeting or a meta question ("hi", "are you an AI?") reliably
+      // returns keyword-matched but topically irrelevant pages, which then
+      // forces citation-bound generation against material that doesn't
+      // answer the question (see buildWebSystemMessage). Falling through to
+      // the engine-grounding branch below is safe here: with no local
+      // evidence either, buildGroundedSystemMessage already answers plainly
+      // from the model's own knowledge with no forced citations.
+      if (webSearch && webSearchFn && planning.lookup !== false) {
         // ── Web search path: retrieved carries web results, no engine grounding ──
         const webResults = await webSearchFn(question, { numResults: 5, maxFetchChars: 5000 });
         let { message: systemMsg, maxCitation } = buildWebSystemMessage(webResults);
@@ -1287,6 +1330,15 @@ export function createTurnController(deps) {
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
+
+        // The full message array this turn actually sends the model — history,
+        // discourse desk, summary, gate rules and the web grounding block —
+        // streamed to the glass box so a reader can see the whole prompt.
+        sendEvent("prompt_sent", {
+          turnId: turn.id, answerId,
+          messages, model: modelOverride || draftModel || null,
+          label: `web · ${messages.length} message(s)`,
+        });
 
         const maxSections = await resolveMaxSections(conv, turn, webResults.map((r) => r.url));
         const webEvidence = webResults.map((r) => ({ source_id: r.url, span_id: r.url, text: r.text || r.snippet || "" }));
@@ -1444,6 +1496,15 @@ export function createTurnController(deps) {
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
         messages.push(...history, { role: "user", content: question });
+
+        // The full message array this turn actually sends the model — history,
+        // discourse desk, summary, gate rules and the grounded evidence block —
+        // streamed to the glass box so a reader can see the whole prompt.
+        sendEvent("prompt_sent", {
+          turnId: turn.id, answerId,
+          messages, model: modelOverride || draftModel || null,
+          label: `ground · ${messages.length} message(s)`,
+        });
 
         const maxSections = await resolveMaxSections(conv, turn, (groundResult.citations || []).map((c) => c.source_id));
         let sawStart = false;

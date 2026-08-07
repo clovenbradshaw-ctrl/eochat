@@ -20,3 +20,7 @@ eval/.sandbox/
 # eoCode tab's live workspaces — whatever the agent reads/writes while working
 # on a real task, not a fixture this repo ships.
 eocode-workspace/
+
+# Claude Code worktree scratch space — isolated checkouts for parallel work,
+# not part of this repo's own tree.
+.claude/worktrees/
