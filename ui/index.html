@@ -3524,11 +3524,11 @@ class Component extends DCLogic {
   //   not-installed     — nothing answers at the Ollama URL at all
   //   cors-blocked      — Ollama is listening, but hasn't allowlisted this origin
   //                       (only reachable on a direct-connect deployment — see
-  //                       ON_GH_PAGES — since the proxy talks to Ollama
+  //                       noProxyMode — since the proxy talks to Ollama
   //                       server-side and is never subject to browser CORS)
   async runOllamaDiagnosis() {
     this.setState({ _ollamaDiagStage: 'checking', _ollamaDiagDetail: '', _ollamaDiagTarget: '' });
-    if (ON_GH_PAGES) {
+    if (this.noProxyMode()) {
       const url = this.state._ollamaUrl || 'http://localhost:11434';
       let reachable = false;
       try {
@@ -10063,7 +10063,7 @@ class Component extends DCLogic {
       ollamaDiagGenericError: S._ollamaDiagStage === 'error',
       ollamaDiagShowRecheck: ['proxy-unreachable', 'not-installed', 'cors-blocked', 'error'].includes(S._ollamaDiagStage),
       ollamaDiagDetail: S._ollamaDiagDetail,
-      ollamaDiagUrl: ON_GH_PAGES ? (S._ollamaUrl || 'http://localhost:11434') : (S._ollamaDiagTarget || 'the configured Ollama URL'),
+      ollamaDiagUrl: this.noProxyMode() ? (S._ollamaUrl || 'http://localhost:11434') : (S._ollamaDiagTarget || 'the configured Ollama URL'),
       ollamaProxyUrlText: this.proxyUrl(),
       ollamaOrigin: (typeof window !== 'undefined' && window.location.origin) || 'this page',
       ollamaInstallSteps: this._ollamaInstallSteps(),
