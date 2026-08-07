@@ -45,6 +45,7 @@
 import { createTaskLog, append, projectTasks, foldToWorkingSet, ENTRY_KINDS, STRUCTURE_OPERATORS, OPERATOR_BASIS } from "../../server/task-log.js";
 import { runReactLoop } from "./react-loop.mjs";
 import { extractJSONObject } from "./lib/parse-action.mjs";
+import { informationDensity } from "./lib/lexical-relevance.mjs";
 
 const DEFAULT_MAX_DEPTH = 1; // the top task may split exactly once — eagerly (a guessed-up-front decomposition) or reactively (an evidence-informed retry after a failed direct attempt) — never both; sub-tasks always run directly. Bounded recursion for this eval's scope, not a claim the mechanism itself is depth-limited.
 
@@ -56,12 +57,43 @@ const DEFAULT_MAX_DEPTH = 1; // the top task may split exactly once — eagerly 
 // mechanism nobody declared.
 const MAX_HANDOFF_CHARS = 280;
 
-function foldHandoff(text, label) {
+// SURF, then fold: this used to be a bare `s.slice(0, MAX_HANDOFF_CHARS)` —
+// bounded, and it reported what it withheld, but it never asked whether the
+// FIRST 280 characters were the most useful 280 characters, only whether
+// they were first. That is truncation wearing a fold's report format, not a
+// fold — see AMENDMENT-13-PROPOSAL.md (eo-constitution). Fixed the same way
+// react-loop.mjs's own conversation-history fold was: split into sentence-
+// like units, score each by information density (does it carry specific
+// vocabulary — a file path, an identifier, a number — or is it generic
+// filler), and keep the highest-density units up to budget, reassembled in
+// their original order so the handoff still reads as prose.
+export function foldHandoff(text, label) {
   if (!text) return null;
   const s = String(text);
   if (s.length <= MAX_HANDOFF_CHARS) return s;
-  const withheld = s.length - MAX_HANDOFF_CHARS;
-  return `${s.slice(0, MAX_HANDOFF_CHARS)}… (${withheld} more char(s) of ${label} withheld — folded to the ${MAX_HANDOFF_CHARS}-char handoff budget, not silently grown)`;
+
+  const units = s.split(/(?<=[.!?;])\s+/).filter(Boolean);
+  if (units.length <= 1) {
+    // Nothing to select among — one unbreakable unit longer than the
+    // budget on its own. Hard-truncate it, but say precisely that, rather
+    // than pretending a density comparison happened.
+    const withheld = s.length - MAX_HANDOFF_CHARS;
+    return `${s.slice(0, MAX_HANDOFF_CHARS)}… (${withheld} more char(s) of ${label} withheld — a single unbreakable unit longer than the ${MAX_HANDOFF_CHARS}-char handoff budget, not silently grown)`;
+  }
+
+  const scored = units.map((u, index) => ({ u, index, density: informationDensity(u) }));
+  const kept = [];
+  let usedChars = 0;
+  for (const item of [...scored].sort((a, b) => b.density - a.density || a.index - b.index)) {
+    if (usedChars + item.u.length + 1 > MAX_HANDOFF_CHARS) continue;
+    kept.push(item);
+    usedChars += item.u.length + 1;
+  }
+  kept.sort((a, b) => a.index - b.index); // restore original prose order
+  const keptText = kept.map((k) => k.u).join(" ");
+  const withheldCount = units.length - kept.length;
+  if (withheldCount === 0) return keptText;
+  return `${keptText} … (${withheldCount} lower-density sentence(s) of ${label} withheld — folded to the ${MAX_HANDOFF_CHARS}-char handoff budget by information density, not position, not silently grown)`;
 }
 
 // Bottom-up: what did the low level actually observe? The real last tool

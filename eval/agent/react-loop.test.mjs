@@ -108,3 +108,38 @@ test("a different failing call does not count toward another call's streak", asy
     rmSync(sandboxDir, { recursive: true, force: true });
   }
 });
+
+// AMENDMENT-13-PROPOSAL.md (eo-constitution): folding the conversation
+// history by recency alone is truncation wearing a fold's report format —
+// it never asks whether the discarded material bears on what the model
+// needs right now. This locks down the real fix: an OLDER step that shares
+// real vocabulary with the CURRENT situation must survive over NEWER but
+// irrelevant steps, once the window forces a choice.
+test("surf-and-fold keeps an older, relevant step over newer, irrelevant ones — not just the most recent", async () => {
+  const sandboxDir = freshSandbox();
+  try {
+    writeFileSync(join(sandboxDir, "widget.js"), "function widgetFrobnicator() { return 42; }\n");
+    const readWidget = { tool: "read_file", args: { path: "widget.js" } };
+    const listFiles = { tool: "list_files", args: {} };
+    const adapter = createSpyAdapter([
+      readWidget,  // step 0 (A): OLD, relevant — mentions widgetFrobnicator
+      listFiles,   // step 1 (B): irrelevant
+      listFiles,   // step 2 (C): irrelevant
+      readWidget,  // step 3 (D): LATEST — also mentions widgetFrobnicator, becomes the focus
+      { tool: "finish", args: { summary: "done" } }, // step 4: what gets folded matters here
+    ]);
+
+    await runReactLoop({
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 6, seed: 1, messageWindowTurns: 2,
+    });
+
+    // The prompt sent for the finish call (index 4) is what was actually
+    // folded once the window (2 turns) forced a choice among A/B/C.
+    const sentToModel = adapter.calls[4].messages.map((m) => m.content).join("\n");
+    const mentions = (sentToModel.match(/widgetFrobnicator/g) ?? []).length;
+    assert.equal(mentions, 2, "the OLD relevant read (A) must survive alongside the always-kept latest read (D) — a pure-recency fold would have dropped A for the more recent, irrelevant B/C");
+    assert.match(sentToModel, /folded out/i, "must honestly report that something was withheld");
+  } finally {
+    rmSync(sandboxDir, { recursive: true, force: true });
+  }
+});

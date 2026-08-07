@@ -22,10 +22,82 @@
 // does not budge — the same "do not silently burn the rest of the budget"
 // discipline the malformed-response abort below already uses.
 
+//
+// BOUNDED CONTEXT. Every other budget in this harness is declared and
+// folded — surf()'s token budget, holon-coder.mjs's MAX_HANDOFF_CHARS,
+// foldToWorkingSet's k. This loop's own `messages` array was the one place
+// that was NOT: it grew by two entries every single step, forever, with no
+// fold and no report. That is not a cosmetic gap — the local server this
+// eval actually runs against (`ollama serve`) is started with a 4096-TOKEN
+// context window and `--context-shift` enabled, which SILENTLY drops the
+// oldest tokens once the conversation overflows it. At maxSteps up to 22
+// and tool observations up to ~1000 tokens each (read_file's 4000-char
+// cap), the unbounded array could exceed 4096 tokens well before the step
+// cap — meaning the model could lose its own system prompt and task
+// description to a silent context-shift mid-attempt, a plausible
+// contributor to exactly the "re-reads the file and still repeats the same
+// wrong guess" pattern the stuck-loop detector above exists to catch. Fixed
+// by folding the same way every other budget here does — but folding by
+// RECENCY ALONE is not the surf-and-fold discipline the rest of this
+// harness uses; it is just truncation with a report attached. ingest.mjs's
+// surf() SEARCHES the ingested pool for what bears on the current query,
+// THEN folds to budget. The equivalent move here: score each older step by
+// lexical overlap with what is happening right now (the freshest
+// observation) — the same lexical-presence discipline ingest.mjs's real
+// corpus search already uses — and keep the most RELEVANT older steps, not
+// merely the most recent ones. This also composes naturally with the
+// stuck-loop detector above: a step where the model is repeating the same
+// failing call will, by construction, score its own past identical
+// failures as maximally relevant, surfacing exactly the evidence it needs
+// to stop repeating itself.
+
 import { parseAction } from "./lib/parse-action.mjs";
+import { significantTerms, overlapScore } from "./lib/lexical-relevance.mjs";
 
 const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
 const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
+const MESSAGE_WINDOW_TURNS = 6;  // a declared starting point (foldToWorkingSet's k=7 is the same kind of number), not derived from the model's actual context size — this harness has no tokenizer to measure against
+
+/**
+ * SURF: score every older step-pair (assistant action + its observation)
+ * by lexical overlap with the freshest observation. FOLD: keep the head
+ * (system + task intro, never dropped), the latest step-pair (what the
+ * model must react to right now, always kept), and the top-scoring older
+ * pairs up to `windowTurns` total — reassembled in original chronological
+ * order so the conversation still reads coherently, with an honest count
+ * of what was withheld. Never silent, same as every other fold in this
+ * harness.
+ */
+function surfAndFoldMessagesForModel(messages, windowTurns) {
+  const head = messages.slice(0, 2); // system + task intro (with any groundingBlock)
+  const turns = messages.slice(2);
+  const maxKeptMessages = windowTurns * 2;
+  if (turns.length <= maxKeptMessages) return messages;
+
+  const latest = turns.slice(-2);
+  const older = turns.slice(0, -2);
+  const olderPairs = [];
+  for (let i = 0; i < older.length; i += 2) olderPairs.push({ index: i, pair: older.slice(i, i + 2) });
+
+  const focusTerms = significantTerms(latest.map((m) => m.content).join(" "));
+  const scored = olderPairs.map(({ index, pair }) => ({
+    index, pair, overlap: overlapScore(focusTerms, pair.map((m) => m.content).join(" ")),
+  }));
+
+  const pairBudget = Math.max(0, Math.floor(maxKeptMessages / 2) - 1); // minus the always-kept latest pair
+  const kept = [...scored]
+    .sort((a, b) => b.overlap - a.overlap || b.index - a.index) // most relevant first, ties broken by recency
+    .slice(0, pairBudget)
+    .sort((a, b) => a.index - b.index) // back to chronological order for the model
+    .flatMap((s) => s.pair);
+
+  const withheldCount = olderPairs.length - Math.min(olderPairs.length, pairBudget);
+  const foldNote = {
+    role: "user",
+    content: `[${withheldCount} earlier message(s) from this session were folded out to keep the prompt bounded — kept by relevance to what you are looking at right now, not just recency, so a step relevant to your current situation stays visible even if it happened a while ago. They really happened and their real results still apply, they are just not repeated here.]`,
+  };
+  return [...head, foldNote, ...kept, ...latest];
+}
 
 const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
 
@@ -53,9 +125,11 @@ function formatObservation(toolName, result) {
  * @param {number} [opts.maxSteps]
  * @param {number} [opts.maxTokensPerStep]
  * @param {number} [opts.seed]
+ * @param {number} [opts.messageWindowTurns] how many step-pairs of conversation history are surfaced to the model per call — see surfAndFoldMessagesForModel
  */
 export async function runReactLoop({
   taskPrompt, groundingBlock = null, toolset, adapter, maxSteps = 8, maxTokensPerStep = 200, seed = 0,
+  messageWindowTurns = MESSAGE_WINDOW_TURNS,
 }) {
   const { tools, toolCalls } = toolset;
   const toolNames = Object.keys(tools);
@@ -89,7 +163,11 @@ export async function runReactLoop({
   let stuckLoopAbort = false;
 
   for (; step < maxSteps; step++) {
-    const raw = await adapter.generate(messages, { maxTokens: maxTokensPerStep, seed: seed + step });
+    // `messages` keeps the FULL history for the returned transcript (real
+    // research data, per the same reasoning harness.mjs bounds-but-never-
+    // discards transcripts) — only what is actually SENT to the model is
+    // folded.
+    const raw = await adapter.generate(surfAndFoldMessagesForModel(messages, messageWindowTurns), { maxTokens: maxTokensPerStep, seed: seed + step });
     messages.push({ role: "assistant", content: raw });
 
     const parsed = parseAction(raw, toolNames);

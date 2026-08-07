@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runHolonicCodingTask } from "./holon-coder.mjs";
+import { runHolonicCodingTask, foldHandoff } from "./holon-coder.mjs";
 import { createTools } from "./tools.mjs";
 import { ENTRY_KINDS } from "../../server/task-log.js";
 
@@ -180,4 +180,34 @@ test("bounded recursion is preserved: a sub-task's own failure at maxDepth does 
   } finally {
     rmSync(sandboxDir, { recursive: true, force: true });
   }
+});
+
+// AMENDMENT-13-PROPOSAL.md (eo-constitution): foldHandoff used to be a bare
+// `s.slice(0, MAX_HANDOFF_CHARS)` — bounded, and it reported what it
+// withheld, but the FIRST 280 characters were kept for no reason other than
+// being first. These tests lock down the real fix: sentences are kept by
+// information density (specific vocabulary — identifiers, paths, numbers),
+// not by which one happened to come first.
+
+test("foldHandoff keeps the information-dense sentence over generic filler, even when the filler comes first", () => {
+  const filler = "OK. Sure. Got it. Noted. Fine. Yes. ".repeat(6); // short, low-content sentences — near-zero significant terms each
+  const specific = "convert.js line 42 throws TypeError: cannot read property 'split' of undefined in parseRow().";
+  const text = filler + specific;
+  assert.ok(text.length > 280, "test setup: must actually exceed the handoff budget to exercise folding");
+
+  const folded = foldHandoff(text, "test evidence");
+
+  assert.match(folded, /parseRow/, "the information-dense sentence must survive the fold");
+  assert.match(folded, /withheld/i, "must report what was dropped, same as every other fold in this harness");
+});
+
+test("foldHandoff falls back to a plain, honestly-labeled hard truncation for a single unbreakable unit longer than the budget", () => {
+  const oneGiantSentence = `error: ${"x".repeat(400)}`; // no sentence boundaries at all
+  const folded = foldHandoff(oneGiantSentence, "test evidence");
+  assert.match(folded, /single unbreakable unit/);
+});
+
+test("foldHandoff returns short text unchanged — no fold needed, nothing to score", () => {
+  const short = "a short evidence string.";
+  assert.equal(foldHandoff(short, "test evidence"), short);
 });
