@@ -41,8 +41,15 @@ The redirect that shaped this design: don't build a generic ReAct scaffold
 from scratch — build the agent out of primitives this codebase already has.
 
 - **`agent/tools.mjs`** — the agent's "organs": `read_file`, `write_file`,
-  `run_shell`, `finish`, each bound to one sandbox directory. This is a fixed,
-  hand-grown set for now (see "Future direction" below).
+  `edit_file`, `run_shell`, `finish`, each bound to one sandbox directory.
+  This is a fixed, hand-grown set for now (see "Future direction" below).
+  `edit_file` (old_string/new_string, unique-match-or-refuse — the same
+  discipline this very harness's own editing tool uses) was grown once
+  real, larger files entered the picture at Level 3+: `write_file` requires
+  retyping the COMPLETE file, which is fine for a 20-line script but
+  physically does not fit a CPU-bound model's per-step token budget once the
+  file is a real few-hundred-line module. Without it, "real codebase" tasks
+  were impossible by construction, not a measured capability gap.
 - **`agent/react-loop.mjs`** — the actual read-execute-observe-correct loop.
   The model emits exactly one JSON tool call per turn; the tool actually
   runs; the real result (including real errors) is appended as an
@@ -179,9 +186,18 @@ trusting the oracle (see git history for that verification).
   tasks against a genuinely arbitrary public repo are therefore scaffolded
   (the ingest/surf machinery works) but not run to completion in this
   session.
-- **Levels 3–7 task definitions are not yet written.** Only Levels 1–2 (4
-  tasks) are built and scored. The architecture (holonic recursion, surf/
-  fold ingest) is built to support them; the task content is not yet there.
+- **Level 4 has one real task now** (`level4-constitution-veto-bug`):
+  `harness.mjs` clones a real, in-scope repo (`clovenbradshaw-ctrl/eo-
+  constitution`) declared by `task.repo`, ingests it into a dedicated `surf`
+  pool, seeds the sandbox with a real multi-file project (a genuine ~260-
+  line rule-engine module, its real route CLI, its real 30-assertion
+  conformance suite, and its real claim fixtures) carrying one deliberately
+  injected, isolated regression, and scores against the project's OWN real,
+  unmodified test suite — not a test written for this eval. An integrity
+  guard fails the task outright if the agent edits the oracle or the claim
+  fixtures instead of the actual defect. Levels 3, 5, 6, 7 are still not yet
+  written. The architecture (holonic recursion, surf/fold ingest, now a real
+  repo-ingest path in `harness.mjs`) is built to support them.
 - **`eval/tasks/` and `eval/tier0/`** are earlier work from a prior framing
   of this eval (constitutional-invariant gating and one-shot Tier 1-4
   generation tasks). `tier0/` is real, tested (33 passing assertions against

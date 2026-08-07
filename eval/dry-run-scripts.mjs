@@ -65,6 +65,13 @@ console.log(sum);
 `;
 
 export const DRY_RUN_SCRIPTS = {
+  "level4-constitution-veto-bug": [
+    { decompose: false },
+    { tool: "run_shell", args: { command: "node --test conformance/assay.test.js" } },
+    { tool: "edit_file", args: { path: "assay/classify.js", old_string: "if (evidence.giver !== undefined) {", new_string: "if (evidence.giver) {" } },
+    { tool: "run_shell", args: { command: "node --test conformance/assay.test.js" } },
+    { tool: "finish", args: { summary: "fixed the giver falsy-check regression in classify.js; node --test conformance/assay.test.js now passes in full" } },
+  ],
   "level1-csv-to-json": [
     { decompose: false },
     { tool: "write_file", args: { path: "convert.js", content: csvConvert } },

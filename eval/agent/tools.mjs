@@ -72,7 +72,7 @@ export function createTools(sandboxDir) {
       },
     },
     write_file: {
-      description: 'write_file({"path": "relative/path.js", "content": "..."}) — write the COMPLETE file content (overwrites; creates parent directories).',
+      description: 'write_file({"path": "relative/path.js", "content": "..."}) — write the COMPLETE file content (overwrites; creates parent directories). For a small NEW file. For an existing real file bigger than a few lines, use edit_file instead — you do not have the token budget to retype a whole real file.',
       run({ path, content }) {
         let result;
         try {
@@ -84,6 +84,35 @@ export function createTools(sandboxDir) {
           result = { error: err.message };
         }
         record("write_file", { path, contentLength: (content ?? "").length }, result);
+        return result;
+      },
+    },
+    edit_file: {
+      description: 'edit_file({"path": "relative/path.js", "old_string": "exact text to find", "new_string": "replacement"}) — surgical edit: old_string must match EXACTLY ONE place in the file (copy it verbatim from a prior read_file, including whitespace) or this fails and tells you why (not found, or found N times — add more surrounding context to make it unique). Use this for any real, existing file — it costs only the changed lines, not the whole file.',
+      run({ path, old_string, new_string }) {
+        let result;
+        try {
+          const abs = resolveInSandbox(sandboxDir, path);
+          const full = readFileSync(abs, "utf8");
+          const needle = String(old_string ?? "");
+          if (needle === "") {
+            result = { error: "old_string must not be empty" };
+          } else {
+            const occurrences = full.split(needle).length - 1;
+            if (occurrences === 0) {
+              result = { error: "old_string was not found in the file — it must match the file's actual current content exactly (re-read the file if unsure)" };
+            } else if (occurrences > 1) {
+              result = { error: `old_string matches ${occurrences} places in the file — it must be unique; include more surrounding context` };
+            } else {
+              const next = full.replace(needle, String(new_string ?? ""));
+              writeFileSync(abs, next);
+              result = { ok: true, bytesWritten: Buffer.byteLength(next) };
+            }
+          }
+        } catch (err) {
+          result = { error: err.message };
+        }
+        record("edit_file", { path, oldLength: (old_string ?? "").length, newLength: (new_string ?? "").length }, result);
         return result;
       },
     },

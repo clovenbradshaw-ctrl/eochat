@@ -1,0 +1,25 @@
+{
+  "claim_id": "document-who-for",
+  "what": "the intended addressee of a document (its 'who for') carried as a received prior that names the communicator as its giver",
+  "proposed_placement": "priors",
+  "expect": "pass",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": true,
+    "giver": "the communicator",
+    "is_host_knowledge": false,
+    "medium_agnostic": false,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "none",
+    "host_dependencies": []
+  }
+}

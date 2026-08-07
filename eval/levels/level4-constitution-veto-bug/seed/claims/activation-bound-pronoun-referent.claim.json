@@ -1,0 +1,22 @@
+{
+  "claim_id": "activation-bound-pronoun-referent",
+  "what": "third-person singular pronoun ('he'/'she' and forms) bound to a referent by one-hop Hebbian activation recall over the already-admitted cast's vocabulary — engine derives who a pronoun denotes from frame-to-frame recurrence, with no injected witness",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Recorded 2026-08-05, against eoreader6 PR #34 (merged), branch claude/presence-referent-activation-9nh2me: packages/engine/perceiver/text/pronouns.js::resolvePronouns, wired into packages/host/corpus.js::discoveredCast/sessionReferents and packages/engine/perceiver/text/presence.js::admitReferent. Same shape as claims/coref-in-engine.claim.json ('engine derives descriptor coref from name-token overlap with no injected prior') — the substrate changed (one-hop activation recall over shared vocabulary, reusing emergence/activation.js's codeOf/recall/encodeFrame, rather than name-token overlap) but the routing question did not: this still derives II.2's paradigm case ('who a name denotes... which words bind a relation') without a giver, for a harder instance of it (a pronoun, not even a name variant). classify() confirms: is_material_knowledge=true, giver='' -> GAP -> REFUTE, identically to coref-in-engine. The mechanism's engineering discipline is real and worth recording precisely because it does NOT change the verdict: every binding is gated by two declared-never-defaulted thresholds (minActivation, minMargin — the engine organ throws without them), gender is a derived hard filter that excludes rather than blends, every unresolved pronoun is a typed gap (pronoun_no_candidate/pronoun_below_floor/pronoun_no_margin) rather than a guess, and resolved bindings are tagged resolved:'activation' and counted separately (pronounMentions/pronounFrames) from literal-surface mentions/frames so a consumer can always tell derived hypothesis from received fact. None of that is a giver, and II.2's wall does not have a quality exception — 'report a typed gap, never derive' applies regardless of how well-instrumented the derivation is. A second, independent weakness compounds this: minActivation=0.05/minMargin=0.2 (declared in packages/host/corpus.js) are fixed engineering constants, not measured against a shuffle/permutation null the way nul/index.js's ground()/pattern() gate every other significance claim in this engine — so even a hypothetical future carve-out for disclosed-hypothesis engine placements would not yet be cleared by this implementation. The compliant fix, following this repo's own passing precedents (coref-descriptor.claim.json: priors, giver 'human reader (per-text coref prior)'; embedding-bridge.claim.json: priors, giver 'injected model-tier witness', matching Article III.1 — 'it reranks what the engine surfaced; it never retrieves on its own') is architectural, not cosmetic: the engine's honest job is to expose the raw one-hop recall a pronoun's frame gets against each already-admitted referent's frames (a structural fact, giver-free, non-referential); the DECISION that this recall means the pronoun denotes that referent belongs in an injected layer with a named giver (human per-text prior, or a declared model-tier reranker on the same terms as activation.js's own already-injected embed parameter), never inside resolvePronouns/discoveredCast as engine-native derivation. Not yet ablated or restructured — this claim documents the current, shipped shape as refused case law so no later change can point to it as a precedent for deriving reference in-engine without a giver.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": true,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": false,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "consumes_source": "direct",
+    "host_dependencies": []
+  }
+}

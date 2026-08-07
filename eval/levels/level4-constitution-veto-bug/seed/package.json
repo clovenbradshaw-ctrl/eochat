@@ -1,0 +1,11 @@
+{
+  "name": "eo-constitution",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The amendable constitution and routing assay for the EOReader lineage",
+  "type": "module",
+  "scripts": {
+    "test": "node --test conformance/assay.test.js",
+    "route": "node assay/route.mjs"
+  }
+}

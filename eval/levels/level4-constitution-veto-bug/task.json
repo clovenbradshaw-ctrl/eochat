@@ -1,0 +1,13 @@
+{
+  "id": "level4-constitution-veto-bug",
+  "level": 4,
+  "title": "Bug-fix-from-symptom: a real regression in a real multi-file codebase (clovenbradshaw-ctrl/eo-constitution)",
+  "seedDir": "seed",
+  "repo": "clovenbradshaw-ctrl/eo-constitution",
+  "surfBudget": 1200,
+  "surfMaxUnits": 6,
+  "maxSteps": 14,
+  "maxTokensPerStep": 300,
+  "seed": 4001,
+  "taskPrompt": "There is a real Node.js project in the current directory: package.json, assay/classify.js, assay/route.mjs, conformance/assay.test.js, and a claims/ directory of fixtures. A recent change introduced a regression in assay/classify.js. Run `node --test conformance/assay.test.js` first to see the real failure output. Do NOT modify conformance/assay.test.js or anything under claims/ — those are the ground truth this project already trusts, not yours to change. Use edit_file (not write_file) to fix real files — they are too long to retype from scratch. If you need to understand WHY the correct behavior is what it is, you have a research tool over the wider project (including its constitution document) — use it with a short, specific query. Read the failing assertion and its message carefully, find the actual defect in assay/classify.js, fix ONLY that file, and re-run the test command to confirm all tests pass (zero failures) before calling finish."
+}

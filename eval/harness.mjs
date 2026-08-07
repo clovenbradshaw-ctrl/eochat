@@ -8,6 +8,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runHolonicCodingTask } from "./agent/holon-coder.mjs";
 import { createTools } from "./agent/tools.mjs";
+import { resolveAndCloneRepo, ingestCodebase, createSurf } from "./agent/ingest.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SANDBOX_ROOT = join(__dirname, ".sandbox");
@@ -34,19 +35,45 @@ function seedSandbox(sandboxDir, task) {
 
 const CLAIMS_SUCCESS = /\b(pass|passed|success|works|verified|complete|done|fixed)\b/i;
 
+/**
+ * Level 3+ tasks declare `task.repo` (a "owner/repo" GitHub shorthand or a
+ * local directory) instead of, or alongside, `seedDir`: the sandbox holds
+ * only the files the agent is meant to actually edit (seedDir, as before —
+ * small, deliberately bounded), while the REST of the real codebase — too
+ * big to hand a CPU-bound local model directly, which is the entire reason
+ * `surf` exists — is cloned once and admitted into a dedicated ingest pool,
+ * exposing a bounded `surf(query)` research callback. `task.ingestSubdir`
+ * narrows ingestion to a real subtree when the whole repo is more than the
+ * task needs. Honest, not silent: the caller gets back exactly how many
+ * files were found vs. actually ingested.
+ */
+function ingestRepoForTask(task, runId) {
+  if (!task.repo) return { surf: null, ingest: null };
+  const ingestDir = join(SANDBOX_ROOT, runId, `${task.id}__ingest-src`);
+  const { dir } = resolveAndCloneRepo(task.repo, ingestDir);
+  const rootDir = task.ingestSubdir ? join(dir, task.ingestSubdir) : dir;
+  const poolName = `eval-${runId}-${task.id}`;
+  const ingest = ingestCodebase(rootDir, poolName);
+  const surf = createSurf(poolName, { budget: task.surfBudget ?? 1200, maxUnits: task.surfMaxUnits ?? 6 });
+  return { surf, ingest };
+}
+
 /** @param {object} opts.adapter  the local-model adapter — the ONLY thing that plans or writes code */
-export async function runLevelTask(taskDir, { adapter, runId, maxDepth = 1, surf = null } = {}) {
+export async function runLevelTask(taskDir, { adapter, runId, maxDepth = 1, surf: surfOverride = null } = {}) {
   const task = loadTask(taskDir);
   const sandboxDir = join(SANDBOX_ROOT, runId, task.id);
   rmSync(sandboxDir, { recursive: true, force: true });
   seedSandbox(sandboxDir, task);
+
+  const { surf: repoSurf, ingest } = surfOverride ? { surf: surfOverride, ingest: null } : ingestRepoForTask(task, runId);
+  const surf = surfOverride ?? repoSurf;
 
   const toolset = createTools(sandboxDir);
   const t0 = Date.now();
   const run = await runHolonicCodingTask({
     taskId: task.id, taskPrompt: task.taskPrompt, adapter, toolset, surf,
     maxSteps: task.maxSteps ?? 8, maxTokensPerStep: task.maxTokensPerStep ?? 300,
-    seed: task.seed ?? 0, maxDepth,
+    seed: task.seed ?? 0, maxDepth: task.maxDepth ?? maxDepth,
   });
   const wallMs = Date.now() - t0;
 
@@ -72,6 +99,7 @@ export async function runLevelTask(taskDir, { adapter, runId, maxDepth = 1, surf
     overallPass,
     oracleChecks: oracle.checks,
     agentSummary: run.summary,
+    ingest: ingest ? { pool: ingest.pool, filesIngested: ingest.filesIngested, filesFound: ingest.filesFound, hitFileCap: ingest.hitFileCap } : undefined,
     metrics: {
       iterationsToGreen: shellCalls.length,
       totalToolCalls: toolCalls.length,
