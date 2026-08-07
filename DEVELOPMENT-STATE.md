@@ -515,6 +515,78 @@ and an L1 dead-air/streaming timing scenario (would need to drive
 context-assembly functions this eval isolates) — neither built this session,
 both named rather than silently skipped.
 
+## Navigating the cube: "entities are entities," made literal, plus a real fiction test
+
+Two more real things done this session, same "measured, not guessed" discipline.
+
+**`task-log.js` grows two small, generic primitives** (never widening its
+existing, deliberate Structure-row-only restriction — NUL/SIG/INS and
+DEF/EVA/REC stay refused, per the module's own header):
+
+- **`proposeDiscovered(log, discoveries)`** — the one registration path for
+  "something unplanned was noticed mid-generation; register it so
+  everything downstream sees it." `narrative-longform.js`'s
+  `extractNewNames` (a character the model introduces unasked) and
+  `code-longform.js`'s `discoverReferencedFiles` (a file a written file
+  references but nobody planned) were independently reimplementing the
+  exact same append loop — code-longform.js's own comment already said so
+  ("the exact same move as extractNewNames() discovering a character")
+  without the two ever sharing code. They do now: both call
+  `proposeDiscovered`, and both resolve to the identical cube cell (SEG,
+  Figure grain) — not merely an analogous one. Proven by a same-cell
+  assertion in both `narrative-longform.test.js` and `code-longform.test.js`.
+- **`isGrainProgression`/`isProductionOrder`/`checkCubeProgression`** — advisory
+  (never blocking, same discipline as `checkContinuity`) checks that a
+  single task's own trajectory through the cube never coarsens its grain
+  (Ground→Figure→Pattern only deepens, revisited but never backward — the
+  "spiral, not a flat loop" reading) and never runs its own operator
+  backward against `produce()`'s existing SEG-before-CON-before-SYN order.
+  Scoped correctly per the codebase's own "peer is first-class" discipline:
+  it compares one task_id's entries against ITSELF only, never across
+  different tasks — two different entities have no shared ladder to be
+  compared on.
+
+**Applied for real**, not just declared: `narrative-longform.js`'s
+introduce/plant/resolve moves now carry real (operator, grain) pairs (SEG,
+CON, SYN respectively, all at Figure grain), and `code-longform.js`'s file
+registration (planned or discovered) does too. Both engines' `write*`
+functions now return a `cubeFlags` field. 26 new/updated tests across
+`task-log.test.js`, `narrative-longform.test.js`, `code-longform.test.js` —
+full suite still 260/265 (same 5 pre-existing, unrelated failures as before
+this session).
+
+**A real fiction test, run for real**: `eval/narrative-runs/campaign-derby-novel/`
+— chapters 1-3 of a brand-new, structurally unrelated world (campaign-finance-
+reform thriller, Kentucky Derby week — not lighthouse, not the heist) through
+the real `writeNarrative()`. This sandbox has no Ollama and no model API key,
+so `scripts/run-campaign-derby-novel.mjs` stubs the network call with
+hand-authored prose (Claude, this session) instead of a local model — a real,
+different thing than the other domains' small-model runs, stated as such in
+the script's own header, not blurred.
+
+**Three real, measured bugs found on this real run, in `extractNewNames`
+(the "a character surfaced unasked" mechanism), fixed and regression-tested**
+— the mechanism was built and tuned against `LIGHTHOUSE_WORLD`'s spare,
+few-proper-noun style, and broke three distinct ways on denser,
+institution-heavy prose:
+1. A multi-word proper noun ("Blue Larkspur Farm") fragmented into one
+   spurious single-word entity per word. Fixed: match a run of consecutive
+   capitalized words as one candidate.
+2. Generic capitalized words that happened to recur as sentence-FIRST words
+   ("None", "One", "You", "Names", "Not", "Man") were false-flagged as
+   characters — sentence-initial capitalization proves nothing about
+   properness. Fixed: require at least one NON-sentence-initial occurrence.
+3. Round 2's own sentence-initial check missed DIALOGUE — a quotation mark
+   sitting between the terminal punctuation and the word ('He said. "You
+   heard me."') defeated the lookbehind, letting "You" and "Not" back in
+   via quote-masked false negatives. Fixed: the lookbehind now tolerates an
+   optional quote character. A related fix in the same pass: a possessive
+   join ("Ledger's Daughter") broke the multi-word run at the apostrophe,
+   fragmenting one real name into two — the run pattern now bridges `'s `.
+   Confirmed clean on a real re-run: zero spurious entities, "Ledger's
+   Daughter" registers as one name, `checkContinuity`/`checkNumericLocks`
+   both report 0 flags across all 3 chapters.
+
 ## Key files, for quick orientation
 
 - `eochat/server/task-log.js` (+`.test.js`) — the spine, do not modify lightly
@@ -529,3 +601,5 @@ both named rather than silently skipped.
 - `work-website/` (main project root) — the real generated site, vocabulary fix confirmed working
 - `work-diagram/`, `work-diagram-qwen/` (main project root) — real generated flowcharts, llama3.2 vs qwen2.5:14b comparison
 - `eochat/eval/chat/` — Conversational Memory Capability Eval, the "does the holonic spine help NORMAL chatting" sibling initiative; `node eval/chat/run.mjs` to reproduce
+- `eochat/eval/narrative-runs/campaign-derby-novel/` — real 3-chapter fiction test, hand-authored prose through the real engine; `node scripts/run-campaign-derby-novel.mjs` to reproduce
+- `eochat/server/task-log.js`'s `proposeDiscovered`/`checkCubeProgression` — the shared "entities are entities" cube-navigation primitives both narrative-longform.js and code-longform.js now call
