@@ -168,6 +168,108 @@ function searchNpm(signature) {
   }
 }
 
+const MIN_ARCHETYPE_STARS = 50;
+
+/**
+ * A different altitude of "kind" than searchNpm/searchLocal: not "is there
+ * a utility function for this" but "is the WHOLE task a known archetype" —
+ * e.g. "build a website that looks like Reddit" should find real, working
+ * implementations to adapt, not get assembled function-by-function. Krueger
+ * 1992's scavenging-reuse category, one grain coarser than package reuse.
+ *
+ * Validated against real GitHub data before being wired anywhere (CRISPR.md
+ * discipline: real material before theory). Four real queries, run via the
+ * GitHub API directly:
+ *   "reddit clone" (+stars:>100)  -> 16 real hits: breadit (1114 stars,
+ *     Next.js/TS), spring-reddit-clone, flask_reddit, asperitas, etc.
+ *   "trello kanban board" (+stars:>50) -> 12 real hits: react-trello (2258
+ *     stars, literally "pluggable kanban board component"), RestyaPlatform
+ *     /board, taskell, 4gaBoards.
+ *   "xyzzy plugh frotz qwzblort" (nonsense) -> 0 hits.
+ *   "recognize semantic kinds across code snippets" (a real but
+ *     non-archetype coding task, deliberately chosen to check this doesn't
+ *     falsely fire on niche technical asks) -> 0 hits.
+ * The clean 0 on both negative controls is itself the finding worth noting:
+ * searchNpm's equivalent nonsense-query test returned 5 loosely-related
+ * npm hits (npm's full-text search is generous even on garbage input), but
+ * GitHub repo search gated by a star-count floor gives an honest hit/miss
+ * signal instead of always returning "something." The star floor is doing
+ * real work here, not just noise reduction — keep it.
+ *
+ * ENVIRONMENT CAVEAT, found while validating this: a plain `curl
+ * https://api.github.com/search/repositories` works anywhere GitHub's
+ * public API is reachable (subject to its standard 10-req/min unauthenticated
+ * rate limit) — but a Claude-Code-on-the-web sandboxed session's own proxy
+ * returns 403 for that path ("sessions are bound to their configured
+ * repositories"), specific to this kind of session, not a defect in this
+ * function or in GitHub's API. The four queries above were validated
+ * through the session's scoped GitHub tool instead, using the identical
+ * query construction this function uses — not through this code path
+ * directly, which could not be exercised end-to-end in this environment.
+ */
+function searchArchetype(signature, { minStars = MIN_ARCHETYPE_STARS } = {}) {
+  if (signature.length === 0) return { candidates: [] };
+  const query = encodeURIComponent(`${signature.join(" ")} stars:>${minStars}`);
+  const url = `https://api.github.com/search/repositories?q=${query}&sort=stars&order=desc&per_page=${MAX_CANDIDATES}`;
+  try {
+    const out = execSync(
+      `curl -sS --max-time 8 -H "User-Agent: eochat-crispr" -H "Accept: application/vnd.github+json" "${url}"`,
+      { encoding: "utf8", timeout: NPM_SEARCH_TIMEOUT_MS, maxBuffer: 2 * 1024 * 1024 },
+    );
+    const data = JSON.parse(out);
+    if (data.message) return { candidates: [], error: data.message }; // rate-limited or blocked — GitHub's error shape has no "items"
+    const candidates = (data.items || []).slice(0, MAX_CANDIDATES).map((r) => ({
+      repo: r.full_name,
+      stars: r.stargazers_count,
+      language: r.language,
+      description: clip(r.description),
+      license: r.license?.spdx_id || "UNKNOWN",
+      url: r.html_url,
+    }));
+    return { candidates };
+  } catch (err) {
+    return { candidates: [], error: err.message };
+  }
+}
+
+/**
+ * Standalone, like searchPriorArt but one altitude up (§ above) — not yet
+ * wired onto any live eoCode tool. Kept separate deliberately: a match here
+ * implies a structurally different action (clone/adapt a whole real
+ * implementation) than a match in searchPriorArt (install or copy a small
+ * utility), and reusing a whole third-party application is a much bigger
+ * license/provenance decision than snipping 20 lines — CRISPR.md's license
+ * gate stops being hypothetical at this altitude. Whether and how to expose
+ * this to a live agent (and how it should relate to the license gate) is an
+ * open decision, not made by adding this function.
+ */
+export function searchAppArchetype({ taskPrompt, ledgerPath = DEFAULT_LEDGER_PATH, minStars } = {}) {
+  const signature = extractSignature(taskPrompt);
+  const result = signature.length ? searchArchetype(signature, { minStars }) : { candidates: [] };
+  const candidates = result.candidates;
+  const hit = candidates.length > 0;
+
+  const entry = {
+    ts: Date.now(),
+    kind: "archetype",
+    taskPrompt: String(taskPrompt ?? "").slice(0, 300),
+    signature,
+    candidateCount: candidates.length,
+    hit,
+    error: result.error,
+  };
+  appendLedger(ledgerPath, entry);
+
+  return {
+    signature,
+    candidates,
+    hit,
+    note: hit
+      ? "a real, working implementation may already exist — review its license before adapting it"
+      : "no known archetype match — this looks like it genuinely needs building",
+  };
+}
+
 function appendLedger(ledgerPath, entry) {
   try {
     mkdirSync(dirname(ledgerPath), { recursive: true });

@@ -180,10 +180,34 @@ unfalsifiable citation as the more serious failure than a missing one.
    If there's a real, maintained hit, the pipeline ends here: install a
    dependency, don't write or splice anything. This is Krueger's already-
    solved layer and should absorb most tasks before anything below runs.
-5. **Corpus search** (only if 3–4 miss). GitHub code search (the GitHub MCP
-   tools already available to this agent — `search_code`, `search_repositories`)
-   and/or Software Heritage, clustered Aroma-style rather than taking the
-   first hit.
+5. **Corpus search** (only if 3–4 miss) — but not one search, two, at two
+   different grains, a distinction the first buildable increment did not
+   originally draw and real testing surfaced. GitHub code search (the GitHub
+   MCP tools already available to this agent — `search_code`,
+   `search_repositories`) and/or Software Heritage, clustered Aroma-style
+   rather than taking the first hit, answers "is there a reusable
+   *component* for this" — still roughly package-grain. A separate question,
+   one grain coarser, is "is the *whole task* a known archetype" — "build a
+   website that looks like Reddit" should find a real, working
+   implementation to adapt, not get assembled function-by-function from
+   npm packages, which structurally cannot answer that question (they index
+   libraries, not applications). Validated with real queries before being
+   built (`eval/agent/crispr-search.mjs`'s `searchAppArchetype`): GitHub
+   repository search for "reddit clone" (+`stars:>100`) returns 16 real
+   implementations (`breadit`, 1,114 stars, Next.js/TypeScript down through
+   Java/Spring, Python/Flask, plain JS); "trello kanban board"
+   (+`stars:>50`) returns 12, including `react-trello` (2,258 stars,
+   literally "pluggable kanban board component"). More useful than either
+   hit alone: two negative controls — a nonsense query and a real but
+   non-archetype technical task — both returned a clean 0, which searchNpm's
+   own nonsense-query test did *not* (5 loosely-related hits; npm's
+   full-text search is generous even on garbage input). The star-count
+   floor is doing real work here, not just cosmetic noise reduction — it is
+   what makes this altitude's hit/miss signal trustworthy where npm's isn't.
+   Kept as a standalone function, not wired to a live tool yet: a match here
+   implies cloning and adapting a whole third-party application, a much
+   bigger license/provenance decision (§3) than snipping one function, and
+   whether/how to expose it to a live agent is an open decision on its own.
 6. **Specificity gate (the PAM check).** Confirm the candidate occupies the
    same cube address as the task — mechanical, not similarity-by-vibes. This
    is `LAWS.md` L8 ("selection over a navigation index is mechanical, never
