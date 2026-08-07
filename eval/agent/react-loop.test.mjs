@@ -162,6 +162,60 @@ test("older steps get folded to a bounded digest once the window is exceeded, bu
   }
 });
 
+test("a real, measured failure mode: many read/edit calls with no run_shell gets an explicit, repeating nudge to actually run the code", async () => {
+  const sandboxDir = freshSandbox();
+  try {
+    writeFileSync(join(sandboxDir, "a.js"), "content\n");
+    // 6 distinct list_files calls in a row (never repeats -> no stuck-loop
+    // interference), no run_shell at all -- exactly the read/edit-only
+    // pattern documented against real qwen2.5-coder:7b Level 3+ runs.
+    const script = [
+      { tool: "list_files", args: {} }, { tool: "list_files", args: { path: "x1" } },
+      { tool: "list_files", args: { path: "x2" } }, { tool: "list_files", args: { path: "x3" } },
+      { tool: "list_files", args: { path: "x4" } }, { tool: "list_files", args: { path: "x5" } },
+      { tool: "list_files", args: { path: "x6" } }, { tool: "finish", args: { summary: "done" } },
+    ];
+    const adapter = createSpyAdapter(script);
+
+    await runReactLoop({
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1,
+    });
+
+    // The nudge must fire once the streak crosses NO_VERIFY_NUDGE_AT (4)...
+    const nudgedCalls = adapter.calls.filter((c) => c.messages.some((m) => /VERIFICATION REMINDER/.test(m.content)));
+    assert.ok(nudgedCalls.length >= 1, "expected at least one verification nudge once read/edit calls pile up with no run_shell");
+    // ...and, unlike the stuck-loop abort, must NOT end the attempt early --
+    // ignoring the nudge is recoverable in a way a proven-dead identical
+    // failure loop is not, so the loop keeps giving the model chances.
+    assert.ok(nudgedCalls.length >= 2, "the nudge must repeat (not just fire once and go silent) if still ignored");
+  } finally {
+    rmSync(sandboxDir, { recursive: true, force: true });
+  }
+});
+
+test("calling run_shell resets the no-verify streak", async () => {
+  const sandboxDir = freshSandbox();
+  try {
+    writeFileSync(join(sandboxDir, "a.js"), "content\n");
+    const script = [
+      { tool: "list_files", args: {} }, { tool: "list_files", args: { path: "x1" } },
+      { tool: "list_files", args: { path: "x2" } }, { tool: "run_shell", args: { command: "true" } },
+      { tool: "list_files", args: { path: "x3" } }, { tool: "list_files", args: { path: "x4" } },
+      { tool: "finish", args: { summary: "done" } },
+    ];
+    const adapter = createSpyAdapter(script);
+
+    await runReactLoop({
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1,
+    });
+
+    const nudgedCalls = adapter.calls.filter((c) => c.messages.some((m) => /VERIFICATION REMINDER/.test(m.content)));
+    assert.equal(nudgedCalls.length, 0, "3 read/list calls then a run_shell must never reach the 4-call nudge threshold");
+  } finally {
+    rmSync(sandboxDir, { recursive: true, force: true });
+  }
+});
+
 test("a different failing call does not count toward the same streak", async () => {
   const sandboxDir = freshSandbox();
   try {

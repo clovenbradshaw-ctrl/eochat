@@ -2,6 +2,79 @@
 
 Each run is a local CPU model attempting the Level 1-7 task ladder (see eval/README.md). All planning and all coding is done by the model under test via the tool loop in eval/agent/ — the harness only sandboxes, seeds, scores, and records. Newest runs first.
 
+## 2026-08-07T18-02-03-850Z__dry-run
+
+Model: `(dry-run, no model)` — 9/9 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:0.1s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.2s
+- **level2-jsonl-quirk** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.2s
+- **level2-wav-duration-bug** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:0.3s
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:2.7s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:3.2s
+
+### Level 5
+- **level5-constitution-rename-ask** (Level 5) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:6 wall:2.9s
+
+### Level 6
+- **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:5.3s
+
+
+## 2026-08-07T17-55-42-800Z__dry-run
+
+Model: `(dry-run, no model)` — 2/2 tasks passed.
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:2.7s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:3.4s
+
+
+## 2026-08-07T16-28-48-098Z__qwen2.5-coder_7b
+
+Model: `qwen2.5-coder:7b` — 0/2 tasks passed.
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:20 wall:2330.8s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — FAIL — finished:false decomposed:false iterationsToGreen:5 tools:22 wall:2826.4s
+
+
+## 2026-08-07T16-28-05-159Z__dry-run
+
+Model: `(dry-run, no model)` — 8/8 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:0.1s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+- **level2-jsonl-quirk** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:2.7s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:3.2s
+
+### Level 5
+- **level5-constitution-rename-ask** (Level 5) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:6 wall:2.9s
+
+### Level 6
+- **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:5.4s
+
+
 ## 2026-08-07T16-11-13-173Z__dry-run
 
 Model: `(dry-run, no model)` — 9/9 tasks passed.
@@ -26,6 +99,17 @@ Model: `(dry-run, no model)` — 9/9 tasks passed.
 
 ### Level 6
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:2.5s
+
+
+## 2026-08-07T15-00-21-029Z__qwen2.5-coder_7b
+
+Model: `qwen2.5-coder:7b` — 0/2 tasks passed.
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:20 wall:2571.4s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:22 wall:2586.3s
 
 
 ## 2026-08-07T14-57-52-530Z__dry-run

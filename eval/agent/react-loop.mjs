@@ -27,6 +27,22 @@ import { parseAction } from "./lib/parse-action.mjs";
 const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
 const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
 
+// VERIFICATION NUDGE. A real, measured failure mode from Level 3+ runs
+// against qwen2.5-coder:7b (see eval/README.md): the model spends its
+// ENTIRE step budget alternating read_file/edit_file and essentially never
+// calls run_shell to actually execute what it wrote -- a real behavioral
+// pattern, not a step-budget-exhaustion artifact (doubling the budget just
+// repeated the same ratio longer). Same shape as the stuck-loop problem
+// above (a real failure this loop must surface and correct, not paper
+// over) so it gets the same fix: an explicit, escalating nudge rather than
+// a silent hope the model self-corrects. Unlike the stuck-loop abort, this
+// never force-ends the attempt -- not calling run_shell is not inherently
+// unrecoverable the way a proven-dead identical-failure loop is, so this
+// only nudges, repeating every NO_VERIFY_NUDGE_EVERY calls if still
+// ignored, rather than aborting.
+const NO_VERIFY_NUDGE_AT = 4;
+const NO_VERIFY_NUDGE_EVERY = 3;
+
 // SURF AND FOLD, applied to the running conversation. Ollama's /api/chat is
 // stateless per request, so every turn resends the WHOLE prompt — left
 // unbounded, a real run measured n_tokens climbing past 3400 within half a
@@ -146,6 +162,7 @@ export function createSession({ taskPrompt, groundingBlock = null, toolset, fold
     repeatFailStreak: 0,
     lastFailedCallKey: null,
     stuckLoopAbort: false,
+    noVerifyStreak: 0,
     // Set once no further applyResponse call should happen: finished,
     // stuckLoopAbort, or the malformed-response abort threshold.
     done: false,
@@ -215,14 +232,17 @@ export function applyResponse(session, raw) {
   const isFailure = result && typeof result === "object" && "error" in result;
   session.repeatFailStreak = isFailure && callKey === session.lastFailedCallKey ? session.repeatFailStreak + 1 : isFailure ? 1 : 0;
   session.lastFailedCallKey = isFailure ? callKey : null;
+  session.noVerifyStreak = parsed.tool === "run_shell" ? 0 : session.noVerifyStreak + 1;
 
-  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: session.repeatFailStreak || undefined };
+  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: session.repeatFailStreak || undefined, noVerifyStreak: session.noVerifyStreak || undefined };
   session.transcript.push(entry);
   events.push({ ...entry, phase: "tool_result" });
 
   let observation = formatObservation(parsed.tool, result);
   if (session.repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
     observation += `\n\nSTUCK LOOP: this is the ${session.repeatFailStreak}${session.repeatFailStreak === 2 ? "nd" : session.repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
+  } else if (session.noVerifyStreak >= NO_VERIFY_NUDGE_AT && (session.noVerifyStreak - NO_VERIFY_NUDGE_AT) % NO_VERIFY_NUDGE_EVERY === 0) {
+    observation += `\n\nVERIFICATION REMINDER: that is ${session.noVerifyStreak} tool calls in a row without running anything. Reading and editing a file is not evidence it works. Call run_shell now and actually execute your code (or the task's test/check command) before making any more edits.`;
   }
   const observationMsg = { role: "user", content: observation };
   session.messages.push(observationMsg);
