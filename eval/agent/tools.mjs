@@ -88,7 +88,7 @@ export function createTools(sandboxDir) {
       },
     },
     edit_file: {
-      description: 'edit_file({"path": "relative/path.js", "old_string": "exact text to find", "new_string": "replacement"}) — surgical edit: old_string must match EXACTLY ONE place in the file (copy it verbatim from a prior read_file, including whitespace) or this fails and tells you why (not found, or found N times — add more surrounding context to make it unique). Use this for any real, existing file — it costs only the changed lines, not the whole file.',
+      description: 'edit_file({"path": "relative/path.js", "old_string": "exact text to find", "new_string": "replacement"}) — surgical edit: old_string must match EXACTLY ONE place in the file (copy it CHARACTER-FOR-CHARACTER from a prior read_file\'s content, including whitespace and indentation — do NOT wrap it in your own extra quote marks, those are not part of the file) or this fails and tells you why (not found, or found N times — add more surrounding context to make it unique). Use this for any real, existing file — it costs only the changed lines, not the whole file.',
       run({ path, old_string, new_string }) {
         let result;
         try {
@@ -100,7 +100,11 @@ export function createTools(sandboxDir) {
           } else {
             const occurrences = full.split(needle).length - 1;
             if (occurrences === 0) {
-              result = { error: "old_string was not found in the file — it must match the file's actual current content exactly (re-read the file if unsure)" };
+              const stripped = needle.replace(/^(['"`])([\s\S]*)\1$/, "$2");
+              const strippedHint = stripped !== needle && full.includes(stripped)
+                ? " — old_string appears to be wrapped in extra quote marks that are not actually part of the file; the unquoted text WAS found, try again without wrapping it in quotes"
+                : "";
+              result = { error: `old_string was not found in the file — it must match the file's actual current content exactly (re-read the file if unsure)${strippedHint}` };
             } else if (occurrences > 1) {
               result = { error: `old_string matches ${occurrences} places in the file — it must be unique; include more surrounding context` };
             } else {

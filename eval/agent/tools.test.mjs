@@ -55,6 +55,19 @@ test("edit_file refuses an old_string that matches more than once, rather than g
   }
 });
 
+test("edit_file's not-found error diagnoses a real observed model mistake: wrapping old_string in extra literal quote marks", () => {
+  const dir = freshSandbox();
+  try {
+    writeFileSync(join(dir, "a.js"), "obj[header] = row[index];\n");
+    const { tools } = createTools(dir);
+    const result = tools.edit_file.run({ path: "a.js", old_string: '"obj[header] = row[index];"', new_string: "x" });
+    assert.match(result.error, /not found/);
+    assert.match(result.error, /extra quote marks/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("edit_file cannot escape the sandbox", () => {
   const dir = freshSandbox();
   try {
