@@ -109,6 +109,7 @@ export async function runLevelTask(taskDir, { adapter, runId, maxDepth = 1, surf
       toolCallCounts: countBy(toolCalls.map((t) => t.name)),
       filesWritten,
       hitStepCapAnyLeaf: run.leafResults.some((r) => r.hitStepCap),
+      stuckLoopAbortAnyLeaf: run.leafResults.some((r) => r.stuckLoopAbort),
       selfReportMismatch,
     },
     logEntryCount: run.log.entries.length,

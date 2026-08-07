@@ -69,6 +69,12 @@ function foldHandoff(text, label) {
 // source for this — never a summary invented from what "probably" happened.
 function distillEvidence(result) {
   const last = [...result.transcript].reverse().find((t) => t.tool && t.tool !== "finish" && t.result);
+  if (result.stuckLoopAbort) {
+    const repeatInfo = last?.repeatFailStreak ? ` (identical arguments, ${last.repeatFailStreak} times in a row)` : "";
+    return last
+      ? `stopped itself in a repeated-failure loop, not a step-budget exhaustion: the last ${last.tool} call kept failing the same way${repeatInfo} — real evidence: ${last.result.error ?? JSON.stringify(last.result)}`
+      : "stopped itself in a repeated-failure loop before any tool call produced a usable result";
+  }
   if (!last) {
     return result.hitStepCap
       ? "ran out of steps without ever completing a tool call that produced an observable result"
@@ -176,7 +182,7 @@ export async function runHolonicCodingTask({
     const result = await runReactLoop({ taskPrompt, groundingBlock, toolset, adapter, maxSteps, maxTokensPerStep, seed });
     log = append(log, {
       kind: ENTRY_KINDS.RESULT, task_id: taskId, depends_on: [],
-      result: { finished: result.finished, summary: result.summary, stepsRun: result.stepsRun, hitStepCap: result.hitStepCap },
+      result: { finished: result.finished, summary: result.summary, stepsRun: result.stepsRun, hitStepCap: result.hitStepCap, stuckLoopAbort: result.stuckLoopAbort },
     });
 
     // Bottom-up: a direct attempt that did NOT converge produces real

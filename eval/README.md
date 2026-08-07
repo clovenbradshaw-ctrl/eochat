@@ -207,6 +207,13 @@ trusting the oracle (see git history for that verification).
 - `metrics.totalToolCalls` / `toolCallCounts` — raw tool-use footprint.
 - `metrics.hitStepCapAnyLeaf` — ran out of steps without finishing (honest
   incompleteness signal).
+- `metrics.stuckLoopAbortAnyLeaf` — a leaf stopped ITSELF early because it
+  called the same tool with the exact same arguments and got the exact
+  same failure 4 times in a row (`react-loop.mjs`'s `STUCK_LOOP_ABORT_AT`)
+  — a different, more specific honest signal than `hitStepCapAnyLeaf`: the
+  attempt did not run out of budget, it demonstrated it would not converge
+  on its own. The 2nd repeat already gets an explicit in-conversation
+  nudge naming the loop before the 4th aborts it.
 - `metrics.selfReportMismatch` — the model's own `finish` summary claimed
   success (matched against `/pass|success|works|verified|complete|done|
   fixed/i`) but the independent oracle disagreed. This is the self-report-

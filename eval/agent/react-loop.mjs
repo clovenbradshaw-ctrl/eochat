@@ -5,8 +5,27 @@
 // step cap is hit. No hidden retry-until-green on the harness's part — if
 // the model never runs its own code, that is a real, measured failure this
 // loop must surface, not paper over.
+//
+// STUCK-LOOP DETECTION. A real transcript from a real run showed a genuine
+// failure mode distinct from "ran out of steps": the model called edit_file
+// with the identical (wrong) old_string 10 times in a row, re-reading the
+// real file in between every attempt and never once incorporating what it
+// actually observed. A doubled step budget did not fix this — it just
+// repeated the same loop longer, which ruled out "not enough steps" as the
+// cause. This is a real, measured prediction-error-correction failure: the
+// SAME observation kept arriving and the model's next action did not
+// change in response to it. Two responses, both proportionate to how many
+// times the exact same failure has now repeated: an escalating, explicit
+// nudge naming the loop (a stronger correction signal than the generic
+// per-step error, since a REPEATED identical error is itself evidence a
+// gentler nudge already failed), and an honest early abort if it still
+// does not budge — the same "do not silently burn the rest of the budget"
+// discipline the malformed-response abort below already uses.
 
 import { parseAction } from "./lib/parse-action.mjs";
+
+const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
+const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
 
 const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
 
@@ -56,6 +75,9 @@ export async function runReactLoop({
   let summary = null;
   let step = 0;
   let malformedStreak = 0;
+  let repeatFailStreak = 0;
+  let lastFailedCallKey = null;
+  let stuckLoopAbort = false;
 
   for (; step < maxSteps; step++) {
     const raw = await adapter.generate(messages, { maxTokens: maxTokensPerStep, seed: seed + step });
@@ -83,8 +105,24 @@ export async function runReactLoop({
     }
 
     const result = tools[parsed.tool].run(parsed.args);
-    transcript.push({ step, tool: parsed.tool, args: parsed.args, result });
-    messages.push({ role: "user", content: formatObservation(parsed.tool, result) });
+    const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
+    const isFailure = result && typeof result === "object" && "error" in result;
+    repeatFailStreak = isFailure && callKey === lastFailedCallKey ? repeatFailStreak + 1 : isFailure ? 1 : 0;
+    lastFailedCallKey = isFailure ? callKey : null;
+
+    transcript.push({ step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatFailStreak || undefined });
+
+    let observation = formatObservation(parsed.tool, result);
+    if (repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
+      observation += `\n\nSTUCK LOOP: this is the ${repeatFailStreak}${repeatFailStreak === 2 ? "nd" : repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
+    }
+    messages.push({ role: "user", content: observation });
+
+    if (repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
+      stuckLoopAbort = true;
+      transcript.push({ step, note: `aborted after ${repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` });
+      break;
+    }
   }
 
   return {
@@ -92,7 +130,12 @@ export async function runReactLoop({
     summary,
     steps: step + (finished || transcript.at(-1)?.note ? 1 : 0),
     stepsRun: transcript.length,
-    hitStepCap: !finished && step >= maxSteps,
+    hitStepCap: !finished && !stuckLoopAbort && step >= maxSteps,
+    // A distinct honest reason from hitStepCap: the loop stopped itself
+    // early because it detected it was not converging, not because it ran
+    // out of budget -- these must not read alike (same discipline
+    // task-log.js's `closed` vs `halted_by` distinguishes).
+    stuckLoopAbort,
     transcript,
     toolCalls: [...toolCalls],
     messages,
