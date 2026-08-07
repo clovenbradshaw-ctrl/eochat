@@ -1,0 +1,26 @@
+{
+  "claim_id": "apparatus-individuation",
+  "what": "eoreader6 packages/host/corpus.js::classifyIndividuation / namingSentenceShare — already-shipped apparatus demotion: a referent is typed 'apparatus' (non-personal) once its naming-sentence-share clears APPARATUS_NAMING_SHARE_FLOOR (0.15, an internally measured constant with no named giver), and that type is then treated downstream (ranking, resolvePronouns' nonPersonal filter) as settled fact about what kind of being the referent is",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Recorded 2026-08-06 during a constitutional grounding pass on eoreader6 branch claude/terrain-occupancy-ascents-xgwo5u (spec 11), requested by the repo owner before continuing spec 11's Assembly D/E. This mechanism was NOT filed as a claim when it shipped (host/corpus.js's own header cites the measured floor across pg84-frankenstein.txt/Elizabeth Lavenza 2.7%, Heart of Darkness/Kurtz 4.6%, and a hand-authored wire-service fixture 52.5%, but no claims/*.claim.json exists for it) — this entry closes that gap and records the verdict the assay already gives on the same shape it gave claims/activation-bound-pronoun-referent.claim.json and claims/coref-in-engine.claim.json. 'Is this referent a person or an apparatus/organisation' is II.2's paradigm case (\"who a name denotes... what a narrator calls someone\") one level up from coreference: not which surfaces name the same being, but what KIND of being is named at all. is_host_knowledge is false and cannot be argued true merely because the code lives under packages/host/ rather than packages/engine/ — II.3 routes on the NATURE of the knowledge (reader/host/moment/interface) not the directory, and 'what kind of entity does this name denote' is about the material, full stop; compare claims/surfer-snip-host.claim.json, which correctly routes to app because BYTE-ADDRESS SNIPPING is a genuine interface/presentation decision, a materially different kind of question. is_material_knowledge=true, giver='' (the 15% floor is measured against this repo's OWN corpus, not received from a named human curator or a declared model-tier witness) -> GAP -> REFUTE, identically to activation-bound-pronoun-referent. The engineering discipline here is real and, as with that claim, does not change the verdict: the floor is honestly derived from real fixtures rather than picked to fit one case, individuation defaults to null on insufficient evidence rather than a guessed 'holon' (host/corpus.js's own 'the caller applies its own policy' contract), and the classification is causal (computed per-document, never from unread material). None of that supplies a giver. The compliant fix, on the same architecture claims/coref-descriptor.claim.json and claims/embedding-bridge.claim.json already establish as passing: namingSentenceShare itself (a bare ratio: what share of this document's sentences name this referent) is a giver-free structural fact and may stay engine-tier, exactly as recalled/activation/reach/novelty do in emergence/activation.js. The FLOOR and the resulting apparatus/non-apparatus DECISION are the violation and must move to an injected layer with a named giver — a per-corpus prior ('human reader, per-corpus apparatus floor') or a declared model-tier classifier reranking the raw ratio (matching Article III.1: 'it reranks what the engine surfaced; it never retrieves on its own') — never asserted as settled fact inside classifyIndividuation itself. Downstream consequence, stated plainly: resolvePronouns' nonPersonal parameter is currently populated from this un-given classification (host/corpus.js: 'referents already typed apparatus above are handed in as known-non-personal'), so today's pronoun-binding pipeline compounds two un-given material-knowledge derivations (activation-bound-pronoun-referent AND this one) rather than one. Not yet restructured — this claim documents the current, shipped shape as refused case law, the same standing this repo already gives resolvePronouns, so no later change (including spec 11 Assembly D, see claims/continuation-profile-animacy.claim.json) can treat this floor as a precedent for deriving individuation type in-engine without a giver.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": true,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": false,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": []
+  }
+}

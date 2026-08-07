@@ -79,7 +79,38 @@ const routeListPatch = [
   "",
 ].join("\n");
 
+const routeStatsPatch = [
+  'if (mode === "stats") {',
+  '  const dir = "claims";',
+  '  const files = readdirSync(dir).filter((f) => f.endsWith(".claim.json"));',
+  "  let pass = 0, refute = 0;",
+  "  const articleCounts = {};",
+  "  for (const f of files) {",
+  '    const claim = JSON.parse(readFileSync(join(dir, f), "utf8"));',
+  "    const v = check(claim);",
+  "    if (v.verdict === VERDICTS.PASS) pass++; else refute++;",
+  '    const cited = new Set(v.reasons.join(" ").match(/\\b[IVX]+\\.\\d+\\b/g) || []);',
+  "    for (const code of cited) articleCounts[code] = (articleCounts[code] ?? 0) + 1;",
+  "  }",
+  "  console.log(`TOTAL ${files.length}`);",
+  "  console.log(`PASS ${pass}`);",
+  "  console.log(`REFUTE ${refute}`);",
+  "  const ranked = Object.entries(articleCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));",
+  "  for (const [code, count] of ranked) console.log(`${code} ${count}`);",
+  "  process.exit(0);",
+  "}",
+  "",
+  "",
+].join("\n");
+
 export const DRY_RUN_SCRIPTS = {
+  "level6-constitution-stats-report": [
+    { decompose: false },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'import { readFileSync } from "node:fs";', new_string: 'import { readFileSync, readdirSync } from "node:fs";\nimport { join } from "node:path";' } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'console.error(`unknown mode "${mode}"`);', new_string: routeStatsPatch + 'console.error(`unknown mode "${mode}"`);' } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs stats" } },
+    { tool: "finish", args: { summary: "added the stats subcommand: reads every claim, calls the real check(), tallies verdicts and article citations" } },
+  ],
   "level5-constitution-rename-ask": [
     { decompose: false },
     { tool: "edit_file", args: { path: "assay/route.mjs", old_string: "node assay/route.mjs ask <evidence.json>  classify evidence and return the routed placement", new_string: "node assay/route.mjs classify <evidence.json>  classify evidence and return the routed placement" } },

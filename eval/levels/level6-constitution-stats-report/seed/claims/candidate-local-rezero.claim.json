@@ -1,0 +1,27 @@
+{
+  "claim_id": "candidate-local-rezero",
+  "what": "re-zero the ground privately inside one candidate's birth condition when that candidate's figure exceeds witness — added to rescue a single missed referent (Eero, the seventh Jukola brother, in Seitsemän veljestä)",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Recorded 2026-07-31. The mechanism raised recall 8/19 to 13/19 on one book and was reported as a success before it was ablated; the gain was never separated from a second change made in the same edit. II.7 is the article that catches it: a per-candidate, privately-held re-zero is not what a re-zero is anywhere else in the engine, where REC ends a region and every being in play shares the new ground. Intelligence under selection re-zeros the AMBIENT baseline — E. coli's receptor methylation adapts one set-point for the whole cell, not one per ligand. ABLATED 2026-07-31: mechanism removed from packages/engine/referents/referents/entity.js (admitFromArrivals). Recall unchanged at 13/19, runtime 7.7s -> 3.2s. The re-zero contributed nothing; the existing censoredRank pathway (exceeds_witness reported plainly per SEED.md #8, no retry) was already carrying the case it was built to rescue.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": true,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": [],
+    "level_test": "above"
+  }
+}
