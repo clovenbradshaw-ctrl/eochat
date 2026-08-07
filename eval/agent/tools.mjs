@@ -12,7 +12,8 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, resolve, relative, dirname } from "node:path";
-import { sniffBinary, looksLikeWav, parseWav, computeEnergyEnvelope, DEFAULT_ENVELOPE_BUCKETS } from "./media.mjs";
+import { sniffBinary, looksLikeWav } from "./media.mjs";
+import { perceive as dispatchPerceive } from "./senses.mjs";
 
 const MAX_READ_CHARS = 4000;
 const MAX_SHELL_OUTPUT_CHARS = 3000;
@@ -53,7 +54,7 @@ export function createTools(sandboxDir) {
       },
     },
     read_file: {
-      description: `read_file({"path": "relative/path.js"}) — read a TEXT file's content (truncated to ${MAX_READ_CHARS} chars, with a stated truncation count, never silent). Refuses honestly on binary content (e.g. a WAV file) instead of silently corrupting it as garbled text — use perceive_audio to inspect a WAV file's real structure instead.`,
+      description: `read_file({"path": "relative/path.js"}) — read a TEXT file's content (truncated to ${MAX_READ_CHARS} chars, with a stated truncation count, never silent). Refuses honestly on binary content (e.g. a WAV or PNG file) instead of silently corrupting it as garbled text — use perceive to inspect a non-text file's real content instead.`,
       run({ path }) {
         let result;
         try {
@@ -61,8 +62,8 @@ export function createTools(sandboxDir) {
           const raw = readFileSync(abs);
           if (sniffBinary(raw)) {
             const hint = looksLikeWav(raw)
-              ? "this looks like a WAV audio file — use perceive_audio to inspect its real structure"
-              : "read_file only reads text; this content cannot be shown without corrupting it";
+              ? "this looks like a WAV audio file — use perceive to inspect its real structure"
+              : "read_file only reads text; use perceive to inspect non-text content without corrupting it";
             result = { error: `"${path}" is binary content (${raw.length} bytes), not text — ${hint}` };
           } else {
             const full = raw.toString("utf8");
@@ -80,27 +81,18 @@ export function createTools(sandboxDir) {
         return result;
       },
     },
-    perceive_audio: {
-      description: `perceive_audio({"path": "relative/clip.wav", "buckets": 16}) — inspect a WAV (RIFF/WAVE) audio file's REAL structure: every chunk found in file order (id, byte size), the fmt chunk's sample rate/channels/bits-per-sample, the computed duration in seconds, and a loudness ENVELOPE — "buckets" numbers (default ${DEFAULT_ENVELOPE_BUCKETS}), each the RMS energy of an equal real slice of the clip, so you can see roughly where it's loud vs quiet. The envelope is ALWAYS exactly this many numbers, however long the clip is — a 10-minute recording costs you the same context as a 1-second one, never more; it tells you how many real samples were folded into each number (framesPerBucket), never a silent average pretending to be raw data. Only WAV is supported (16-bit PCM for the envelope); anything else, or a malformed file, reports a typed error honestly rather than a guess.`,
+    perceive: {
+      description: 'perceive({"path": "relative/anything", "buckets": 16}) — sniff a file\'s REAL format and route it to the narrowest sense this app has for it, bounded so the result never grows with file size: text says so and points you to read_file; WAV gets its real chunk layout, sample rate/channels, duration, and a fixed-size loudness envelope ("buckets" numbers, default 16 — a 10-minute clip costs the same context as a 1-second one); PNG gets its real width/height/color-type from its header (pixel content itself is a stated gap, not decoded). Anything else reports a specific, honest gap AND names which of this app\'s own cataloged vision/OCR systems (server/senses-catalog.js) would apply — none has a live endpoint in this sandbox, so that gap is real, not a bug.',
       run({ path, buckets }) {
         let result;
         try {
           const abs = resolveInSandbox(sandboxDir, path);
           const raw = readFileSync(abs);
-          result = parseWav(raw);
-          if (!result.error) {
-            const envelope = computeEnergyEnvelope(raw, result, buckets === undefined ? {} : { buckets });
-            if (envelope.error) result.energyEnvelopeError = envelope.error;
-            else {
-              result.energyEnvelope = envelope.envelope;
-              result.energyEnvelopeFramesPerBucket = envelope.framesPerBucket;
-              result.energyEnvelopeSamplesFolded = envelope.samplesFolded;
-            }
-          }
+          result = dispatchPerceive(raw, path, buckets === undefined ? {} : { buckets });
         } catch (err) {
           result = { error: err.message };
         }
-        record("perceive_audio", { path, buckets }, result);
+        record("perceive", { path, buckets }, result);
         return result;
       },
     },

@@ -181,9 +181,10 @@ export const DRY_RUN_SCRIPTS = {
     { tool: "write_file", args: { path: "duration.js", content: wavDurationChunked } },
     { tool: "run_shell", args: { command: "node check.mjs" } },
     // check.mjs writes its fixture to disk before running duration.js, so it
-    // exists by now — this call smoke-tests perceive_audio actually runs
-    // against a real file in the sandbox, not just that it exists as code.
-    { tool: "perceive_audio", args: { path: "._check_fixture.wav" } },
-    { tool: "finish", args: { summary: "wrote duration.js walking real RIFF chunks (not a fixed offset); node check.mjs printed CHECK: PASS; perceive_audio confirmed the fixture's real chunk layout" } },
+    // exists by now — this call smoke-tests the generic perceive dispatcher
+    // actually runs against a real file in the sandbox, not just that it
+    // exists as code.
+    { tool: "perceive", args: { path: "._check_fixture.wav" } },
+    { tool: "finish", args: { summary: "wrote duration.js walking real RIFF chunks (not a fixed offset); node check.mjs printed CHECK: PASS; perceive confirmed the fixture's real chunk layout via the wav sense" } },
   ],
 };

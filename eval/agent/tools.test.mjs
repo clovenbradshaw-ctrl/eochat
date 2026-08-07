@@ -88,7 +88,7 @@ test("read_file refuses a binary (WAV) file honestly instead of returning corrup
     const result = tools.read_file.run({ path: "clip.wav" });
     assert.equal(result.content, undefined, "must never hand back garbled binary content as if it were text");
     assert.match(result.error, /binary content/);
-    assert.match(result.error, /perceive_audio/);
+    assert.match(result.error, /perceive/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -107,7 +107,7 @@ test("read_file still reads ordinary text files exactly as before", () => {
   }
 });
 
-test("perceive_audio reports a WAV file's real chunk layout and duration, walking past an extra chunk", () => {
+test("perceive routes a WAV file to the wav sense: real chunk layout and duration, walking past an extra chunk", () => {
   const dir = freshSandbox();
   try {
     const samples = new Int16Array(1600); // 0.2s @ 8000Hz mono
@@ -116,7 +116,8 @@ test("perceive_audio reports a WAV file's real chunk layout and duration, walkin
       extraChunks: [{ id: "LIST", data: Buffer.from("INFOISFT", "ascii") }],
     }));
     const { tools } = createTools(dir);
-    const result = tools.perceive_audio.run({ path: "clip.wav" });
+    const result = tools.perceive.run({ path: "clip.wav" });
+    assert.equal(result.sense, "wav");
     assert.deepEqual(result.chunks.map((c) => c.id), ["fmt ", "LIST", "data"]);
     assert.equal(result.fmt.sampleRate, 8000);
     assert.equal(result.durationSeconds, 0.2);
@@ -127,7 +128,7 @@ test("perceive_audio reports a WAV file's real chunk layout and duration, walkin
   }
 });
 
-test("perceive_audio's envelope size stays fixed at a caller-chosen bucket count regardless of clip length — the actual prompt-cost guarantee", () => {
+test("perceive's WAV envelope size stays fixed at a caller-chosen bucket count regardless of clip length — the actual prompt-cost guarantee", () => {
   const dir = freshSandbox();
   try {
     const shortWav = writeWav({ samples: new Int16Array(800) }); // 0.1s
@@ -136,8 +137,8 @@ test("perceive_audio's envelope size stays fixed at a caller-chosen bucket count
     writeFileSync(join(dir, "long.wav"), longWav);
     const { tools } = createTools(dir);
 
-    const short = tools.perceive_audio.run({ path: "short.wav", buckets: 8 });
-    const long = tools.perceive_audio.run({ path: "long.wav", buckets: 8 });
+    const short = tools.perceive.run({ path: "short.wav", buckets: 8 });
+    const long = tools.perceive.run({ path: "long.wav", buckets: 8 });
 
     assert.equal(short.energyEnvelope.length, 8);
     assert.equal(long.energyEnvelope.length, 8);
@@ -147,13 +148,52 @@ test("perceive_audio's envelope size stays fixed at a caller-chosen bucket count
   }
 });
 
-test("perceive_audio reports a typed error for a non-WAV file, not a guess", () => {
+test("perceive routes a PNG file to the png sense: real width/height/color-type, pixel content named as a gap", () => {
+  const dir = freshSandbox();
+  try {
+    const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const ihdrData = Buffer.alloc(13);
+    ihdrData.writeUInt32BE(320, 0); // width
+    ihdrData.writeUInt32BE(240, 4); // height
+    ihdrData.writeUInt8(8, 8); // bit depth
+    ihdrData.writeUInt8(2, 9); // color type: truecolor
+    const lenBuf = Buffer.alloc(4); lenBuf.writeUInt32BE(13, 0);
+    const png = Buffer.concat([sig, lenBuf, Buffer.from("IHDR", "ascii"), ihdrData, Buffer.alloc(4)]);
+    writeFileSync(join(dir, "photo.png"), png);
+
+    const { tools } = createTools(dir);
+    const result = tools.perceive.run({ path: "photo.png" });
+    assert.equal(result.sense, "png");
+    assert.equal(result.width, 320);
+    assert.equal(result.height, 240);
+    assert.match(result.pixelDataGap, /not decoded/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("perceive on a plain text file reports kind:text and points at read_file, not a binary-sense error", () => {
   const dir = freshSandbox();
   try {
     writeFileSync(join(dir, "notes.txt"), "just some text\n");
     const { tools } = createTools(dir);
-    const result = tools.perceive_audio.run({ path: "notes.txt" });
-    assert.match(result.error, /not a RIFF\/WAVE file/);
+    const result = tools.perceive.run({ path: "notes.txt" });
+    assert.equal(result.kind, "text");
+    assert.match(result.note, /read_file/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("perceive on an unrecognized binary format names real cataloged ML systems instead of a bare failure", () => {
+  const dir = freshSandbox();
+  try {
+    writeFileSync(join(dir, "mystery.bin"), Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x05]));
+    const { tools } = createTools(dir);
+    const result = tools.perceive.run({ path: "mystery.bin" });
+    assert.equal(result.kind, "unknown-binary");
+    assert.match(result.error, /no local sense recognizes/);
+    assert.ok(result.catalogedSensesThatMightApply.length > 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
