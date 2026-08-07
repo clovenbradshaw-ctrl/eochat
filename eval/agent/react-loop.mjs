@@ -53,6 +53,7 @@ function summarizeResult(tool, result) {
   if (tool === "list_files") return `ok (${result?.files?.length ?? 0} file(s))`;
   if (tool === "write_file" || tool === "edit_file") return `ok (${result?.bytesWritten ?? "?"} bytes written)`;
   if (tool === "run_shell") return `exit ${result?.exitCode}${result?.truncated ? ", output truncated" : ""}`;
+  if (tool === "search_prior_art") return result?.hit ? `found ${result.local?.length ?? 0} local + ${result.npm?.length ?? 0} npm candidate(s)` : "no candidate found";
   return "ok";
 }
 
@@ -88,11 +89,11 @@ function buildPromptView(system, intro, foldedTurns, foldK) {
   return [system, intro, buildFoldedSummaryMessage(folded.map((t) => t.entry)), ...kept.flatMap((t) => t.msgs)];
 }
 
-const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
+const PROTOCOL = (toolDescriptions, toolNames = []) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
 
 ${toolDescriptions.map((d) => `- ${d}`).join("\n")}
 
-ENVIRONMENT: this sandbox has Node.js built-in modules only — no npm packages are installed and there is no network access to install any. A require()/import of anything other than a Node.js built-in (fs, path, etc.) will fail. Write dependency-free code.
+ENVIRONMENT: this sandbox has Node.js built-in modules only — no npm packages are installed${toolNames.includes("search_prior_art") ? ", though search_prior_art can reach the public npm registry read-only to check for one before you write code" : " and there is no network access to install any"}. A require()/import of anything other than a Node.js built-in (fs, path, etc.) will fail. Write dependency-free code.
 
 RULES:
 - Respond with EXACTLY ONE JSON object per turn: {"tool": "<name>", "args": {...}}. Nothing else — no prose, no markdown fences.
@@ -124,7 +125,7 @@ function formatObservation(toolName, result) {
 export function createSession({ taskPrompt, groundingBlock = null, toolset, foldK = DEFAULT_FOLD_K }) {
   const { tools, toolCalls } = toolset;
   const toolNames = Object.keys(tools);
-  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description)) };
+  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description), toolNames) };
 
   const userIntro = groundingBlock
     ? `TASK:\n${taskPrompt}\n\nRESEARCH (surfaced before you started, folded to what fit the budget):\n${groundingBlock}`
@@ -143,8 +144,8 @@ export function createSession({ taskPrompt, groundingBlock = null, toolset, fold
     summary: null,
     step: 0,
     malformedStreak: 0,
-    repeatFailStreak: 0,
-    lastFailedCallKey: null,
+    repeatCallStreak: 0,
+    lastCallKey: null,
     stuckLoopAbort: false,
     // Set once no further applyResponse call should happen: finished,
     // stuckLoopAbort, or the malformed-response abort threshold.
@@ -213,24 +214,36 @@ export function applyResponse(session, raw) {
   const result = session.tools[parsed.tool].run(parsed.args);
   const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
   const isFailure = result && typeof result === "object" && "error" in result;
-  session.repeatFailStreak = isFailure && callKey === session.lastFailedCallKey ? session.repeatFailStreak + 1 : isFailure ? 1 : 0;
-  session.lastFailedCallKey = isFailure ? callKey : null;
+  // Repetition itself is the stuck-loop signal, not failure specifically — a
+  // real run (search_prior_art, called 25 times with identical args) showed
+  // a model can loop on a tool that SUCCEEDS every time and still make zero
+  // progress, which the old isFailure-gated streak could never catch: a
+  // repeated success always reset it to 0. Any tool whose result can be
+  // identical across calls (read_file, list_files, this one) shares the
+  // same exposure; failure was never the actual invariant.
+  session.repeatCallStreak = callKey === session.lastCallKey ? session.repeatCallStreak + 1 : 1;
+  session.lastCallKey = callKey;
 
-  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: session.repeatFailStreak || undefined };
+  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatCallStreak: session.repeatCallStreak > 1 ? session.repeatCallStreak : undefined };
   session.transcript.push(entry);
   events.push({ ...entry, phase: "tool_result" });
 
   let observation = formatObservation(parsed.tool, result);
-  if (session.repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
-    observation += `\n\nSTUCK LOOP: this is the ${session.repeatFailStreak}${session.repeatFailStreak === 2 ? "nd" : session.repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
+  if (session.repeatCallStreak >= STUCK_LOOP_NUDGE_AT) {
+    const ordinal = session.repeatCallStreak === 2 ? "nd" : session.repeatCallStreak === 3 ? "rd" : "th";
+    const outcome = isFailure ? "failed the SAME way" : "returned the SAME result";
+    const fix = isFailure
+      ? "re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say"
+      : "you already have this result — act on it (e.g. write_file) instead of asking again";
+    observation += `\n\nSTUCK LOOP: this is the ${session.repeatCallStreak}${ordinal} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has ${outcome} every time. Repeating it again will not help. Stop: ${fix}.`;
   }
   const observationMsg = { role: "user", content: observation };
   session.messages.push(observationMsg);
   session.foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
 
-  if (session.repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
+  if (session.repeatCallStreak >= STUCK_LOOP_ABORT_AT) {
     session.stuckLoopAbort = true;
-    const abortEntry = { step, note: `aborted after ${session.repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` };
+    const abortEntry = { step, note: `aborted after ${session.repeatCallStreak} consecutive identical ${isFailure ? "failing " : ""}${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` };
     session.transcript.push(abortEntry);
     events.push({ ...abortEntry, phase: "aborted" });
     session.done = true;
