@@ -13,9 +13,24 @@
 <title>EOChat</title>
 <!-- support.js (dc-runtime) resolves window.React/window.ReactDOM at call time and
      throws "window.React is not available yet" if they are absent, so these must
-     load first. Standalone eochat has no component host to supply them. -->
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+     load first. Standalone eochat has no component host to supply them.
+
+     React/ReactDOM/Babel are vendored locally in ./vendor (byte-identical to
+     the unpkg URLs support.js already pins by SRI below) so the app boots
+     without depending on live CDN reachability (PUNCH-LIST.md P3 #10). Each
+     tag falls back to the CDN on local-file error, e.g. a build that stripped
+     ./vendor. window.__resources is support.js's own override hook
+     (src/cdn.ts cdnScriptFor) for the same three URLs, so its internal
+     fallback loader (loadReactUmd/ensureBabel) also prefers the local copy. -->
+<script>
+  window.__resources = {
+    "https://unpkg.com/react@18.3.1/umd/react.production.min.js": "./vendor/react.production.min.js",
+    "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js": "./vendor/react-dom.production.min.js",
+    "https://unpkg.com/@babel/standalone@7.29.0/babel.min.js": "./vendor/babel.min.js"
+  };
+</script>
+<script crossorigin src="./vendor/react.production.min.js" onerror="this.onerror=null;this.crossOrigin='anonymous';this.src='https://unpkg.com/react@18.3.1/umd/react.production.min.js';"></script>
+<script crossorigin src="./vendor/react-dom.production.min.js" onerror="this.onerror=null;this.crossOrigin='anonymous';this.src='https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js';"></script>
 <script src="./support.js"></script>
 <!-- Local mode: a browser-only WebLLM engine, wired through window.EOWebLLM
      since the dc-runtime Component below is eval'd as a plain script and
@@ -2947,6 +2962,14 @@ class Component extends DCLogic {
             this.setState(s => ({
               _proxySources: [...((s._proxySources || []).filter(x => !projectSources.find(ps => ps.name === x.name))), ...projectSources],
             }));
+            // The corpus-pool branch above warms folds for its own sources,
+            // but a project's own sources never got the same treatment — the
+            // entity panel/Orbit/Explorer stayed permanently empty ("0
+            // beings") for any document ingested straight into a project,
+            // until the reader happened to open that exact document in the
+            // reader (the other fetchFold call site, ~L7818). Warm them here
+            // too so a project's documents fold without that manual step.
+            this.warmFolds(projectSources);
           }
         }
       }
@@ -2966,7 +2989,7 @@ class Component extends DCLogic {
       const base = this._baseName(src.name);
       const attached = room.get(base);
       const enabled = attached ? attached.enabled !== false : off[base] !== true;
-      if (enabled) this.fetchFold(src.name);
+      if (enabled) this.fetchFold(src.name, src.pool);
     });
   }
 
@@ -3444,6 +3467,13 @@ class Component extends DCLogic {
     this.setState({ activeProjectId: id, view: 'chat', tab: 'chat', activeSpaceId: scoped.length ? scoped[0].id : null });
     if (project) {
       this.logAdd('●', `Switched to project "${project.name}"`, 'chat');
+    }
+    // A project with no conversations yet left activeSpaceId null, so the
+    // first message sent in it posted to /api/conversations/null/turns and
+    // 404'd with no visible error (PUNCH-LIST.md P0 #1). Give it a real
+    // conversation to land in, same as pressing "+ New chat" would.
+    if (!scoped.length) {
+      await this.newConversation({ silent: true });
     }
   }
 
@@ -3949,7 +3979,7 @@ class Component extends DCLogic {
       seen.add(base);
       rows.push({
         name: src.name, glyph: '●', color: '#1F5A4C', ingested: true,
-        enabled: off[base] !== true, engineOnly: true,
+        enabled: off[base] !== true, engineOnly: true, pool: src.pool,
       });
     }
     return rows;
@@ -4655,11 +4685,15 @@ class Component extends DCLogic {
   // Fold and outline for one source. Both are engine projections keyed by
   // source name; `foldPending` keeps a slow fold from being launched twice
   // while the first is still in flight.
-  async fetchFold(name) {
+  async fetchFold(name, pool) {
     if (this.state.folds[name] || this.state.foldPending[name]) return;
     this.setState(s => ({ foldPending: { ...s.foldPending, [name]: true } }));
     try {
-      const res = await fetch(this.proxyUrl() + '/api/fold?source=' + encodeURIComponent(name), { signal: AbortSignal.timeout(120000) });
+      // /api/fold defaults to the "corpus" pool when none is given — a
+      // project-scoped source's fold request 404'd here forever without this,
+      // since its name only resolves inside the project's own pool.
+      const poolQuery = pool ? '&pool=' + encodeURIComponent(pool) : '';
+      const res = await fetch(this.proxyUrl() + '/api/fold?source=' + encodeURIComponent(name) + poolQuery, { signal: AbortSignal.timeout(120000) });
       const data = await res.json();
       this.setState(s => ({ folds: { ...s.folds, [name]: data }, foldPending: { ...s.foldPending, [name]: false } }));
       if (data.error) { this.logAdd('⊘', `Fold unavailable for "${name}" — ${data.error}`, 'perception'); return; }
@@ -4672,14 +4706,16 @@ class Component extends DCLogic {
     }
   }
 
-  async fetchOutline(name) {
+  async fetchOutline(name, pool) {
     if (this.state.outlines[name]) return;
     const get = (payload) => fetch(this.proxyUrl() + '/api/verbatim/outline', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload), signal: AbortSignal.timeout(30000)
     }).then(r => r.json());
     try {
-      let data = await get({ source: name });
+      // Same pool-blindness as fetchFold: a project-scoped source's outline
+      // resolves against the default "corpus" pool unless told otherwise.
+      let data = await get({ source: name, pool: pool || undefined });
       // Content-ingested uploads have no file on the proxy host, so the engine
       // outline comes back as an ENOENT. Fall back to the session attachment's
       // text — the exact string the reader is slicing — so uploaded documents
@@ -5018,7 +5054,18 @@ class Component extends DCLogic {
   // modal's running history of what the answer actually did, the same events
   // that drive the phase pill. Null for events with nothing worth logging.
   _holonicLogEntry(type, data) {
-    if (type === 'holonic_plan') return `Plan: ${data.depth} · ${(data.sections || []).join(' / ')}`;
+    // Two different server events are both named "holonic_plan": the initial
+    // plan carries `sections` as an array of section titles (turn-controller.js
+    // sendEvent("holonic_plan", {... sections: planning.sections.map(s=>s.title)})),
+    // but the essay-progress echo of the same phase carries it as a plain
+    // count (holonic-chat.js onProgress({phase:"plan", sections: N})). Passing
+    // that number through `(data.sections || []).join(...)` called `.join` on
+    // a number and crashed the whole chat with a raw "not a function" error —
+    // so branch on the actual shape instead of assuming it's always an array.
+    if (type === 'holonic_plan') {
+      const sections = Array.isArray(data.sections) ? data.sections.join(' / ') : (data.sections ? `${data.sections} section(s)` : '');
+      return `Plan: ${data.depth}${sections ? ' · ' + sections : ''}`;
+    }
     if (type === 'holonic_section_research') {
       const web = data.web !== undefined ? ` · ${data.web} web` : '';
       return `Section "${data.id}": ${data.local} local${web}`;
@@ -6777,7 +6824,7 @@ class Component extends DCLogic {
     this.logAdd('○', `Source "${name}" ${nowEnabled ? 'enabled' : 'disabled'}`, 'sources');
     // A source that was off at load never got its fold warmed; fetching it on
     // re-enable keeps the panel in step with what the rail says is enabled.
-    if (nowEnabled) this.fetchFold(name);
+    if (nowEnabled) this.fetchFold(name, row.pool);
   }
 
   deleteSource(name) {
@@ -6984,8 +7031,10 @@ class Component extends DCLogic {
     if (!this.state.readerContent[name]) this.fetchSourceContent(name);
     // The overview's structure comes from the engine's boundary detector, the
     // same one the Outline tab reads — fetch it up front so the panel isn't
-    // blank on the first open.
-    if (!this.state.outlines[name]) this.fetchOutline(name);
+    // blank on the first open. Look up the source's own pool (project-scoped
+    // sources don't live in the default "corpus" pool fetchOutline assumes).
+    const pool = this.roomSources().find(s => s.name === name)?.pool;
+    if (!this.state.outlines[name]) this.fetchOutline(name, pool);
   }
   // Open the reader at a byte offset the engine measured (an outline heading,
   // a citation anchor). A whole book does not fit in one read, so this pulls a
@@ -7782,7 +7831,7 @@ class Component extends DCLogic {
           // engineOnly sources used to be skipped here because nothing could
           // serve their bytes. /api/source/text can, so they open like any other.
           if (isOpening && !this.state.readerContent[s.name]) this.fetchSourceContent(s.name);
-          if (isOpening) { this.fetchFold(s.name); this.fetchOutline(s.name); }
+          if (isOpening) { this.fetchFold(s.name, s.pool); this.fetchOutline(s.name, s.pool); }
         },
         toggleEnabled: () => this.toggleSource(s.name),
         delete: () => this.deleteSource(s.name),
@@ -8510,11 +8559,17 @@ class Component extends DCLogic {
         : `${S.provider}${(S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) ? ' · ' + (S.model || (S._availableModels.length ? S._availableModels[0].defaultModel : '')) : ''}`,
       onProviderChange: (e) => {
         const id = e.target.value;
+        // Picking "Ollama" for the first time used to `return` here before
+        // ever setting `provider`, so state.provider stayed 'local' forever
+        // even after the permission dialog was accepted. With provider stuck
+        // off 'ollama', every one of ollamaNotAuthorized/Fetching/Error/Ready/
+        // NotInPlay below evaluates false at once and the model picker goes
+        // permanently blank — no button, no select, no error, nothing to
+        // click. Set provider unconditionally so the connect flow (which
+        // gates on `S.provider === 'ollama'`) actually has something to gate.
         if (id === 'ollama' && !S._ollamaAuthorized) {
           this.requestOllamaConnect();
-          return;
-        }
-        if (id === 'ollama' && S._ollamaAuthorized && !S._ollamaModels.length && !S._ollamaFetching) {
+        } else if (id === 'ollama' && S._ollamaAuthorized && !S._ollamaModels.length && !S._ollamaFetching) {
           this.connectOllama();
         }
         const p = S._availableModels.find(m => m.id === id);

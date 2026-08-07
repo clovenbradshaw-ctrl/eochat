@@ -69,6 +69,20 @@ export function parsePlannerReply(raw) {
       }
     } catch { /* fall through to heuristic */ }
   }
+  // The model sometimes gets the depth field right and then corrupts the
+  // rest of the JSON — e.g. a small model echoing this prompt's own
+  // `"riff"|"essay"` type union literally into its reply, which drags the
+  // word "essay" into a reply whose actual depth field said "riff". Salvage
+  // that field directly before falling back to scanning the whole reply for
+  // essay-shaped words, so a model's genuine (if malformed) "riff" answer
+  // isn't overridden by its own leaked schema syntax — observed in practice
+  // with small local models (e.g. llama3.2:1b turning a plain "hello there"
+  // into a full multi-section essay because its broken reply still
+  // contained the literal substring "essay").
+  const depthField = text.match(/"depth"\s*:\s*"(riff|essay)"/i);
+  if (depthField) {
+    return { depth: depthField[1].toLowerCase(), reason: "planner reply unparseable — salvaged depth field", sections: [] };
+  }
   // Heuristic fallback: an essay-shaped ask the model failed to parse.
   const depth = /(essay|report|paper|"\d+\s*pages?"|five\s+page|5\s+page|long[\s-]form)/i.test(text) ? "essay" : "riff";
   return { depth, reason: "planner reply unparseable — heuristic depth", sections: [] };
