@@ -1,0 +1,10 @@
+{
+  "id": "level1-fizzbuzz",
+  "level": 1,
+  "title": "Single-shot: FizzBuzz CLI",
+  "seedDir": null,
+  "maxSteps": 5,
+  "maxTokensPerStep": 250,
+  "seed": 1002,
+  "taskPrompt": "Write a Node.js script named fizzbuzz.js in the current directory. It reads an integer N from process.argv[2]. For i = 1 to N: if i is divisible by both 3 and 5 use \"FizzBuzz\", if only by 3 use \"Fizz\", if only by 5 use \"Buzz\", otherwise use the number itself as a string. Print the resulting array of N strings as JSON to stdout via console.log(JSON.stringify(...)) — one JSON array, nothing else printed. Run it yourself with a small N before calling finish to confirm the output looks right."
+}

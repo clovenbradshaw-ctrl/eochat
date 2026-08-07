@@ -1,0 +1,10 @@
+{
+  "id": "level1-csv-to-json",
+  "level": 1,
+  "title": "Single-shot: CSV to JSON CLI",
+  "seedDir": null,
+  "maxSteps": 6,
+  "maxTokensPerStep": 300,
+  "seed": 1001,
+  "taskPrompt": "Write a Node.js script named convert.js in the current directory. It reads a CSV file path from process.argv[2], parses it (the first line is the header row, comma-separated, no quoted fields or embedded commas), and prints the resulting array of objects as JSON to stdout via console.log(JSON.stringify(...)) — one JSON array, nothing else printed. Example: a file containing \"name,age\\nAlice,30\\nBob,25\" should print exactly [{\"name\":\"Alice\",\"age\":\"30\"},{\"name\":\"Bob\",\"age\":\"25\"}]. When you believe it works, actually run it with a sample CSV file you create yourself and confirm the output before calling finish."
+}
