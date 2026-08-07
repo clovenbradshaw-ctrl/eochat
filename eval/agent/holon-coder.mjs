@@ -70,10 +70,11 @@ function foldHandoff(text, label) {
 function distillEvidence(result) {
   const last = [...result.transcript].reverse().find((t) => t.tool && t.tool !== "finish" && t.result);
   if (result.stuckLoopAbort) {
-    const repeatInfo = last?.repeatFailStreak ? ` (identical arguments, ${last.repeatFailStreak} times in a row)` : "";
+    const repeatInfo = last?.repeatCallStreak ? ` (identical arguments, ${last.repeatCallStreak} times in a row)` : "";
+    const lastIsFailure = last?.result && typeof last.result === "object" && "error" in last.result;
     return last
-      ? `stopped itself in a repeated-failure loop, not a step-budget exhaustion: the last ${last.tool} call kept failing the same way${repeatInfo} — real evidence: ${last.result.error ?? JSON.stringify(last.result)}`
-      : "stopped itself in a repeated-failure loop before any tool call produced a usable result";
+      ? `stopped itself in a repeated-call loop, not a step-budget exhaustion: the last ${last.tool} call ${lastIsFailure ? "kept failing the same way" : "kept returning the same result without progress"}${repeatInfo} — real evidence: ${last.result.error ?? JSON.stringify(last.result)}`
+      : "stopped itself in a repeated-call loop before any tool call produced a usable result";
   }
   if (!last) {
     return result.hitStepCap

@@ -37,7 +37,7 @@ const HEADER_PAT = /\/\/\s*(.+?)(?:\n\/\/\s*(.*?))*(?:\n\n|\nimport|\nexport)/s;
 const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", "__pycache__", ".opencode", "_archive", "archive", "coverage", ".nyc_output", "target", ".next", ".venv", ".mypy_cache", ".pytest_cache"]);
 const SKIP_EXTS = new Set([".json", ".lock", ".map", ".png", ".jpg", ".gif", ".ico", ".svg", ".woff", ".woff2", ".mp3", ".mp4", ".wasm", ".bin", ".exe", ".dll", ".so", ".dylib", ".ttf", ".otf", ".eot"]);
 
-const ENTITY_NAMES = new Map([
+export const ENTITY_NAMES = new Map([
   ["cube", "cube classifier"],
   ["presence", "referent presence"],
   ["store", "associative memory"],
