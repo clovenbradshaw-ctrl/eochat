@@ -59,6 +59,46 @@ from scratch — build the agent out of primitives this codebase already has.
   and results fold back up via `projectTasks`/`foldToWorkingSet`. The
   decomposition decision itself is a model call — planning is the model's
   job too.
+
+  **Nesting is bidirectional, not just a downward split.** `task-log.js`'s
+  `deriveLevels()` and eoreader6's `holon_level/index.js` both name a level
+  relation as two independent tests, not one — existence-dependency (remove
+  the low and the high's ground moves) and possibility-constraint (the
+  high's synthesis sits measurably apart from, and biases, the low). The
+  first build of this wrapper only had the downward half: a plan was guessed
+  once, up front, before any leaf ever ran, and a leaf's real outcome never
+  fed back into what the parent believed was possible next — a tree with the
+  arrow pointing one way. Two additions close the loop:
+
+  - **low → high, sets POSSIBILITY.** When a direct attempt does not
+    converge (hits its step cap, never calls `finish`), the parent may
+    replan — but ONLY armed with that attempt's own real last tool
+    observation (`distillEvidence`), never a fresh guess. No evidence, no
+    retry. This is a genuine predictive-processing correction step: a real
+    prediction error (what actually happened) is what earns the right to
+    revise the model of the task, recorded as a `SUPERSEDE` entry
+    (`revised_because: <the evidence>`) — the same "revise on measured
+    residual" discipline `server/longform.js`'s `reviseDraft` already uses.
+  - **high → low, sets PROBABILITY.** When a task does decompose — eagerly
+    or because a failed attempt earned a retry — each child is handed a
+    small, bounded `priorHint`: the parent's goal and how this piece fits
+    among its siblings (plus the failure evidence, on a retry). This never
+    changes what a leaf *can* do — the tool set and sandbox are identical —
+    it only biases which of the possible actions the leaf is likely to try
+    first, exactly like a precision-weighted top-down prediction. It is
+    prose context, not injected code or a solution, and it is folded to a
+    small declared budget (`MAX_HANDOFF_CHARS` in `holon-coder.mjs`) with an
+    explicit "N chars withheld" report when it doesn't fit — the same
+    never-silently-truncate discipline `foldToWorkingSet` and
+    `engineGroundQuery` already use for their own budgets. "We never prompt
+    the model with more than it needs" applies to cross-level handoff, not
+    only to `surf`.
+
+  Recursion stays bounded exactly as before: the top task spends its one
+  split budget (`maxDepth`, default 1) either eagerly or reactively, never
+  both, so this is real feedback, not an unbounded retry loop dressed up as
+  one. See `eval/agent/holon-coder.test.mjs` for deterministic, offline
+  coverage of both directions.
 - **`agent/ingest.mjs`** — the **surf and fold** half, applied to a whole
   codebase instead of prose. Clones a repo (or uses a local path), admits
   every source file into a dedicated pool of the *real* engine corpus
@@ -79,6 +119,8 @@ from scratch — build the agent out of primitives this codebase already has.
 ```
 eval/
   agent/            the agent itself — tools, react loop, holonic wrapper, ingest
+                    (holon-coder.test.mjs: offline coverage of the bidirectional
+                    nesting — run with `node --test eval/agent/holon-coder.test.mjs`)
   adapters/         ollama-adapter.mjs (real), scripted-adapter.mjs (dry-run)
   levels/           Level 1-7 task definitions + independent oracles
     level1-csv-to-json/       task.json, test.mjs
@@ -119,7 +161,12 @@ trusting the oracle (see git history for that verification).
   fixed/i`) but the independent oracle disagreed. This is the self-report-
   accuracy metric the spec calls out as a leading indicator of trust
   problems.
-- `decomposed` — whether `holon-coder.mjs` split the task into sub-tasks.
+- `decomposed` — whether `holon-coder.mjs` split the task into sub-tasks,
+  eagerly or via an evidence-informed retry (see `retried`).
+- `retried` — a direct attempt failed, its own evidence earned a replan, and
+  the replan decomposed. `retryConsidered`/`retryDeclined` — the replan ran
+  but, even with real failure evidence, still judged the task undecomposable
+  (an honest "no," not forced).
 
 ## Known scope and honest limitations
 
