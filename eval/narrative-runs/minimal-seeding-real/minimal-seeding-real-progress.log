@@ -1,9 +1,18 @@
 === minimal-seeding narrative run started, REAL model=llama3.2:latest, zero declared entities ===
-[16:10:55] scene 1 (open) — calling model...
-[16:11:38] scene 1 done — 283 words in 43s
-[16:11:38]   new character surfaced: Mrs — registered so later scenes see it
-[16:11:38]   new character surfaced: Jake — registered so later scenes see it
-[16:11:38] scene 2 (plant:quiet-shift) — calling model...
-[16:12:20] scene 2 done — 294 words in 42s
-[16:12:20]   new character surfaced: Tom — registered so later scenes see it
-[16:12:20] scene 3 (beat) — calling model...
+[16:16:19] scene 1 (open) — calling model...
+[16:16:56] scene 1 done — 283 words in 37s
+[16:16:56]   new character surfaced: Main Street — registered so later scenes see it
+[16:16:56] scene 2 (plant:quiet-shift) — calling model...
+[16:17:36] scene 2 done — 287 words in 41s
+[16:17:36]   new character surfaced: Emma — registered so later scenes see it
+[16:17:36]   new character surfaced: Mrs. Thompson — registered so later scenes see it
+[16:17:36]   new character surfaced: Haven — registered so later scenes see it
+[16:17:36] scene 3 (beat) — calling model...
+[16:18:14] scene 3 done — 254 words in 38s
+[16:18:14]   new character surfaced: Jack — registered so later scenes see it
+[16:18:14] scene 4 (beat) — calling model...
+[16:18:50] scene 4 done — 269 words in 36s
+[16:18:50] scene 5 (resolve:quiet-shift) — calling model...
+[16:19:26] scene 5 done — 284 words in 35s
+[16:19:26]   mechanical payoff check "quiet-shift": CONFIRMED
+[16:19:26] done in 3.1 min — 5 entities minted from ZERO declared — wrote minimal-seeding-real.md, minimal-seeding-real-report.md

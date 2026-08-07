@@ -361,3 +361,31 @@ test("a character the model introduces unasked resolves to the identical cell as
     globalThis.fetch = originalFetch;
   }
 });
+
+test("a title-abbreviation name ('Mrs. Kuroba') registers as ONE entity, not a bare fragment with the real surname invisible", async () => {
+  // MEASURED on a real run with ZERO declared entities (every name entirely
+  // model-invented): "Mrs. Kuroba" recurred 10+ times, always as "Mrs.
+  // Kuroba". Before this fix, "Mrs" fragmented off as its own spurious
+  // entity AND "Kuroba" — the actual recurring surname — never registered
+  // at all, because every occurrence immediately followed "Mrs. " (period +
+  // space), which round 2's sentence-initial check misread as a genuine
+  // sentence boundary every single time.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const body = JSON.parse(opts.body);
+    const isOpening = body.messages[1].content.includes(HEIST_WORLD.openingBeat);
+    const text = isOpening
+      ? "On Elm Street, Mrs. Kuroba stirred in her kitchen. Mrs. Kuroba smiled to herself, thinking of Mrs. Kuroba's own childhood."
+      : "Some invented prose for this scene.";
+    return { ok: true, json: async () => ({ message: { content: text } }) };
+  };
+  try {
+    const result = await writeNarrative(HEIST_WORLD, { model: "stub", maxScenes: 3, onProgress: () => {} });
+    const tasks = projectTasks(result.log);
+    assert.ok(tasks.find((t) => t.task_id === "entity:mrs. kuroba"), "the whole title+surname must register as one entity");
+    assert.ok(!tasks.find((t) => t.task_id === "entity:mrs"), "a bare 'Mrs' fragment must not be registered separately");
+    assert.ok(!tasks.find((t) => t.task_id === "entity:kuroba"), "the surname alone must not fragment off either, now that the full phrase matches");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
