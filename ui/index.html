@@ -839,7 +839,10 @@
                 <sc-if value="{{ ollamaError }}">
                   <div style="display:flex; flex-direction:column; gap:4px;">
                     <span style="font-size:10px; color:#c0341a;">{{ ollamaError }}</span>
-                    <button type="button" onClick="{{ retryOllamaFetch }}" style="align-self:flex-start; border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
+                    <div style="display:flex; gap:6px;">
+                      <button type="button" onClick="{{ retryOllamaFetch }}" style="align-self:flex-start; border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
+                      <button type="button" onClick="{{ openOllamaSetup }}" style="align-self:flex-start; border:1px solid #E0DACE; border-radius:5px; background:none; color:#4A463E; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">setup help</button>
+                    </div>
                   </div>
                 </sc-if>
                 <sc-if value="{{ ollamaReady }}">
@@ -2348,15 +2351,85 @@
 
   <sc-if value="{{ ollamaShowPermission }}">
   <div onClick="{{ cancelOllamaConnect }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:10vh 24px 24px; z-index:60;">
-    <div onClick="{{ stopOllamaPermClick }}" class="eo-fade-in" style="width:100%; max-width:400px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:14px;">
+    <div onClick="{{ stopOllamaPermClick }}" class="eo-fade-in eo-scrollbar" style="width:100%; max-width:440px; max-height:76vh; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:14px;">
       <div style="display:flex; align-items:center; justify-content:space-between;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#6E6A60;">Connect Ollama</span>
         <button type="button" aria-label="Cancel" onClick="{{ cancelOllamaConnect }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
       </div>
-      <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">EOChat will connect to a local Ollama instance to list your installed models and use them for generation. No data is sent anywhere except to the Ollama server running on your machine.</span>
+
+      <sc-if value="{{ ollamaDiagChecking }}">
+        <span style="display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#8C877C;"><i class="ph ph-spinner eo-spin"></i>Checking for a local Ollama instance…</span>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagProxyDown }}">
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">Can't reach the eochat server at <b>{{ ollamaProxyUrlText }}</b>. If you're running it locally, start it first.</span>
+          <div style="display:flex; align-items:center; gap:8px; border:1px solid #E0DACE; border-radius:8px; padding:6px 9px;">
+            <code style="flex:1; min-width:0; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#26241F; overflow-x:auto; white-space:pre;">npm start</code>
+            <button type="button" onClick="{{ ollamaCopyNpmStart }}" style="flex:none; border:1px solid #E0DACE; background:none; border-radius:6px; padding:3px 8px; font-family:inherit; font-size:10.5px; color:#4A463E; cursor:pointer;">{{ ollamaCopyNpmStartLabel }}</button>
+          </div>
+          <span style="font-size:11px; color:#8C877C;">Run from the eochat project folder.</span>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagNotInstalled }}">
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">No Ollama instance found at <b>{{ ollamaDiagUrl }}</b>. Install it first:</span>
+          <sc-for list="{{ ollamaInstallSteps }}" as="st">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#A39D91;">{{ st.label }}</span>
+              <sc-if value="{{ st.isLink }}">
+                <a href="{{ st.href }}" target="_blank" rel="noopener" style="font-size:12px; color:#1F5A4C;">{{ st.href }}</a>
+              </sc-if>
+              <sc-if value="{{ st.isCommand }}">
+                <div style="display:flex; align-items:center; gap:8px; border:1px solid #E0DACE; border-radius:8px; padding:6px 9px;">
+                  <code style="flex:1; min-width:0; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#26241F; overflow-x:auto; white-space:pre;">{{ st.text }}</code>
+                  <button type="button" onClick="{{ st.copy }}" style="flex:none; border:1px solid #E0DACE; background:none; border-radius:6px; padding:3px 8px; font-family:inherit; font-size:10.5px; color:#4A463E; cursor:pointer;">{{ st.copyLabel }}</button>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <span style="font-size:11px; color:#8C877C; line-height:1.5;">Ollama runs in the background once installed. If it still doesn't answer, open a terminal and run <code style="background:#F4F1EA; border-radius:3px; padding:0 4px;">ollama serve</code>.</span>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagCorsBlocked }}">
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">Ollama is running, but hasn't allowed <b>{{ ollamaOrigin }}</b> to connect yet. Allow it:</span>
+          <sc-for list="{{ ollamaCorsSteps }}" as="st">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#A39D91;">{{ st.label }}</span>
+              <div style="display:flex; align-items:center; gap:8px; border:1px solid #E0DACE; border-radius:8px; padding:6px 9px;">
+                <code style="flex:1; min-width:0; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#26241F; overflow-x:auto; white-space:pre-wrap;">{{ st.text }}</code>
+                <button type="button" onClick="{{ st.copy }}" style="flex:none; border:1px solid #E0DACE; background:none; border-radius:6px; padding:3px 8px; font-family:inherit; font-size:10.5px; color:#4A463E; cursor:pointer;">{{ st.copyLabel }}</button>
+              </div>
+            </div>
+          </sc-for>
+          <span style="font-size:11px; color:#8C877C; line-height:1.5;">Using <code style="background:#F4F1EA; border-radius:3px; padding:0 4px;">*</code> instead of this origin would let any site you visit reach your local Ollama through your browser — the exact origin above is safer.</span>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagGenericError }}">
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">Couldn't check Ollama's status.</span>
+          <sc-if value="{{ ollamaDiagDetail }}">
+            <span style="font-size:11px; color:#8C877C; font-family:'IBM Plex Mono', monospace;">{{ ollamaDiagDetail }}</span>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagReady }}">
+        <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">EOChat will connect to a local Ollama instance to list your installed models and use them for generation. No data is sent anywhere except to the Ollama server running on your machine.</span>
+      </sc-if>
+
       <div style="display:flex; justify-content:flex-end; gap:8px; padding-top:4px;">
         <button type="button" onClick="{{ cancelOllamaConnect }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Cancel</button>
-        <button type="button" onClick="{{ connectOllama }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Connect</button>
+        <sc-if value="{{ ollamaDiagShowRecheck }}">
+          <button type="button" onClick="{{ recheckOllama }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Check again</button>
+        </sc-if>
+        <sc-if value="{{ ollamaDiagReady }}">
+          <button type="button" onClick="{{ connectOllama }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Connect</button>
+        </sc-if>
       </div>
     </div>
   </div>
@@ -2504,6 +2577,18 @@ const PROJECTS_KEY = 'eochat.projects.v1';
 // see _defaultToLocalModelIfNoEngine below.
 const ON_GH_PAGES = typeof window !== 'undefined' && /(^|\.)github\.io$/.test(window.location.hostname);
 
+// Best-effort OS sniff, used only to pick which copy-paste command the
+// Ollama setup guide shows (install command, OLLAMA_ORIGINS command) —
+// never load-bearing, falls back to a generic command when it can't tell.
+function detectClientOS() {
+  const s = ((typeof navigator !== 'undefined' && (navigator.platform || navigator.userAgent)) || '').toLowerCase();
+  if (s.includes('mac')) return 'mac';
+  if (s.includes('win')) return 'windows';
+  if (s.includes('linux') || s.includes('x11')) return 'linux';
+  return 'unknown';
+}
+const CLIENT_OS = detectClientOS();
+
 // How many finished local-mode turns get folded into the messages array as
 // verbatim user/assistant pairs, so a follow-up like "reformat it" has a
 // referent for "it". Deliberately small: a bounded recency window, not the
@@ -2537,6 +2622,9 @@ class Component extends DCLogic {
     webSearch: true,
     provider: 'local', model: null, _availableModels: [], modelMenuOpen: false,
     _ollamaModels: [], _ollamaFetching: false, _ollamaError: null, _ollamaAuthorized: false, _ollamaShowPermission: false, _ollamaUrl: '',
+    // Drives the Connect-Ollama modal's stages — see runOllamaDiagnosis().
+    // null | 'checking' | 'proxy-unreachable' | 'not-installed' | 'cors-blocked' | 'ready' | 'error'
+    _ollamaDiagStage: null, _ollamaDiagDetail: '', _ollamaDiagTarget: '', _ollamaCopiedCmd: '',
     // Local mode: answer entirely in this tab via WebLLM (see
     // webllm-client.js / window.EOWebLLM), no proxy generation call.
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
@@ -3104,6 +3192,7 @@ class Component extends DCLogic {
     } else {
       this.setState({ _ollamaShowPermission: true });
     }
+    this.runOllamaDiagnosis();
   }
 
   connectOllama() {
@@ -3157,6 +3246,93 @@ class Component extends DCLogic {
     if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
     if (bytes >= 1e3) return (bytes / 1e3).toFixed(1) + ' KB';
     return bytes + ' B';
+  }
+
+  // ── Ollama setup diagnosis ──────────────────────────────────────────────
+  // Before this, any failure to connect just surfaced the browser's own
+  // opaque fetch error ("Failed to fetch" — no way to tell "not installed"
+  // from "installed but blocked" apart, because browsers deliberately don't
+  // expose *why* a fetch failed). This tells apart the three distinct fixes
+  // a reader actually needs, and drives the Connect-Ollama modal's stages:
+  //   proxy-unreachable — the eochat server itself isn't running (self-hosted only)
+  //   not-installed     — nothing answers at the Ollama URL at all
+  //   cors-blocked      — Ollama is listening, but hasn't allowlisted this origin
+  //                       (only reachable on a direct-connect deployment — see
+  //                       ON_GH_PAGES — since the proxy talks to Ollama
+  //                       server-side and is never subject to browser CORS)
+  async runOllamaDiagnosis() {
+    this.setState({ _ollamaDiagStage: 'checking', _ollamaDiagDetail: '', _ollamaDiagTarget: '' });
+    if (ON_GH_PAGES) {
+      const url = this.state._ollamaUrl || 'http://localhost:11434';
+      let reachable = false;
+      try {
+        // mode:'no-cors' never enforces the CORS allowlist, so this resolves
+        // (with an opaque, unreadable response) the moment ANYTHING answers
+        // at `url` — pure network reachability, independent of whether this
+        // origin is allowed to read the response. It only rejects when the
+        // connection itself fails (nothing listening, DNS failure, etc).
+        await fetch(url + '/api/tags', { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(4000) });
+        reachable = true;
+      } catch { reachable = false; }
+      if (!reachable) { this.setState({ _ollamaDiagStage: 'not-installed' }); return; }
+      try {
+        const resp = await fetch(url + '/api/tags', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+        this.setState({ _ollamaDiagStage: resp.ok ? 'ready' : 'cors-blocked' });
+      } catch {
+        // Reachable via no-cors above but a normal (CORS-checked) request
+        // still fails — the connection works, the origin isn't allowed.
+        this.setState({ _ollamaDiagStage: 'cors-blocked' });
+      }
+      return;
+    }
+    try {
+      const resp = await fetch(this.proxyUrl() + '/api/ollama/models', { signal: AbortSignal.timeout(8000) });
+      if (resp.ok) { this.setState({ _ollamaDiagStage: 'ready' }); return; }
+      const err = await resp.json().catch(() => ({}));
+      this.setState({
+        _ollamaDiagStage: err.reason === 'not-running' ? 'not-installed' : 'error',
+        _ollamaDiagDetail: err.error || '',
+        _ollamaDiagTarget: err.target || '',
+      });
+    } catch (e) {
+      // The proxy fetch itself failed — the eochat server is down, not
+      // Ollama. Distinct fix (start the proxy), so keep it a distinct stage.
+      this.setState({ _ollamaDiagStage: 'proxy-unreachable', _ollamaDiagDetail: e.message });
+    }
+  }
+
+  copyOllamaCommand(text) {
+    if (!(navigator.clipboard && navigator.clipboard.writeText)) return;
+    navigator.clipboard.writeText(text).then(() => {
+      this.setState({ _ollamaCopiedCmd: text });
+      setTimeout(() => this.setState(s => s._ollamaCopiedCmd === text ? { _ollamaCopiedCmd: '' } : null), 1500);
+    }).catch(() => {});
+  }
+
+  // One data row per fix, keyed off the detected OS — the template just
+  // renders whichever list applies (sc-for), same shape as draftAttachments
+  // / localCatalog elsewhere in this component.
+  _ollamaInstallSteps() {
+    const cmd = (id, label, text) => ({ id, isLink: false, isCommand: true, label, text, copy: () => this.copyOllamaCommand(text), copyLabel: this.state._ollamaCopiedCmd === text ? 'Copied' : 'Copy' });
+    const link = (id, label, href) => ({ id, isLink: true, isCommand: false, label, href });
+    if (CLIENT_OS === 'mac') return [link('mac-dl', 'Download for macOS', 'https://ollama.com/download/mac'), cmd('mac-brew', 'or with Homebrew', 'brew install ollama')];
+    if (CLIENT_OS === 'windows') return [link('win-dl', 'Download for Windows', 'https://ollama.com/download/windows')];
+    if (CLIENT_OS === 'linux') return [cmd('linux-install', 'Install with the official script', 'curl -fsSL https://ollama.com/install.sh | sh')];
+    return [link('any-dl', 'Download Ollama', 'https://ollama.com/download')];
+  }
+
+  _ollamaCorsSteps() {
+    const origin = (typeof window !== 'undefined' && window.location.origin) || '';
+    const cmd = (id, label, text) => ({ id, label, text, copy: () => this.copyOllamaCommand(text), copyLabel: this.state._ollamaCopiedCmd === text ? 'Copied' : 'Copy' });
+    if (CLIENT_OS === 'mac') return [cmd('mac-setenv', 'Allow this page, then restart Ollama from the menu bar', `launchctl setenv OLLAMA_ORIGINS "${origin}"`)];
+    if (CLIENT_OS === 'windows') return [cmd('win-setx', 'Allow this page, then restart Ollama from the system tray', `setx OLLAMA_ORIGINS "${origin}"`)];
+    if (CLIENT_OS === 'linux') return [
+      cmd('linux-edit', 'Edit the service (opens an editor)', 'sudo systemctl edit ollama.service'),
+      cmd('linux-block', 'Paste this into it, then save and exit', `[Service]\nEnvironment="OLLAMA_ORIGINS=${origin}"`),
+      cmd('linux-restart', 'Apply it', 'sudo systemctl daemon-reload && sudo systemctl restart ollama'),
+      cmd('linux-manual', 'Running it manually instead, as a service?', `OLLAMA_ORIGINS="${origin}" ollama serve`),
+    ];
+    return [cmd('any-manual', 'Set this before starting Ollama', `OLLAMA_ORIGINS="${origin}" ollama serve`)];
   }
 
   // The priors catalog is a separate pool from /api/sources. A proxy too old
@@ -8835,6 +9011,24 @@ class Component extends DCLogic {
       disconnectOllama: () => this.disconnectOllama(),
       retryOllamaFetch: () => this.connectOllama(),
       stopOllamaPermClick: (e) => e.stopPropagation(),
+      openOllamaSetup: () => this.requestOllamaConnect(),
+      // ── Ollama setup diagnosis (Connect-Ollama modal stages) ──
+      ollamaDiagChecking: S._ollamaDiagStage === 'checking',
+      ollamaDiagProxyDown: S._ollamaDiagStage === 'proxy-unreachable',
+      ollamaDiagNotInstalled: S._ollamaDiagStage === 'not-installed',
+      ollamaDiagCorsBlocked: S._ollamaDiagStage === 'cors-blocked',
+      ollamaDiagReady: S._ollamaDiagStage === 'ready',
+      ollamaDiagGenericError: S._ollamaDiagStage === 'error',
+      ollamaDiagShowRecheck: ['proxy-unreachable', 'not-installed', 'cors-blocked', 'error'].includes(S._ollamaDiagStage),
+      ollamaDiagDetail: S._ollamaDiagDetail,
+      ollamaDiagUrl: ON_GH_PAGES ? (S._ollamaUrl || 'http://localhost:11434') : (S._ollamaDiagTarget || 'the configured Ollama URL'),
+      ollamaProxyUrlText: this.proxyUrl(),
+      ollamaOrigin: (typeof window !== 'undefined' && window.location.origin) || 'this page',
+      ollamaInstallSteps: this._ollamaInstallSteps(),
+      ollamaCorsSteps: this._ollamaCorsSteps(),
+      ollamaCopyNpmStart: () => this.copyOllamaCommand('npm start'),
+      ollamaCopyNpmStartLabel: S._ollamaCopiedCmd === 'npm start' ? 'Copied' : 'Copy',
+      recheckOllama: () => this.runOllamaDiagnosis(),
       ...this._localModelProps(S),
       settingsOpen: S.settingsOpen,
       toggleSettings: () => this.toggleSettings(),
