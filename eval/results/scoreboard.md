@@ -2,6 +2,31 @@
 
 Each run is a local CPU model attempting the Level 1-7 task ladder (see eval/README.md). All planning and all coding is done by the model under test via the tool loop in eval/agent/ — the harness only sandboxes, seeds, scores, and records. Newest runs first.
 
+## 2026-08-07T13-48-49-746Z__dry-run
+
+Model: `(dry-run, no model)` — 8/8 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:0.0s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.0s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+- **level2-jsonl-quirk** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:1.5s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:1.7s
+
+### Level 5
+- **level5-constitution-rename-ask** (Level 5) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:6 wall:1.6s
+
+### Level 6
+- **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:3.1s
+
+
 ## 2026-08-07T13-30-34-517Z__dry-run
 
 Model: `(dry-run, no model)` — 8/8 tasks passed.

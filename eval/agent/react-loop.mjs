@@ -75,8 +75,17 @@ export async function runReactLoop({
   let summary = null;
   let step = 0;
   let malformedStreak = 0;
-  let repeatFailStreak = 0;
-  let lastFailedCallKey = null;
+  // Keyed by exact (tool, args) — how many times THIS specific call has
+  // failed, total, across the whole attempt so far. Deliberately NOT reset
+  // by an intervening successful call to something else: a real transcript
+  // showed edit_file(fail) -> read_file(succeed) -> edit_file(SAME fail)
+  // repeated 11 times, and a naive "reset on anything non-matching" streak
+  // counter never once saw it as a repeat, because the successful read
+  // in between reset it back to 1 every single time. Reading the file
+  // again is normal, expected, and not itself the problem; what matters is
+  // whether THIS exact failing action keeps recurring regardless of what
+  // else happened around it.
+  const failureCounts = new Map();
   let stuckLoopAbort = false;
 
   for (; step < maxSteps; step++) {
@@ -107,20 +116,20 @@ export async function runReactLoop({
     const result = tools[parsed.tool].run(parsed.args);
     const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
     const isFailure = result && typeof result === "object" && "error" in result;
-    repeatFailStreak = isFailure && callKey === lastFailedCallKey ? repeatFailStreak + 1 : isFailure ? 1 : 0;
-    lastFailedCallKey = isFailure ? callKey : null;
+    const repeatCount = isFailure ? (failureCounts.get(callKey) ?? 0) + 1 : 0;
+    if (isFailure) failureCounts.set(callKey, repeatCount);
 
-    transcript.push({ step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatFailStreak || undefined });
+    transcript.push({ step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatCount || undefined });
 
     let observation = formatObservation(parsed.tool, result);
-    if (repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
-      observation += `\n\nSTUCK LOOP: this is the ${repeatFailStreak}${repeatFailStreak === 2 ? "nd" : repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
+    if (repeatCount >= STUCK_LOOP_NUDGE_AT) {
+      observation += `\n\nSTUCK LOOP: this exact ${parsed.tool} call (the SAME arguments) has now failed ${repeatCount} times, the same way every time — reading the file in between has not changed what you try next. Repeating it again will fail again. Stop: re-read the OBSERVATION above and base your next argument on what it actually says, not on what you expect it to say.`;
     }
     messages.push({ role: "user", content: observation });
 
-    if (repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
+    if (repeatCount >= STUCK_LOOP_ABORT_AT) {
       stuckLoopAbort = true;
-      transcript.push({ step, note: `aborted after ${repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` });
+      transcript.push({ step, note: `aborted after ${repeatCount} total identical failing ${parsed.tool} calls across the attempt (stuck loop, not a step-budget exhaustion)` });
       break;
     }
   }
