@@ -3263,7 +3263,10 @@ class Component extends DCLogic {
         body: JSON.stringify({ prompt, workspace, model }),
         signal: this._eoCodeAbort.signal,
       });
-      if (!res.ok) throw new Error(`eoCode endpoint returned ${res.status}`);
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => '');
+        throw new Error(`eoCode endpoint returned ${res.status}${bodyText ? `: ${bodyText.slice(0, 300)}` : ''}`);
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -3337,7 +3340,10 @@ class Component extends DCLogic {
         body: JSON.stringify({ prompt, workspace, maxSteps: 20 }),
         signal: this._eoCodeAbort.signal,
       });
-      if (!startRes.ok) throw new Error(`eoCode session/start returned ${startRes.status}`);
+      if (!startRes.ok) {
+        const bodyText = await startRes.text().catch(() => '');
+        throw new Error(`eoCode session/start returned ${startRes.status}${bodyText ? `: ${bodyText.slice(0, 300)}` : ''}`);
+      }
       const started = await startRes.json();
       sessionId = started.sessionId;
       this.setState({ eoCodeWorkspace: started.workspace });
@@ -3354,7 +3360,10 @@ class Component extends DCLogic {
           body: JSON.stringify({ raw }),
           signal: this._eoCodeAbort.signal,
         });
-        if (!stepRes.ok) throw new Error(`eoCode session/step returned ${stepRes.status}`);
+        if (!stepRes.ok) {
+          const bodyText = await stepRes.text().catch(() => '');
+          throw new Error(`eoCode session/step returned ${stepRes.status}${bodyText ? `: ${bodyText.slice(0, 300)}` : ''}`);
+        }
         const stepped = await stepRes.json();
         this.setState(s => ({ eoCodeSteps: s.eoCodeSteps.concat(stepped.events) }));
         done = stepped.done;
