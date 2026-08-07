@@ -5867,34 +5867,60 @@ class Component extends DCLogic {
     return /(\d+)\s*(pages?|paragraphs?)|five\s+pages?|long(er|est)?\s+(essay|answer|piece)|in-depth|deep\s+dive|comprehensive/.test(question) ? 8 : 5;
   }
 
+  // One line in the current turn's Engine Activity log — both the "details →"
+  // modal's history (thinkingLogRows) and the inline live preview
+  // (thinkingLogPreviewRows) read from this same state.thinkingLog array. The
+  // server SSE path (askConversation) has fed it since holonic turns via
+  // _holonicLogEntry; the local/WebLLM path below only ever updated the
+  // one-line thinkingPhase/thinkingMeta pill, which is overwritten on every
+  // step and cleared at the end — so opening "details →" on a local turn
+  // always showed "Waiting for engine activity… 0 step(s)" no matter how much
+  // real work (web searches included) had actually happened.
+  _thinkingLog(glyph, text) {
+    this.setState(s => ({ thinkingLog: (s.thinkingLog || []).concat([{ glyph, text }]) }));
+  }
+
   // Mirrors the server's deliberate streaming experience: every section that
   // survives its fidelity check is appended to the visible answer the moment
   // it closes, and the phase line narrates outline → drafting → revising →
   // assembly as it happens.
   _applyLocalDeliberateEvent(appendAnswer, e) {
     switch (e.phase) {
-      case 'outline':
-        this.setState({ thinkingPhase: 'earning an outline...', thinkingMeta: `${e.sections} section(s)` + (e.withheld ? `, ${e.withheld} withheld` : '') });
+      case 'outline': {
+        const meta = `${e.sections} section(s)` + (e.withheld ? `, ${e.withheld} withheld` : '');
+        this.setState({ thinkingPhase: 'earning an outline...', thinkingMeta: meta });
+        this._thinkingLog('⊸', `Outline earned — ${meta}`);
         break;
+      }
       case 'section_start':
         this.setState({ thinkingPhase: 'writing...', thinkingMeta: `section ${e.id}` });
+        this._thinkingLog('⊸', `Section "${e.id}": drafting…`);
         break;
       case 'section_titled':
         this.setState({ thinkingMeta: e.title });
+        this._thinkingLog('⊸', `Section "${e.id}" titled "${e.title}"`);
         break;
       case 'section_drafted':
         this.setState({ thinkingMeta: `${e.words} word(s) drafted` });
+        this._thinkingLog('⊸', `Section "${e.id}": ${e.words} word(s) drafted`);
         break;
-      case 'section_revising':
-        this.setState({ thinkingPhase: 'revising...', thinkingMeta: `round ${e.round} — residual ${Number(e.residual).toFixed(3)}` });
+      case 'section_revising': {
+        const meta = `round ${e.round} — residual ${Number(e.residual).toFixed(3)}`;
+        this.setState({ thinkingPhase: 'revising...', thinkingMeta: meta });
+        this._thinkingLog('⊸', `Revising — ${meta} · ${e.count} section(s)`);
         break;
+      }
       case 'section_closed':
         appendAnswer(`## ${e.title}\n\n${e.text}`);
         this.setState({ thinkingPhase: 'writing...', thinkingMeta: null });
+        this._thinkingLog('⊸', `Section "${e.title}" closed — passed fidelity check`);
         break;
-      case 'assembled':
+      case 'assembled': {
+        const meta = `${e.kept} kept, ${e.dropped} dropped` + (e.withheld ? `, ${e.withheld} withheld` : '');
         this.setState({ thinkingPhase: null, thinkingMeta: null });
+        this._thinkingLog('⊸', `Assembled — ${meta}`);
         break;
+      }
     }
     this.logAdd('→', `Deliberate: ${e.phase}${e.title ? ' — ' + e.title : ''}${e.sections !== undefined ? ' · ' + e.sections + ' section(s)' : ''}`, 'chat');
   }
@@ -5956,6 +5982,9 @@ class Component extends DCLogic {
     this.logAdd(useWeb ? '→' : '◱', useWeb
       ? `Web gate: on — ${webReason}.`
       : `Web gate: off — ${webReason || 'no discourse weight required it'}.`, 'chat');
+    this._thinkingLog(useWeb ? '→' : '◱', useWeb
+      ? `Searching the web for "${gate.query}" — ${webReason}.`
+      : `No web search — ${webReason || 'no discourse weight required it'}.`);
 
     let groundData;
     let groundFailed = null;
@@ -5969,6 +5998,13 @@ class Component extends DCLogic {
       if (groundData.error) throw new Error(groundData.error);
     } catch (err) {
       groundFailed = err;
+    }
+    if (groundFailed) {
+      this._thinkingLog('⊘', `${useWeb ? 'Web search' : 'Retrieval'} failed — ${groundFailed.message}`);
+    } else if (useWeb) {
+      this._thinkingLog('→', `Web search found ${groundData.total ?? (groundData.citations || []).length} result(s) for "${gate.query}"`);
+    } else {
+      this._thinkingLog('⊸', `Retrieval found ${groundData.total ?? 0} passage(s), ${groundData.folded ?? 0} folded`);
     }
 
     // The proxy gates project instructions into the server answer; in local
@@ -6000,6 +6036,7 @@ class Component extends DCLogic {
       webSupplemented = true;
       webReason = 'the discourse demanded research the corpus could not carry — overriding the model verdict';
       this.logAdd('→', 'Discourse override: essay-shaped request with no local evidence — web research pushing in.', 'chat');
+      this._thinkingLog('→', `Discourse override — searching the web for "${gate.query}"`);
       try {
         const wres = await fetch(this.proxyUrl() + '/api/web-ground', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -6010,9 +6047,16 @@ class Component extends DCLogic {
           if (wdata.error) throw new Error(wdata.error);
           if ((wdata.citations || []).length) {
             groundData = { ...groundData, grounded: true, citations: wdata.citations, total: wdata.total, systemPrompt: wdata.systemPrompt, gaps: wdata.gaps || [], deliberate: groundData.deliberate || wdata.deliberate };
+            this._thinkingLog('→', `Discourse override found ${wdata.citations.length} web result(s)`);
+          } else {
+            this._thinkingLog('⊘', 'Discourse override — web search returned nothing usable');
           }
+        } else {
+          this._thinkingLog('⊘', `Discourse override — web search failed (proxy returned ${wres.status})`);
         }
-      } catch {}
+      } catch (err) {
+        this._thinkingLog('⊘', `Discourse override — web search failed (${err.message})`);
+      }
     }
 
     if (groundFailed) {
@@ -6063,6 +6107,7 @@ class Component extends DCLogic {
         const maxSections = this._deliberateMaxSections(question);
         this.setState({ thinkingPhase: 'earning an outline...', thinkingMeta: `${maxSections} section(s) ceiling` });
         this.logAdd('→', `Deliberate long-form: ${cited.length} passage(s), up to ${maxSections} section(s)`, 'chat');
+        this._thinkingLog('⊸', `Deliberate long-form: ${cited.length} passage(s), up to ${maxSections} section(s)`);
         const result = await window.EOWebLLMLongform.runWebLLMAnswer({
           proxyUrl: this.proxyUrl(), question, citations: cited, maxSections,
           signal: this._localAbort ? this._localAbort.signal : null,
@@ -6103,11 +6148,13 @@ class Component extends DCLogic {
           patchTurn({ streaming: false });
           this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
           this.logAdd('◱', 'Deliberate long-form stopped by the reader', 'chat');
+          this._thinkingLog('◱', 'Stopped by the reader');
           return;
         }
         deliberateRan = false;
         this.setState({ thinkingPhase: null, thinkingMeta: null });
         this.logAdd('⊘', `Deliberate long-form failed (${err.message}) — answering as a normal turn`, 'chat');
+        this._thinkingLog('⊘', `Deliberate long-form failed (${err.message}) — falling back to a normal turn`);
       }
     }
 
