@@ -17,7 +17,7 @@ import { REPO_ROOT } from "./paths.js";
 import { createTools } from "../eval/agent/tools.mjs";
 import { runReactLoop, createSession, promptViewFor, applyResponse } from "../eval/agent/react-loop.mjs";
 import { createOllamaAdapter } from "../eval/adapters/ollama-adapter.mjs";
-import { addPriorArtSearchTool } from "../eval/agent/crispr-search.mjs";
+import { addPriorArtSearchTool, addArchetypeSearchTool } from "../eval/agent/crispr-search.mjs";
 
 /** Every eoCode workspace lives under here — never anywhere else on disk. */
 export const WORKSPACE_ROOT = resolve(REPO_ROOT, "eocode-workspace");
@@ -92,6 +92,7 @@ export async function runEoCodeTask({
 
   const toolset = createTools(dir);
   addPriorArtSearchTool(toolset);
+  addArchetypeSearchTool(toolset);
   const adapter = createOllamaAdapter({ model });
 
   emit("start", { workspace: relative(WORKSPACE_ROOT, dir) || "default", dir, model, prompt, maxSteps });
@@ -160,6 +161,7 @@ export function startEoCodeSession({ workspace, prompt, foldK, maxSteps = 20 }) 
 
   const toolset = createTools(dir);
   addPriorArtSearchTool(toolset);
+  addArchetypeSearchTool(toolset);
   const session = createSession({ taskPrompt: prompt, toolset, foldK });
   const sessionId = randomBytes(16).toString("hex");
   const now = Date.now();

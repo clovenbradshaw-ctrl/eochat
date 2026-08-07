@@ -344,3 +344,34 @@ export function addPriorArtSearchTool(toolset) {
   };
   return toolset;
 }
+
+/**
+ * Wires search_app_archetype onto an existing toolset IN PLACE — the coarser
+ * grain from CRISPR-LANDSCAPE.md/CRISPR.md §6: "is the whole task a known
+ * archetype" (a Reddit clone), not "is there a utility for this." Kept as
+ * its own tool, not merged into search_prior_art, because a match here
+ * implies cloning a whole third-party repo (`run_shell` + `git clone` —
+ * verified to work through this sandbox's proxy even though the GitHub
+ * REST API does not, see crispr-search.mjs's searchArchetype header), a
+ * materially bigger license/provenance decision than snipping a function.
+ * Was deliberately left unwired when built; wiring it here is the update
+ * needed to actually test archetype-grain reuse end to end with a live
+ * agent, not just validate the search step in isolation.
+ */
+export function addArchetypeSearchTool(toolset) {
+  toolset.tools.search_app_archetype = {
+    description:
+      'search_app_archetype({"task": "what kind of whole app/site you\'re about to build"}) — checks GitHub for a REAL, WORKING implementation of this whole kind of app (e.g. "reddit clone"), not a utility. If found, clone it with run_shell (git clone <url>) and adapt it — check its license first.',
+    run(args) {
+      let result;
+      try {
+        result = searchAppArchetype({ taskPrompt: String(args?.task ?? "") });
+      } catch (err) {
+        result = { error: err.message };
+      }
+      toolset.toolCalls.push({ name: "search_app_archetype", args, result, ts: toolset.toolCalls.length });
+      return result;
+    },
+  };
+  return toolset;
+}
