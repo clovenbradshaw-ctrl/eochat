@@ -62,9 +62,13 @@ test("a revision supersedes without erasing — the prior entry is still in the 
 // absolute-path debt list, inverted: this one may only grow by a conscious
 // edit, never silently.
 const KNOWN_SAFE_EXPORTS = [
-  "STRUCTURE_OPERATORS", "OPERATOR_BASIS", "ENTRY_KINDS",
+  "STRUCTURE_OPERATORS", "OPERATOR_BASIS", "ENTRY_KINDS", "GRAINS",
   "createTaskLog", "append", "projectTasks", "deriveLevels", "produce", "foldToWorkingSet",
 ].sort();
+// GRAINS (added alongside eo-cube.js's 27-cell wiring): re-exported from
+// eo-cube.js, itself Object.freeze(["Ground", "Figure", "Pattern"]) — a
+// frozen, read-only constant, the same safe shape as STRUCTURE_OPERATORS/
+// OPERATOR_BASIS/ENTRY_KINDS already on this list, not a mutator.
 
 test("task-log.js exposes no mutator beyond the known safe surface", () => {
   assert.deepEqual(Object.keys(taskLog).sort(), KNOWN_SAFE_EXPORTS,
