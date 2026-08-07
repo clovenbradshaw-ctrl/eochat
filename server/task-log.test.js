@@ -72,6 +72,60 @@ test("a task with no operator reports a gap rather than defaulting to SEG", () =
   assert.match(t.operator_gap, /has been earned/);
 });
 
+test("a grain without its operator has no cell to belong to", () => {
+  const log = createTaskLog();
+  assert.throws(
+    () => append(log, propose("t", { grain: "Figure" })),
+    /operator that shares its cell/
+  );
+});
+
+test("an unrecognized grain is a type error, never a coerced value", () => {
+  const log = createTaskLog();
+  assert.throws(
+    () => append(log, propose("t", {
+      operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Depth",
+    })),
+    /three grains/
+  );
+});
+
+test("operator + grain together resolve the full cell — terrain and stance for free", () => {
+  let log = createTaskLog();
+  log = append(log, propose("t", {
+    operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Figure",
+  }));
+  const [t] = projectTasks(log);
+  assert.equal(t.grain, "Figure");
+  assert.equal(t.grain_gap, null);
+  assert.deepEqual(t.cell, {
+    operator: "SEG", mode: "Differentiate", domain: "Structure",
+    grain: "Figure", terrain: "Link", stance: "Dissecting",
+  });
+});
+
+test("a task with an operator but no grain reports its own gap, not a fabricated cell", () => {
+  let log = createTaskLog();
+  log = append(log, propose("t", { operator: "CON", operator_basis: OPERATOR_BASIS.PRODUCED }));
+  const [t] = projectTasks(log);
+  assert.equal(t.cell, null);
+  assert.match(t.grain_gap, /no grain has been earned/);
+});
+
+test("revising the operator without repeating the grain lapses the stale cell", () => {
+  let log = createTaskLog();
+  log = append(log, propose("t", { operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Ground" }));
+  log = append(log, { kind: ENTRY_KINDS.SUPERSEDE, task_id: "t2", supersedes: "t", operator: "CON", operator_basis: OPERATOR_BASIS.PRODUCED });
+  const [t] = projectTasks(log);
+  // CON.Ground was never affirmed together for this task — SEG was earned at
+  // Ground, not CON — so neither the old grain nor a cell built from it
+  // carries over onto the new operator; citing either would be a fabrication.
+  assert.equal(t.operator, "CON");
+  assert.equal(t.cell, null);
+  assert.equal(t.grain, null);
+  assert.match(t.grain_gap, /no grain has been earned/);
+});
+
 test("production types each entry by the rule that fired, and halts at closure", () => {
   let log = createTaskLog();
   log = append(log, propose("root", { description: "incoherent evidence" }));
