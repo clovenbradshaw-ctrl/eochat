@@ -27,6 +27,22 @@ import { parseAction } from "./lib/parse-action.mjs";
 const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
 const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
 
+// VERIFICATION NUDGE. A real, measured failure mode from Level 3+ runs
+// against qwen2.5-coder:7b (see eval/README.md): the model spends its
+// ENTIRE step budget alternating read_file/edit_file and essentially never
+// calls run_shell to actually execute what it wrote -- a real behavioral
+// pattern, not a step-budget-exhaustion artifact (doubling the budget just
+// repeated the same ratio longer). Same shape as the stuck-loop problem
+// above (a real failure this loop must surface and correct, not paper
+// over) so it gets the same fix: an explicit, escalating nudge rather than
+// a silent hope the model self-corrects. Unlike the stuck-loop abort, this
+// never force-ends the attempt -- not calling run_shell is not inherently
+// unrecoverable the way a proven-dead identical-failure loop is, so this
+// only nudges, repeating every NO_VERIFY_NUDGE_EVERY calls if still
+// ignored, rather than aborting.
+const NO_VERIFY_NUDGE_AT = 4;
+const NO_VERIFY_NUDGE_EVERY = 3;
+
 // PROMPT FOLDING. `messages` below accumulates every raw response and every
 // full observation with no bound -- fine for the harness's own record, but
 // sent WHOLE to the adapter every single step it becomes exactly the
@@ -132,6 +148,7 @@ export async function runReactLoop({
   let repeatFailStreak = 0;
   let lastFailedCallKey = null;
   let stuckLoopAbort = false;
+  let noVerifyStreak = 0;
 
   for (; step < maxSteps; step++) {
     const promptMessages = buildPromptMessages(messages, transcript, FOLD_WINDOW_STEPS);
@@ -165,11 +182,15 @@ export async function runReactLoop({
     repeatFailStreak = isFailure && callKey === lastFailedCallKey ? repeatFailStreak + 1 : isFailure ? 1 : 0;
     lastFailedCallKey = isFailure ? callKey : null;
 
-    transcript.push({ step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatFailStreak || undefined });
+    noVerifyStreak = parsed.tool === "run_shell" ? 0 : noVerifyStreak + 1;
+
+    transcript.push({ step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatFailStreak || undefined, noVerifyStreak: noVerifyStreak || undefined });
 
     let observation = formatObservation(parsed.tool, result);
     if (repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
       observation += `\n\nSTUCK LOOP: this is the ${repeatFailStreak}${repeatFailStreak === 2 ? "nd" : repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
+    } else if (noVerifyStreak >= NO_VERIFY_NUDGE_AT && (noVerifyStreak - NO_VERIFY_NUDGE_AT) % NO_VERIFY_NUDGE_EVERY === 0) {
+      observation += `\n\nVERIFICATION REMINDER: that is ${noVerifyStreak} tool calls in a row without running anything. Reading and editing a file is not evidence it works. Call run_shell now and actually execute your code (or the task's test/check command) before making any more edits.`;
     }
     messages.push({ role: "user", content: observation });
 
