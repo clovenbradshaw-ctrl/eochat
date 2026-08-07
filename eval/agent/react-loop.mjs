@@ -106,6 +106,140 @@ function formatObservation(toolName, result) {
 }
 
 /**
+ * Everything a react-loop run needs to carry between steps, with NO
+ * adapter/generate call baked in — this is what makes the same per-step
+ * logic drivable either by runReactLoop's own for-loop (an Ollama-style
+ * adapter driving itself) or by an external stepping API where a CLIENT
+ * (e.g. a browser running WebLLM) supplies each raw response one HTTP call
+ * at a time. Tool execution always happens here, server-side, regardless
+ * of where the model itself runs — read_file/write_file/edit_file/run_shell
+ * need real filesystem/process access a browser cannot give them.
+ *
+ * @param {object} opts
+ * @param {string} opts.taskPrompt
+ * @param {string} [opts.groundingBlock]
+ * @param {{tools: object, toolCalls: array}} opts.toolset
+ * @param {number} [opts.foldK] see buildPromptView above. Default 6.
+ */
+export function createSession({ taskPrompt, groundingBlock = null, toolset, foldK = DEFAULT_FOLD_K }) {
+  const { tools, toolCalls } = toolset;
+  const toolNames = Object.keys(tools);
+  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description)) };
+
+  const userIntro = groundingBlock
+    ? `TASK:\n${taskPrompt}\n\nRESEARCH (surfaced before you started, folded to what fit the budget):\n${groundingBlock}`
+    : `TASK:\n${taskPrompt}`;
+  const intro = { role: "user", content: userIntro };
+
+  return {
+    tools, toolNames, toolCalls, system, intro, foldK,
+    // The full, honest, append-only record of everything said — never
+    // truncated. What's actually SENT to the model each turn is the
+    // separate, bounded `foldedTurns` view (see promptViewFor below).
+    messages: [system, intro],
+    foldedTurns: [], // { entry, msgs }[] — one per step that needed another generate() call after it
+    transcript: [],
+    finished: false,
+    summary: null,
+    step: 0,
+    malformedStreak: 0,
+    repeatFailStreak: 0,
+    lastFailedCallKey: null,
+    stuckLoopAbort: false,
+    // Set once no further applyResponse call should happen: finished,
+    // stuckLoopAbort, or the malformed-response abort threshold.
+    done: false,
+  };
+}
+
+/** The bounded prompt to show the model for the session's CURRENT step. */
+export function promptViewFor(session) {
+  return buildPromptView(session.system, session.intro, session.foldedTurns, session.foldK);
+}
+
+/**
+ * Apply exactly ONE raw model response to a session: parse it, run the tool
+ * (or record why it couldn't), fold the observation into the session, and
+ * report what happened as the same {phase, ...} event shape onStep already
+ * uses — so a stepping HTTP API can disclose a client-driven run exactly
+ * like runReactLoop discloses a server-driven one, with no duplicate
+ * rendering logic anywhere downstream.
+ *
+ * Mutates `session` in place (and returns it) — sessions are meant to be
+ * held by a caller (an in-memory map, keyed by session id) across calls.
+ *
+ * @returns {{ events: object[], done: boolean }}
+ */
+export function applyResponse(session, raw) {
+  const events = [];
+  const step = session.step;
+  session.step += 1;
+
+  const assistantMsg = { role: "assistant", content: raw };
+  session.messages.push(assistantMsg);
+  events.push({ step, phase: "assistant_raw", raw });
+
+  const parsed = parseAction(raw, session.toolNames);
+  if (!parsed.ok) {
+    session.malformedStreak += 1;
+    const entry = { step, raw, malformed: true, reason: parsed.reason };
+    session.transcript.push(entry);
+    events.push({ ...entry, phase: "malformed" });
+    const nudge = `Your last response could not be parsed: ${parsed.reason}. Respond with exactly one JSON object: {"tool": "<name>", "args": {...}}.`;
+    const nudgeMsg = { role: "user", content: nudge };
+    session.messages.push(nudgeMsg);
+    session.foldedTurns.push({ entry, msgs: [assistantMsg, nudgeMsg] });
+    if (session.malformedStreak >= 3) {
+      const abortEntry = { step, note: "aborted after 3 consecutive malformed responses" };
+      session.transcript.push(abortEntry);
+      events.push({ ...abortEntry, phase: "aborted" });
+      session.done = true;
+    }
+    return { events, done: session.done };
+  }
+  session.malformedStreak = 0;
+
+  if (parsed.tool === "finish") {
+    session.finished = true;
+    session.summary = typeof parsed.args.summary === "string" ? parsed.args.summary : "(no summary given)";
+    const entry = { step, tool: "finish", args: parsed.args };
+    session.transcript.push(entry);
+    events.push({ ...entry, phase: "finish" });
+    session.done = true;
+    return { events, done: true };
+  }
+
+  events.push({ step, phase: "tool_call", tool: parsed.tool, args: parsed.args });
+  const result = session.tools[parsed.tool].run(parsed.args);
+  const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
+  const isFailure = result && typeof result === "object" && "error" in result;
+  session.repeatFailStreak = isFailure && callKey === session.lastFailedCallKey ? session.repeatFailStreak + 1 : isFailure ? 1 : 0;
+  session.lastFailedCallKey = isFailure ? callKey : null;
+
+  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: session.repeatFailStreak || undefined };
+  session.transcript.push(entry);
+  events.push({ ...entry, phase: "tool_result" });
+
+  let observation = formatObservation(parsed.tool, result);
+  if (session.repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
+    observation += `\n\nSTUCK LOOP: this is the ${session.repeatFailStreak}${session.repeatFailStreak === 2 ? "nd" : session.repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
+  }
+  const observationMsg = { role: "user", content: observation };
+  session.messages.push(observationMsg);
+  session.foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
+
+  if (session.repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
+    session.stuckLoopAbort = true;
+    const abortEntry = { step, note: `aborted after ${session.repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` };
+    session.transcript.push(abortEntry);
+    events.push({ ...abortEntry, phase: "aborted" });
+    session.done = true;
+  }
+
+  return { events, done: session.done };
+}
+
+/**
  * @param {object} opts
  * @param {string} opts.taskPrompt      the task description shown to the model
  * @param {string} [opts.groundingBlock] optional surf/fold research context (see holon-coder.mjs)
@@ -131,111 +265,35 @@ export async function runReactLoop({
   const emit = onStep
     ? (entry) => { try { onStep(entry); } catch (err) { console.error(`[react-loop] onStep handler threw: ${err.message}`); } }
     : () => {};
-  const { tools, toolCalls } = toolset;
-  const toolNames = Object.keys(tools);
-  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description)) };
 
-  const userIntro = groundingBlock
-    ? `TASK:\n${taskPrompt}\n\nRESEARCH (surfaced before you started, folded to what fit the budget):\n${groundingBlock}`
-    : `TASK:\n${taskPrompt}`;
-  const intro = { role: "user", content: userIntro };
+  const session = createSession({ taskPrompt, groundingBlock, toolset, foldK });
 
-  // The full, honest, append-only record of everything said — never
-  // truncated, returned whole in the result. What's actually SENT to the
-  // model each turn is the separate, bounded `foldedTurns` view below.
-  const messages = [system, intro];
-  const foldedTurns = []; // { entry, msgs }[] — one per step that needs another generate() call after it
-
-  const transcript = [];
-  let finished = false;
-  let summary = null;
   let step = 0;
-  let malformedStreak = 0;
-  let repeatFailStreak = 0;
-  let lastFailedCallKey = null;
-  let stuckLoopAbort = false;
-
   for (; step < maxSteps; step++) {
-    const promptView = buildPromptView(system, intro, foldedTurns, foldK);
-    if (foldedTurns.length > foldK) {
-      emit({ step, phase: "folded", keptTurns: Math.min(foldedTurns.length, foldK), foldedTurns: foldedTurns.length - foldK });
+    const promptView = promptViewFor(session);
+    if (session.foldedTurns.length > foldK) {
+      emit({ step, phase: "folded", keptTurns: Math.min(session.foldedTurns.length, foldK), foldedTurns: session.foldedTurns.length - foldK });
     }
     emit({ step, phase: "generating" });
     const raw = await adapter.generate(promptView, { maxTokens: maxTokensPerStep, seed: seed + step });
-    const assistantMsg = { role: "assistant", content: raw };
-    messages.push(assistantMsg);
-    emit({ step, phase: "assistant_raw", raw });
-
-    const parsed = parseAction(raw, toolNames);
-    if (!parsed.ok) {
-      malformedStreak += 1;
-      const entry = { step, raw, malformed: true, reason: parsed.reason };
-      transcript.push(entry);
-      emit({ ...entry, phase: "malformed" });
-      const nudge = `Your last response could not be parsed: ${parsed.reason}. Respond with exactly one JSON object: {"tool": "<name>", "args": {...}}.`;
-      const nudgeMsg = { role: "user", content: nudge };
-      messages.push(nudgeMsg);
-      foldedTurns.push({ entry, msgs: [assistantMsg, nudgeMsg] });
-      if (malformedStreak >= 3) {
-        const abortEntry = { step, note: "aborted after 3 consecutive malformed responses" };
-        transcript.push(abortEntry);
-        emit({ ...abortEntry, phase: "aborted" });
-        break;
-      }
-      continue;
-    }
-    malformedStreak = 0;
-
-    if (parsed.tool === "finish") {
-      finished = true;
-      summary = typeof parsed.args.summary === "string" ? parsed.args.summary : "(no summary given)";
-      const entry = { step, tool: "finish", args: parsed.args };
-      transcript.push(entry);
-      emit({ ...entry, phase: "finish" });
-      break;
-    }
-
-    emit({ step, phase: "tool_call", tool: parsed.tool, args: parsed.args });
-    const result = tools[parsed.tool].run(parsed.args);
-    const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
-    const isFailure = result && typeof result === "object" && "error" in result;
-    repeatFailStreak = isFailure && callKey === lastFailedCallKey ? repeatFailStreak + 1 : isFailure ? 1 : 0;
-    lastFailedCallKey = isFailure ? callKey : null;
-
-    const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatFailStreak || undefined };
-    transcript.push(entry);
-    emit({ ...entry, phase: "tool_result" });
-
-    let observation = formatObservation(parsed.tool, result);
-    if (repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
-      observation += `\n\nSTUCK LOOP: this is the ${repeatFailStreak}${repeatFailStreak === 2 ? "nd" : repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
-    }
-    const observationMsg = { role: "user", content: observation };
-    messages.push(observationMsg);
-    foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
-
-    if (repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
-      stuckLoopAbort = true;
-      const abortEntry = { step, note: `aborted after ${repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` };
-      transcript.push(abortEntry);
-      emit({ ...abortEntry, phase: "aborted" });
-      break;
-    }
+    const { events, done } = applyResponse(session, raw);
+    for (const event of events) emit(event);
+    if (done) break;
   }
 
   return {
-    finished,
-    summary,
-    steps: step + (finished || transcript.at(-1)?.note ? 1 : 0),
-    stepsRun: transcript.length,
-    hitStepCap: !finished && !stuckLoopAbort && step >= maxSteps,
+    finished: session.finished,
+    summary: session.summary,
+    steps: step + (session.finished || session.transcript.at(-1)?.note ? 1 : 0),
+    stepsRun: session.transcript.length,
+    hitStepCap: !session.finished && !session.stuckLoopAbort && step >= maxSteps,
     // A distinct honest reason from hitStepCap: the loop stopped itself
     // early because it detected it was not converging, not because it ran
     // out of budget -- these must not read alike (same discipline
     // task-log.js's `closed` vs `halted_by` distinguishes).
-    stuckLoopAbort,
-    transcript,
-    toolCalls: [...toolCalls],
-    messages,
+    stuckLoopAbort: session.stuckLoopAbort,
+    transcript: session.transcript,
+    toolCalls: [...session.toolCalls],
+    messages: session.messages,
   };
 }
