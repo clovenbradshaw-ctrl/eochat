@@ -1,0 +1,17 @@
+=== campaign/derby novel run started, REAL model=llama3.2:latest, capped at 3 scene(s) ===
+[16:04:04] scene 1 (open) — calling model...
+[16:05:47] scene 1 done — 581 words in 102s
+[16:05:47]   new character surfaced: Derby — registered so later scenes see it
+[16:05:47]   new character surfaced: Eclipse — registered so later scenes see it
+[16:05:47]   new character surfaced: Market Street — registered so later scenes see it
+[16:05:47]   new character surfaced: Lola — registered so later scenes see it
+[16:05:47]   new character surfaced: Santos — registered so later scenes see it
+[16:05:47] scene 2 (introduce) — calling model...
+[16:07:23] scene 2 done — 647 words in 96s
+[16:07:23]   new character surfaced: Colson Merritt — registered so later scenes see it
+[16:07:23]   new character surfaced: Blue Larkspur Farm — registered so later scenes see it
+[16:07:23]   new character surfaced: Colson — registered so later scenes see it
+[16:07:23] scene 3 (introduce) — calling model...
+[16:09:21] scene 3 done — 766 words in 119s
+[16:09:21]   new character surfaced: Paper Trail — registered so later scenes see it
+[16:09:21] done in 5.3 min — wrote campaign-derby-novel-real.md, campaign-derby-novel-real-report.md
