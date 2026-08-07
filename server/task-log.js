@@ -28,6 +28,9 @@
 //   null-with-reason, never a guess. A missing operator is `null` with a stated
 //   basis, not a default of SEG.
 
+import { GRAINS, isGrain, cellFor } from "./eo-cube.js";
+export { GRAINS };
+
 // The Structure row of the canonical 3x3 (spec/operators/epoch.js):
 // Differentiate / Relate / Generate. These are the only structural acts a task
 // entry may carry. Existence (NUL/SIG/INS) and Interpretation (DEF/EVA/REC)
@@ -37,6 +40,16 @@ export const STRUCTURE_OPERATORS = Object.freeze({
   CON: "CON", // Relate — these parts bear on each other
   SYN: "SYN", // Generate — something holds only across the parts, not in any one
 });
+
+// A task entry may additionally carry the GRAIN its operator fired at
+// (Ground/Figure/Pattern — eo-cube.js). Operator alone names the act;
+// operator + grain together name one of the 27 legal cells of the cube and
+// derive its terrain and stance, so a fold that has earned both gets the full
+// EO address for free instead of a second mechanism guessing it from the
+// task's text — the guess is exactly the classifier path eoreader6/CUBE.md
+// tried and refuted (see eo-cube.js's header). Still restricted to the
+// Structure row: a grain does not widen which operators this log accepts,
+// it only completes the address for the three it already does.
 
 // How an entry's operator came to be what it is.
 //
@@ -96,6 +109,15 @@ export function append(log, entry) {
   if (entry.operator != null && !Object.values(OPERATOR_BASIS).includes(entry.operator_basis)) {
     throw new TypeError("append: an entry carrying an operator must state its operator_basis");
   }
+  if (entry.grain != null && !isGrain(entry.grain)) {
+    throw new TypeError(`append: ${JSON.stringify(entry.grain)} is not one of the three grains (${GRAINS.join(", ")})`);
+  }
+  // A grain names which of the three legal cells its operator's row lands
+  // on. Without the operator on the SAME entry there is no cell for it to
+  // complete — the two are earned together, not stitched from separate acts.
+  if (entry.grain != null && entry.operator == null) {
+    throw new TypeError("append: a grain was supplied without the operator that shares its cell");
+  }
 
   const sealed = Object.freeze({
     ...entry,
@@ -133,6 +155,9 @@ export function projectTasks(log) {
       operator: null,
       operator_basis: OPERATOR_BASIS.ABSENT,
       operator_gap: "no structural act has been earned for this task yet",
+      grain: null,
+      grain_gap: "no grain has been earned for this task's operator yet",
+      cell: null,
       description: null,
       depends_on: [],
       evidence: [],
@@ -147,12 +172,26 @@ export function projectTasks(log) {
     // all survived projection with their motifs stripped, and zero notes.
     const RESERVED = new Set([
       "kind", "task_id", "seq", "supersedes", "operator", "operator_basis",
-      "description", "depends_on", "evidence", "result",
+      "grain", "description", "depends_on", "evidence", "result",
     ]);
     const payload = {};
     for (const [key, value] of Object.entries(e)) {
       if (!RESERVED.has(key)) payload[key] = value;
     }
+
+    // grain and cell come from the SAME entry's operator+grain pair, never
+    // stitched across two different acts. An entry that moves the operator
+    // without repeating the grain lapses the old grain rather than pairing
+    // it with an operator it was never affirmed alongside — the old cell was
+    // earned for the operator that is no longer current.
+    const nextOperator = e.operator ?? prior.operator;
+    const nextGrain = e.grain ?? (e.operator != null ? null : prior.grain);
+    const nextGrainGap = e.grain != null
+      ? null
+      : e.operator != null
+        ? "no grain has been earned for this task's operator yet"
+        : prior.grain_gap;
+    const nextCell = nextOperator != null && nextGrain != null ? cellFor(nextOperator, nextGrain) : null;
 
     byId.set(e.task_id, {
       ...prior,
@@ -169,9 +208,12 @@ export function projectTasks(log) {
       result: e.kind === ENTRY_KINDS.RESULT ? e.result : prior.result,
       description: e.description ?? prior.description,
       depends_on: e.depends_on.length ? [...e.depends_on] : prior.depends_on,
-      operator: e.operator ?? prior.operator,
+      operator: nextOperator,
       operator_basis: e.operator != null ? e.operator_basis : prior.operator_basis,
       operator_gap: e.operator != null ? null : prior.operator_gap,
+      grain: nextGrain,
+      grain_gap: nextGrainGap,
+      cell: nextCell,
       last_seq: e.seq,
     });
   }
