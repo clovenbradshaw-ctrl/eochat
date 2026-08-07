@@ -839,7 +839,10 @@
                 <sc-if value="{{ ollamaError }}">
                   <div style="display:flex; flex-direction:column; gap:4px;">
                     <span style="font-size:10px; color:#c0341a;">{{ ollamaError }}</span>
-                    <button type="button" onClick="{{ retryOllamaFetch }}" style="align-self:flex-start; border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
+                    <div style="display:flex; gap:6px;">
+                      <button type="button" onClick="{{ retryOllamaFetch }}" style="align-self:flex-start; border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
+                      <button type="button" onClick="{{ openOllamaSetup }}" style="align-self:flex-start; border:1px solid #E0DACE; border-radius:5px; background:none; color:#4A463E; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">setup help</button>
+                    </div>
                   </div>
                 </sc-if>
                 <sc-if value="{{ ollamaReady }}">
@@ -859,6 +862,32 @@
                     <input type="text" placeholder="e.g. phi4-mini:latest" value="{{ model }}" onChange="{{ onModelChange }}" style="border:1px solid #E0DACE; border-radius:7px; background:#FFFDFA; color:#26241F; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:5px 7px; outline:none;" />
                   </div>
                 </sc-if>
+              </sc-if>
+              <sc-if value="{{ localModel }}">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">In-browser model</span>
+                  <sc-if value="{{ hasLocalCatalog }}">
+                    <div style="display:flex; flex-direction:column; gap:5px; max-height:220px; overflow-y:auto;" class="eo-scrollbar">
+                      <sc-for list="{{ localCatalog }}" as="lm">
+                        <button type="button" onClick="{{ lm.pick }}" style="display:flex; flex-direction:column; gap:2px; align-items:flex-start; border:1px solid {{ lm.border }}; border-radius:7px; background:{{ lm.bg }}; padding:6px 8px; cursor:pointer; font-family:inherit; text-align:left;">
+                          <span style="display:flex; align-items:center; gap:6px; width:100%;">
+                            <span style="font-size:11.5px; font-weight:500; color:#26241F; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ lm.label }}</span>
+                            <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#8C877C; flex:none;">{{ lm.size }}</span>
+                          </span>
+                          <sc-if value="{{ lm.state }}">
+                            <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; letter-spacing:.04em; color:{{ lm.stateColor }}; background:{{ lm.stateBg }}; border-radius:4px; padding:1px 5px;">{{ lm.state }}</span>
+                          </sc-if>
+                        </button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ !hasLocalCatalog }}">
+                    <span style="font-size:10.5px; color:#A39D91; line-height:1.5;">No in-browser models available in this browser.</span>
+                  </sc-if>
+                  <sc-if value="{{ !isStaticBuild }}">
+                    <button type="button" onClick="{{ settingsToggleLocal }}" style="align-self:flex-start; border:0; background:none; color:#8C877C; font-family:'IBM Plex Mono', monospace; font-size:9.5px; padding:2px 0; cursor:pointer; text-decoration:underline;">Use a cloud or Ollama model instead</button>
+                  </sc-if>
+                </div>
               </sc-if>
               <button type="button" onClick="{{ closeModelMenu }}" style="align-self:flex-end; border:0; background:none; color:#8C877C; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:2px 4px; cursor:pointer;">done</button>
             </div>
@@ -1361,11 +1390,24 @@
       <sc-if value="{{ isEoCode }}">
       <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:12px; min-height:0; overflow:hidden;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">eoCode — agentic coding</span>
-        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A local model plans, writes, and runs its own code in a real sandbox directory — read_file / write_file / edit_file / run_shell, one tool call at a time — with every step disclosed below as it happens, the same live transcript Claude Code or opencode show for their own tool calls. Needs a local Ollama model reachable from the server (<span style="font-family:'IBM Plex Mono', monospace;">ollama serve</span>).</span>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A model plans, writes, and runs its own code in a real sandbox directory — read_file / write_file / edit_file / run_shell, one tool call at a time — with every step disclosed below as it happens, the same live transcript Claude Code or opencode show for their own tool calls. The model can run on the server via Ollama, or right in this browser via WebLLM — either way, running the code stays on the server, since only it can safely touch a real filesystem.</span>
+
+        <div style="display:flex; gap:6px;">
+          <button type="button" onClick="{{ setEoCodeSourceOllama }}" style="border:1px solid #E4DFD5; border-radius:7px 0 0 7px; background: {{ eoCodeSourceOllamaBg }}; color: {{ eoCodeSourceOllamaColor }}; padding:6px 12px; font-family:inherit; font-size:11.5px; font-weight:500; cursor:pointer;">Ollama (server)</button>
+          <button type="button" onClick="{{ setEoCodeSourceWebLLM }}" style="border:1px solid #E4DFD5; border-left:0; border-radius:0 7px 7px 0; background: {{ eoCodeSourceWebLLMBg }}; color: {{ eoCodeSourceWebLLMColor }}; padding:6px 12px; font-family:inherit; font-size:11.5px; font-weight:500; cursor:pointer;">WebLLM (this browser)</button>
+        </div>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
           <input type="text" value="{{ eoCodeWorkspace }}" onChange="{{ onEoCodeWorkspaceChange }}" disabled="{{ eoCodeRunning }}" placeholder="workspace name" style="width:150px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"/>
-          <input type="text" value="{{ eoCodeModel }}" onChange="{{ onEoCodeModelChange }}" disabled="{{ eoCodeRunning }}" placeholder="ollama model, e.g. qwen2.5-coder:1.5b" style="width:230px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"/>
+          <sc-if value="{{ eoCodeSourceIsOllama }}">
+            <input type="text" value="{{ eoCodeModel }}" onChange="{{ onEoCodeModelChange }}" disabled="{{ eoCodeRunning }}" placeholder="ollama model, e.g. qwen2.5-coder:1.5b" style="width:230px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"/>
+          </sc-if>
+          <sc-if value="{{ eoCodeSourceIsWebLLM }}">
+            <span style="font-size:11.5px; color: {{ eoCodeWebLLMStatusColor }};">{{ eoCodeWebLLMStatusText }}</span>
+            <sc-if value="{{ eoCodeWebLLMNotStarted }}">
+              <button type="button" onClick="{{ startEoCodeWebLLM }}" style="border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:5px 10px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">Start</button>
+            </sc-if>
+          </sc-if>
           <sc-if value="{{ eoCodeRunning }}">
             <button type="button" onClick="{{ stopEoCode }}" style="border:1px solid #C0341A; border-radius:7px; background:none; color:#C0341A; padding:7px 14px; font-family:inherit; font-size:12.5px; cursor:pointer;">Stop</button>
           </sc-if>
@@ -2335,15 +2377,85 @@
 
   <sc-if value="{{ ollamaShowPermission }}">
   <div onClick="{{ cancelOllamaConnect }}" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(27,26,23,.26); display:flex; align-items:flex-start; justify-content:center; padding:10vh 24px 24px; z-index:60;">
-    <div onClick="{{ stopOllamaPermClick }}" class="eo-fade-in" style="width:100%; max-width:400px; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:14px;">
+    <div onClick="{{ stopOllamaPermClick }}" class="eo-fade-in eo-scrollbar" style="width:100%; max-width:440px; max-height:76vh; overflow-y:auto; background:#FFFDFA; border:1px solid #E4DFD5; border-radius:12px; padding:18px 20px 16px; display:flex; flex-direction:column; gap:14px;">
       <div style="display:flex; align-items:center; justify-content:space-between;">
         <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#6E6A60;">Connect Ollama</span>
         <button type="button" aria-label="Cancel" onClick="{{ cancelOllamaConnect }}" style="width:22px; height:22px; flex:none; display:flex; align-items:center; justify-content:center; border:0; background:none; border-radius:6px; color:#A39D91; font-size:13px; line-height:1; cursor:pointer; padding:0;">×</button>
       </div>
-      <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">EOChat will connect to a local Ollama instance to list your installed models and use them for generation. No data is sent anywhere except to the Ollama server running on your machine.</span>
+
+      <sc-if value="{{ ollamaDiagChecking }}">
+        <span style="display:flex; align-items:center; gap:6px; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#8C877C;"><i class="ph ph-spinner eo-spin"></i>Checking for a local Ollama instance…</span>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagProxyDown }}">
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">Can't reach the eochat server at <b>{{ ollamaProxyUrlText }}</b>. If you're running it locally, start it first.</span>
+          <div style="display:flex; align-items:center; gap:8px; border:1px solid #E0DACE; border-radius:8px; padding:6px 9px;">
+            <code style="flex:1; min-width:0; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#26241F; overflow-x:auto; white-space:pre;">npm start</code>
+            <button type="button" onClick="{{ ollamaCopyNpmStart }}" style="flex:none; border:1px solid #E0DACE; background:none; border-radius:6px; padding:3px 8px; font-family:inherit; font-size:10.5px; color:#4A463E; cursor:pointer;">{{ ollamaCopyNpmStartLabel }}</button>
+          </div>
+          <span style="font-size:11px; color:#8C877C;">Run from the eochat project folder.</span>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagNotInstalled }}">
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">No Ollama instance found at <b>{{ ollamaDiagUrl }}</b>. Install it first:</span>
+          <sc-for list="{{ ollamaInstallSteps }}" as="st">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#A39D91;">{{ st.label }}</span>
+              <sc-if value="{{ st.isLink }}">
+                <a href="{{ st.href }}" target="_blank" rel="noopener" style="font-size:12px; color:#1F5A4C;">{{ st.href }}</a>
+              </sc-if>
+              <sc-if value="{{ st.isCommand }}">
+                <div style="display:flex; align-items:center; gap:8px; border:1px solid #E0DACE; border-radius:8px; padding:6px 9px;">
+                  <code style="flex:1; min-width:0; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#26241F; overflow-x:auto; white-space:pre;">{{ st.text }}</code>
+                  <button type="button" onClick="{{ st.copy }}" style="flex:none; border:1px solid #E0DACE; background:none; border-radius:6px; padding:3px 8px; font-family:inherit; font-size:10.5px; color:#4A463E; cursor:pointer;">{{ st.copyLabel }}</button>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <span style="font-size:11px; color:#8C877C; line-height:1.5;">Ollama runs in the background once installed. If it still doesn't answer, open a terminal and run <code style="background:#F4F1EA; border-radius:3px; padding:0 4px;">ollama serve</code>.</span>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagCorsBlocked }}">
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">Ollama is running, but hasn't allowed <b>{{ ollamaOrigin }}</b> to connect yet. Allow it:</span>
+          <sc-for list="{{ ollamaCorsSteps }}" as="st">
+            <div style="display:flex; flex-direction:column; gap:4px;">
+              <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#A39D91;">{{ st.label }}</span>
+              <div style="display:flex; align-items:center; gap:8px; border:1px solid #E0DACE; border-radius:8px; padding:6px 9px;">
+                <code style="flex:1; min-width:0; font-family:'IBM Plex Mono', monospace; font-size:11px; color:#26241F; overflow-x:auto; white-space:pre-wrap;">{{ st.text }}</code>
+                <button type="button" onClick="{{ st.copy }}" style="flex:none; border:1px solid #E0DACE; background:none; border-radius:6px; padding:3px 8px; font-family:inherit; font-size:10.5px; color:#4A463E; cursor:pointer;">{{ st.copyLabel }}</button>
+              </div>
+            </div>
+          </sc-for>
+          <span style="font-size:11px; color:#8C877C; line-height:1.5;">Using <code style="background:#F4F1EA; border-radius:3px; padding:0 4px;">*</code> instead of this origin would let any site you visit reach your local Ollama through your browser — the exact origin above is safer.</span>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagGenericError }}">
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">Couldn't check Ollama's status.</span>
+          <sc-if value="{{ ollamaDiagDetail }}">
+            <span style="font-size:11px; color:#8C877C; font-family:'IBM Plex Mono', monospace;">{{ ollamaDiagDetail }}</span>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ ollamaDiagReady }}">
+        <span style="font-size:12.5px; color:#4A463E; line-height:1.6;">EOChat will connect to a local Ollama instance to list your installed models and use them for generation. No data is sent anywhere except to the Ollama server running on your machine.</span>
+      </sc-if>
+
       <div style="display:flex; justify-content:flex-end; gap:8px; padding-top:4px;">
         <button type="button" onClick="{{ cancelOllamaConnect }}" style="border:1px solid #E0DACE; background:#FFFDFA; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#4A463E; cursor:pointer;">Cancel</button>
-        <button type="button" onClick="{{ connectOllama }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Connect</button>
+        <sc-if value="{{ ollamaDiagShowRecheck }}">
+          <button type="button" onClick="{{ recheckOllama }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Check again</button>
+        </sc-if>
+        <sc-if value="{{ ollamaDiagReady }}">
+          <button type="button" onClick="{{ connectOllama }}" style="border:1px solid #1F5A4C; background:#1F5A4C; border-radius:9px; padding:7px 13px; font-family:inherit; font-size:12.5px; color:#FFFDFA; cursor:pointer;">Connect</button>
+        </sc-if>
       </div>
     </div>
   </div>
@@ -2491,6 +2603,18 @@ const PROJECTS_KEY = 'eochat.projects.v1';
 // see _defaultToLocalModelIfNoEngine below.
 const ON_GH_PAGES = typeof window !== 'undefined' && /(^|\.)github\.io$/.test(window.location.hostname);
 
+// Best-effort OS sniff, used only to pick which copy-paste command the
+// Ollama setup guide shows (install command, OLLAMA_ORIGINS command) —
+// never load-bearing, falls back to a generic command when it can't tell.
+function detectClientOS() {
+  const s = ((typeof navigator !== 'undefined' && (navigator.platform || navigator.userAgent)) || '').toLowerCase();
+  if (s.includes('mac')) return 'mac';
+  if (s.includes('win')) return 'windows';
+  if (s.includes('linux') || s.includes('x11')) return 'linux';
+  return 'unknown';
+}
+const CLIENT_OS = detectClientOS();
+
 // How many finished local-mode turns get folded into the messages array as
 // verbatim user/assistant pairs, so a follow-up like "reformat it" has a
 // referent for "it". Deliberately small: a bounded recency window, not the
@@ -2524,6 +2648,9 @@ class Component extends DCLogic {
     webSearch: true,
     provider: 'local', model: null, _availableModels: [], modelMenuOpen: false,
     _ollamaModels: [], _ollamaFetching: false, _ollamaError: null, _ollamaAuthorized: false, _ollamaShowPermission: false, _ollamaUrl: '',
+    // Drives the Connect-Ollama modal's stages — see runOllamaDiagnosis().
+    // null | 'checking' | 'proxy-unreachable' | 'not-installed' | 'cors-blocked' | 'ready' | 'error'
+    _ollamaDiagStage: null, _ollamaDiagDetail: '', _ollamaDiagTarget: '', _ollamaCopiedCmd: '',
     // Local mode: answer entirely in this tab via WebLLM (see
     // webllm-client.js / window.EOWebLLM), no proxy generation call.
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
@@ -2668,12 +2795,18 @@ class Component extends DCLogic {
     settingsOpen: false,
     _settingsApiKeys: {},
     settingsDraftKeys: {},
-    // eoCode — the agentic-coding tab (see server/eocode-agent.js). A local
-    // Ollama model plans, writes, and runs its own code in a real sandbox
-    // directory via the same tool loop eval/agent/ already grew for the
-    // offline capability eval; every step streams in live over SSE as
-    // react-loop.mjs's onStep fires it, so eoCodeSteps is the live
-    // transcript the panel renders, not a summary computed after the fact.
+    // eoCode — the agentic-coding tab (see server/eocode-agent.js). A model
+    // plans, writes, and runs its own code in a real sandbox directory via
+    // the same tool loop eval/agent/ already grew for the offline capability
+    // eval; every step streams into eoCodeSteps live as it happens, not as a
+    // summary computed after the fact. `eoCodeSource` picks which model
+    // actually does the planning: 'ollama' drives the whole run server-side
+    // over one SSE connection (POST /api/eocode/run); 'webllm' drives it
+    // from THIS browser's own in-tab model one step at a time (POST
+    // /api/eocode/session/start + /step) — tool execution (reading/writing
+    // real files, running a real shell) always happens server-side either
+    // way, since only the server can safely touch a real filesystem.
+    eoCodeSource: 'ollama',
     eoCodeWorkspace: 'default', eoCodeModel: 'qwen2.5-coder:1.5b', eoCodePrompt: '',
     eoCodeRunning: false, eoCodeSteps: [], eoCodeError: null, eoCodeResult: null,
     eoCodeFiles: [], eoCodeWorkspaces: [],
@@ -2985,9 +3118,24 @@ class Component extends DCLogic {
   // guarantee — a prior must never become an attachable chat source.
   async fetchSources() {
     try {
-      // Fetch both the global corpus and the active project's pool
+      // A project's pool is its own — never blended with the shared global
+      // corpus. Fetching both and merging (the old behavior) meant anything
+      // ingested outside a project stayed permanently attached, toggle-on-by
+      // -default, inside every project's source list. Outside a project the
+      // global corpus is the whole story, so that's the only fallback case.
       const activeProject = this.state.projects.find(p => p.id === this.state.activeProjectId);
       const projectPool = activeProject ? activeProject.pool : null;
+
+      if (projectPool) {
+        const projRes = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(this.state.activeProjectId) + '/sources', { signal: AbortSignal.timeout(5000) });
+        if (projRes.ok) {
+          const { sources } = await projRes.json();
+          const projectSources = (Array.isArray(sources) ? sources : []).filter(s => (s.kind || 'corpus') === 'corpus');
+          this.setState({ _proxySources: projectSources });
+          this.warmFolds(projectSources);
+        }
+        return;
+      }
 
       const res = await fetch(this.proxyUrl() + '/api/sources?pool=corpus', { signal: AbortSignal.timeout(5000) });
       if (res.ok) {
@@ -3000,20 +3148,6 @@ class Component extends DCLogic {
         // source to be expanded. fetchFold is one-shot per source, so the
         // 15s health poll re-runs this harmlessly.
         this.warmFolds(corpus);
-      }
-
-      // Fetch project-scoped sources if a project is active
-      if (projectPool) {
-        const projRes = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(this.state.activeProjectId) + '/sources', { signal: AbortSignal.timeout(5000) });
-        if (projRes.ok) {
-          const { sources } = await projRes.json();
-          if (Array.isArray(sources)) {
-            const projectSources = sources.filter(s => (s.kind || 'corpus') === 'corpus');
-            this.setState(s => ({
-              _proxySources: [...((s._proxySources || []).filter(x => !projectSources.find(ps => ps.name === x.name))), ...projectSources],
-            }));
-          }
-        }
       }
     } catch {}
   }
@@ -3085,6 +3219,7 @@ class Component extends DCLogic {
     } else {
       this.setState({ _ollamaShowPermission: true });
     }
+    this.runOllamaDiagnosis();
   }
 
   connectOllama() {
@@ -3138,6 +3273,93 @@ class Component extends DCLogic {
     if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
     if (bytes >= 1e3) return (bytes / 1e3).toFixed(1) + ' KB';
     return bytes + ' B';
+  }
+
+  // ── Ollama setup diagnosis ──────────────────────────────────────────────
+  // Before this, any failure to connect just surfaced the browser's own
+  // opaque fetch error ("Failed to fetch" — no way to tell "not installed"
+  // from "installed but blocked" apart, because browsers deliberately don't
+  // expose *why* a fetch failed). This tells apart the three distinct fixes
+  // a reader actually needs, and drives the Connect-Ollama modal's stages:
+  //   proxy-unreachable — the eochat server itself isn't running (self-hosted only)
+  //   not-installed     — nothing answers at the Ollama URL at all
+  //   cors-blocked      — Ollama is listening, but hasn't allowlisted this origin
+  //                       (only reachable on a direct-connect deployment — see
+  //                       ON_GH_PAGES — since the proxy talks to Ollama
+  //                       server-side and is never subject to browser CORS)
+  async runOllamaDiagnosis() {
+    this.setState({ _ollamaDiagStage: 'checking', _ollamaDiagDetail: '', _ollamaDiagTarget: '' });
+    if (ON_GH_PAGES) {
+      const url = this.state._ollamaUrl || 'http://localhost:11434';
+      let reachable = false;
+      try {
+        // mode:'no-cors' never enforces the CORS allowlist, so this resolves
+        // (with an opaque, unreadable response) the moment ANYTHING answers
+        // at `url` — pure network reachability, independent of whether this
+        // origin is allowed to read the response. It only rejects when the
+        // connection itself fails (nothing listening, DNS failure, etc).
+        await fetch(url + '/api/tags', { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(4000) });
+        reachable = true;
+      } catch { reachable = false; }
+      if (!reachable) { this.setState({ _ollamaDiagStage: 'not-installed' }); return; }
+      try {
+        const resp = await fetch(url + '/api/tags', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+        this.setState({ _ollamaDiagStage: resp.ok ? 'ready' : 'cors-blocked' });
+      } catch {
+        // Reachable via no-cors above but a normal (CORS-checked) request
+        // still fails — the connection works, the origin isn't allowed.
+        this.setState({ _ollamaDiagStage: 'cors-blocked' });
+      }
+      return;
+    }
+    try {
+      const resp = await fetch(this.proxyUrl() + '/api/ollama/models', { signal: AbortSignal.timeout(8000) });
+      if (resp.ok) { this.setState({ _ollamaDiagStage: 'ready' }); return; }
+      const err = await resp.json().catch(() => ({}));
+      this.setState({
+        _ollamaDiagStage: err.reason === 'not-running' ? 'not-installed' : 'error',
+        _ollamaDiagDetail: err.error || '',
+        _ollamaDiagTarget: err.target || '',
+      });
+    } catch (e) {
+      // The proxy fetch itself failed — the eochat server is down, not
+      // Ollama. Distinct fix (start the proxy), so keep it a distinct stage.
+      this.setState({ _ollamaDiagStage: 'proxy-unreachable', _ollamaDiagDetail: e.message });
+    }
+  }
+
+  copyOllamaCommand(text) {
+    if (!(navigator.clipboard && navigator.clipboard.writeText)) return;
+    navigator.clipboard.writeText(text).then(() => {
+      this.setState({ _ollamaCopiedCmd: text });
+      setTimeout(() => this.setState(s => s._ollamaCopiedCmd === text ? { _ollamaCopiedCmd: '' } : null), 1500);
+    }).catch(() => {});
+  }
+
+  // One data row per fix, keyed off the detected OS — the template just
+  // renders whichever list applies (sc-for), same shape as draftAttachments
+  // / localCatalog elsewhere in this component.
+  _ollamaInstallSteps() {
+    const cmd = (id, label, text) => ({ id, isLink: false, isCommand: true, label, text, copy: () => this.copyOllamaCommand(text), copyLabel: this.state._ollamaCopiedCmd === text ? 'Copied' : 'Copy' });
+    const link = (id, label, href) => ({ id, isLink: true, isCommand: false, label, href });
+    if (CLIENT_OS === 'mac') return [link('mac-dl', 'Download for macOS', 'https://ollama.com/download/mac'), cmd('mac-brew', 'or with Homebrew', 'brew install ollama')];
+    if (CLIENT_OS === 'windows') return [link('win-dl', 'Download for Windows', 'https://ollama.com/download/windows')];
+    if (CLIENT_OS === 'linux') return [cmd('linux-install', 'Install with the official script', 'curl -fsSL https://ollama.com/install.sh | sh')];
+    return [link('any-dl', 'Download Ollama', 'https://ollama.com/download')];
+  }
+
+  _ollamaCorsSteps() {
+    const origin = (typeof window !== 'undefined' && window.location.origin) || '';
+    const cmd = (id, label, text) => ({ id, label, text, copy: () => this.copyOllamaCommand(text), copyLabel: this.state._ollamaCopiedCmd === text ? 'Copied' : 'Copy' });
+    if (CLIENT_OS === 'mac') return [cmd('mac-setenv', 'Allow this page, then restart Ollama from the menu bar', `launchctl setenv OLLAMA_ORIGINS "${origin}"`)];
+    if (CLIENT_OS === 'windows') return [cmd('win-setx', 'Allow this page, then restart Ollama from the system tray', `setx OLLAMA_ORIGINS "${origin}"`)];
+    if (CLIENT_OS === 'linux') return [
+      cmd('linux-edit', 'Edit the service (opens an editor)', 'sudo systemctl edit ollama.service'),
+      cmd('linux-block', 'Paste this into it, then save and exit', `[Service]\nEnvironment="OLLAMA_ORIGINS=${origin}"`),
+      cmd('linux-restart', 'Apply it', 'sudo systemctl daemon-reload && sudo systemctl restart ollama'),
+      cmd('linux-manual', 'Running it manually instead, as a service?', `OLLAMA_ORIGINS="${origin}" ollama serve`),
+    ];
+    return [cmd('any-manual', 'Set this before starting Ollama', `OLLAMA_ORIGINS="${origin}" ollama serve`)];
   }
 
   // The priors catalog is a separate pool from /api/sources. A proxy too old
@@ -3219,7 +3441,18 @@ class Component extends DCLogic {
     return 'ok';
   }
 
-  async runEoCode() {
+  // Dispatches to whichever model source the reader picked. Both paths
+  // share the exact same live-transcript rendering (eoCodeStepVals) because
+  // both feed eoCodeSteps the same {phase, ...} event shape — the ollama
+  // path gets it from react-loop.mjs's onStep over SSE, the webllm path
+  // gets it from the session-step API's response, but nothing downstream of
+  // eoCodeSteps needs to know which one produced an event.
+  runEoCode() {
+    if (this.state.eoCodeSource === 'webllm') return this.runEoCodeWebLLM();
+    return this.runEoCodeOllama();
+  }
+
+  async runEoCodeOllama() {
     const prompt = (this.state.eoCodePrompt || '').trim();
     if (!prompt || this.state.eoCodeRunning) return;
     const workspace = (this.state.eoCodeWorkspace || 'default').trim() || 'default';
@@ -3233,7 +3466,10 @@ class Component extends DCLogic {
         body: JSON.stringify({ prompt, workspace, model }),
         signal: this._eoCodeAbort.signal,
       });
-      if (!res.ok) throw new Error(`eoCode endpoint returned ${res.status}`);
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => '');
+        throw new Error(`eoCode endpoint returned ${res.status}${bodyText ? `: ${bodyText.slice(0, 300)}` : ''}`);
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -3273,6 +3509,85 @@ class Component extends DCLogic {
       if (err.name !== 'AbortError') {
         this.setState({ eoCodeError: err.message });
         this.logAdd('⊘', `eoCode error: ${err.message}`, 'eocode');
+      }
+    } finally {
+      this.setState({ eoCodeRunning: false });
+      this._eoCodeAbort = null;
+      this.fetchEoCodeWorkspaces();
+    }
+  }
+
+  // WebLLM path: the model text generation happens right here, in this tab,
+  // via window.EOWebLLM.stream (the exact same call askConversation's own
+  // local-mode branch already uses) — but tool execution (reading/writing
+  // real files, running a real shell) cannot happen in a browser, so each
+  // turn is a round trip to the session-stepping API: ask the server what
+  // to show the model (promptView), generate locally, hand the raw result
+  // back to the server to actually run, repeat until it reports done.
+  async runEoCodeWebLLM() {
+    const prompt = (this.state.eoCodePrompt || '').trim();
+    if (!prompt || this.state.eoCodeRunning) return;
+    if (!window.EOWebLLM || this.state.localModelStatus !== 'ready') {
+      this.setState({ eoCodeError: 'The in-browser model is not ready yet — install/start it under Settings → Local model, or switch to Ollama above.' });
+      return;
+    }
+    const workspace = (this.state.eoCodeWorkspace || 'default').trim() || 'default';
+    const modelLabel = window.EOWebLLM.modelLabel();
+    this.setState({ eoCodeRunning: true, eoCodeSteps: [], eoCodeError: null, eoCodeResult: null, eoCodeFiles: [] });
+    this.logAdd('⌁', `eoCode (WebLLM): "${prompt.slice(0, 44)}${prompt.length > 44 ? '…' : ''}" (${modelLabel})`, 'eocode');
+    this._eoCodeAbort = new AbortController();
+    let sessionId = null;
+    try {
+      const startRes = await fetch(this.proxyUrl() + '/api/eocode/session/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, workspace, maxSteps: 20 }),
+        signal: this._eoCodeAbort.signal,
+      });
+      if (!startRes.ok) {
+        const bodyText = await startRes.text().catch(() => '');
+        throw new Error(`eoCode session/start returned ${startRes.status}${bodyText ? `: ${bodyText.slice(0, 300)}` : ''}`);
+      }
+      const started = await startRes.json();
+      sessionId = started.sessionId;
+      this.setState({ eoCodeWorkspace: started.workspace });
+
+      let promptView = started.promptView;
+      let done = false;
+      while (!done) {
+        let raw = '';
+        for await (const delta of window.EOWebLLM.stream(promptView, { signal: this._eoCodeAbort.signal })) {
+          raw += delta;
+        }
+        const stepRes = await fetch(this.proxyUrl() + `/api/eocode/session/${sessionId}/step`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ raw }),
+          signal: this._eoCodeAbort.signal,
+        });
+        if (!stepRes.ok) {
+          const bodyText = await stepRes.text().catch(() => '');
+          throw new Error(`eoCode session/step returned ${stepRes.status}${bodyText ? `: ${bodyText.slice(0, 300)}` : ''}`);
+        }
+        const stepped = await stepRes.json();
+        this.setState(s => ({ eoCodeSteps: s.eoCodeSteps.concat(stepped.events) }));
+        done = stepped.done;
+        if (done) {
+          const data = stepped.result;
+          this.setState({ eoCodeResult: data, eoCodeFiles: (data && data.files) || [] });
+          const outcome = data.finished ? `finished: ${data.summary || '(no summary given)'}`
+            : data.stuckLoopAbort ? 'stopped — stuck in a repeating failure loop'
+            : data.hitStepCap ? 'stopped — ran out of steps before finishing'
+            : 'stopped';
+          this.logAdd(data.finished ? '●' : '⊘', `eoCode ${outcome}`, 'eocode');
+        } else {
+          promptView = stepped.promptView;
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        this.setState({ eoCodeError: err.message });
+        this.logAdd('⊘', `eoCode error: ${err.message}`, 'eocode');
+      } else if (sessionId) {
+        fetch(this.proxyUrl() + `/api/eocode/session/${sessionId}/cancel`, { method: 'POST' }).catch(() => {});
       }
     } finally {
       this.setState({ eoCodeRunning: false });
@@ -3629,6 +3944,11 @@ class Component extends DCLogic {
     // previous project was on — cross-project chats must never carry over.
     const scoped = this.state.spaces.filter(sp => sp.spaceId === id || (project && sp.pool === project.pool));
     this.setState({ activeProjectId: id, view: 'chat', tab: 'chat', activeSpaceId: scoped.length ? scoped[0].id : null });
+    // Without this, the Documents rail keeps showing the previous project's
+    // (or the global corpus's) sources until the next 15s health poll —
+    // stale enough that a reader who switches and immediately checks
+    // Documents sees the wrong project's list.
+    this.fetchSources();
     if (project) {
       this.logAdd('●', `Switched to project "${project.name}"`, 'chat');
     }
@@ -5867,34 +6187,60 @@ class Component extends DCLogic {
     return /(\d+)\s*(pages?|paragraphs?)|five\s+pages?|long(er|est)?\s+(essay|answer|piece)|in-depth|deep\s+dive|comprehensive/.test(question) ? 8 : 5;
   }
 
+  // One line in the current turn's Engine Activity log — both the "details →"
+  // modal's history (thinkingLogRows) and the inline live preview
+  // (thinkingLogPreviewRows) read from this same state.thinkingLog array. The
+  // server SSE path (askConversation) has fed it since holonic turns via
+  // _holonicLogEntry; the local/WebLLM path below only ever updated the
+  // one-line thinkingPhase/thinkingMeta pill, which is overwritten on every
+  // step and cleared at the end — so opening "details →" on a local turn
+  // always showed "Waiting for engine activity… 0 step(s)" no matter how much
+  // real work (web searches included) had actually happened.
+  _thinkingLog(glyph, text) {
+    this.setState(s => ({ thinkingLog: (s.thinkingLog || []).concat([{ glyph, text }]) }));
+  }
+
   // Mirrors the server's deliberate streaming experience: every section that
   // survives its fidelity check is appended to the visible answer the moment
   // it closes, and the phase line narrates outline → drafting → revising →
   // assembly as it happens.
   _applyLocalDeliberateEvent(appendAnswer, e) {
     switch (e.phase) {
-      case 'outline':
-        this.setState({ thinkingPhase: 'earning an outline...', thinkingMeta: `${e.sections} section(s)` + (e.withheld ? `, ${e.withheld} withheld` : '') });
+      case 'outline': {
+        const meta = `${e.sections} section(s)` + (e.withheld ? `, ${e.withheld} withheld` : '');
+        this.setState({ thinkingPhase: 'earning an outline...', thinkingMeta: meta });
+        this._thinkingLog('⊸', `Outline earned — ${meta}`);
         break;
+      }
       case 'section_start':
         this.setState({ thinkingPhase: 'writing...', thinkingMeta: `section ${e.id}` });
+        this._thinkingLog('⊸', `Section "${e.id}": drafting…`);
         break;
       case 'section_titled':
         this.setState({ thinkingMeta: e.title });
+        this._thinkingLog('⊸', `Section "${e.id}" titled "${e.title}"`);
         break;
       case 'section_drafted':
         this.setState({ thinkingMeta: `${e.words} word(s) drafted` });
+        this._thinkingLog('⊸', `Section "${e.id}": ${e.words} word(s) drafted`);
         break;
-      case 'section_revising':
-        this.setState({ thinkingPhase: 'revising...', thinkingMeta: `round ${e.round} — residual ${Number(e.residual).toFixed(3)}` });
+      case 'section_revising': {
+        const meta = `round ${e.round} — residual ${Number(e.residual).toFixed(3)}`;
+        this.setState({ thinkingPhase: 'revising...', thinkingMeta: meta });
+        this._thinkingLog('⊸', `Revising — ${meta} · ${e.count} section(s)`);
         break;
+      }
       case 'section_closed':
         appendAnswer(`## ${e.title}\n\n${e.text}`);
         this.setState({ thinkingPhase: 'writing...', thinkingMeta: null });
+        this._thinkingLog('⊸', `Section "${e.title}" closed — passed fidelity check`);
         break;
-      case 'assembled':
+      case 'assembled': {
+        const meta = `${e.kept} kept, ${e.dropped} dropped` + (e.withheld ? `, ${e.withheld} withheld` : '');
         this.setState({ thinkingPhase: null, thinkingMeta: null });
+        this._thinkingLog('⊸', `Assembled — ${meta}`);
         break;
+      }
     }
     this.logAdd('→', `Deliberate: ${e.phase}${e.title ? ' — ' + e.title : ''}${e.sections !== undefined ? ' · ' + e.sections + ' section(s)' : ''}`, 'chat');
   }
@@ -5956,6 +6302,9 @@ class Component extends DCLogic {
     this.logAdd(useWeb ? '→' : '◱', useWeb
       ? `Web gate: on — ${webReason}.`
       : `Web gate: off — ${webReason || 'no discourse weight required it'}.`, 'chat');
+    this._thinkingLog(useWeb ? '→' : '◱', useWeb
+      ? `Searching the web for "${gate.query}" — ${webReason}.`
+      : `No web search — ${webReason || 'no discourse weight required it'}.`);
 
     let groundData;
     let groundFailed = null;
@@ -5969,6 +6318,13 @@ class Component extends DCLogic {
       if (groundData.error) throw new Error(groundData.error);
     } catch (err) {
       groundFailed = err;
+    }
+    if (groundFailed) {
+      this._thinkingLog('⊘', `${useWeb ? 'Web search' : 'Retrieval'} failed — ${groundFailed.message}`);
+    } else if (useWeb) {
+      this._thinkingLog('→', `Web search found ${groundData.total ?? (groundData.citations || []).length} result(s) for "${gate.query}"`);
+    } else {
+      this._thinkingLog('⊸', `Retrieval found ${groundData.total ?? 0} passage(s), ${groundData.folded ?? 0} folded`);
     }
 
     // The proxy gates project instructions into the server answer; in local
@@ -6000,6 +6356,7 @@ class Component extends DCLogic {
       webSupplemented = true;
       webReason = 'the discourse demanded research the corpus could not carry — overriding the model verdict';
       this.logAdd('→', 'Discourse override: essay-shaped request with no local evidence — web research pushing in.', 'chat');
+      this._thinkingLog('→', `Discourse override — searching the web for "${gate.query}"`);
       try {
         const wres = await fetch(this.proxyUrl() + '/api/web-ground', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -6010,9 +6367,16 @@ class Component extends DCLogic {
           if (wdata.error) throw new Error(wdata.error);
           if ((wdata.citations || []).length) {
             groundData = { ...groundData, grounded: true, citations: wdata.citations, total: wdata.total, systemPrompt: wdata.systemPrompt, gaps: wdata.gaps || [], deliberate: groundData.deliberate || wdata.deliberate };
+            this._thinkingLog('→', `Discourse override found ${wdata.citations.length} web result(s)`);
+          } else {
+            this._thinkingLog('⊘', 'Discourse override — web search returned nothing usable');
           }
+        } else {
+          this._thinkingLog('⊘', `Discourse override — web search failed (proxy returned ${wres.status})`);
         }
-      } catch {}
+      } catch (err) {
+        this._thinkingLog('⊘', `Discourse override — web search failed (${err.message})`);
+      }
     }
 
     if (groundFailed) {
@@ -6063,6 +6427,7 @@ class Component extends DCLogic {
         const maxSections = this._deliberateMaxSections(question);
         this.setState({ thinkingPhase: 'earning an outline...', thinkingMeta: `${maxSections} section(s) ceiling` });
         this.logAdd('→', `Deliberate long-form: ${cited.length} passage(s), up to ${maxSections} section(s)`, 'chat');
+        this._thinkingLog('⊸', `Deliberate long-form: ${cited.length} passage(s), up to ${maxSections} section(s)`);
         const result = await window.EOWebLLMLongform.runWebLLMAnswer({
           proxyUrl: this.proxyUrl(), question, citations: cited, maxSections,
           signal: this._localAbort ? this._localAbort.signal : null,
@@ -6103,11 +6468,13 @@ class Component extends DCLogic {
           patchTurn({ streaming: false });
           this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
           this.logAdd('◱', 'Deliberate long-form stopped by the reader', 'chat');
+          this._thinkingLog('◱', 'Stopped by the reader');
           return;
         }
         deliberateRan = false;
         this.setState({ thinkingPhase: null, thinkingMeta: null });
         this.logAdd('⊘', `Deliberate long-form failed (${err.message}) — answering as a normal turn`, 'chat');
+        this._thinkingLog('⊘', `Deliberate long-form failed (${err.message}) — falling back to a normal turn`);
       }
     }
 
@@ -6238,7 +6605,15 @@ class Component extends DCLogic {
     this.logAdd('◱', `${engineName} reply done`, 'chat');
   }
 
+  // Both the header "+" (next to Search the web) and the Documents tab's
+  // empty-state "Add documents" button — which says "No documents in this
+  // project" — call this. Neither is reachable outside a project (see the
+  // insideProject guard around the header button), so once a project is
+  // active this must land in that project's own pool via addProjectDocument,
+  // not the shared global corpus ingestSource() used to send it to
+  // regardless of context.
   addSource() {
+    if (this.state.activeProjectId) { this.addProjectDocument(); return; }
     this.openModal({
       title: 'Add source',
       label: 'URL or file path',
@@ -6977,13 +7352,27 @@ class Component extends DCLogic {
       sourcesOff: { ...(sp.sourcesOff || {}) }
     }));
     delete (this.activeSpace().sourcesOff || {})[base];
-    fetch(this.proxyUrl() + '/api/sources?source=' + encodeURIComponent(key), { method: 'DELETE' })
+    // A source attached inside a project lives in that project's own pool,
+    // not the shared "corpus" pool /api/sources assumes when no pool is
+    // given. Hitting that route from inside a project used to fail to find
+    // the source at all (wrong pool), so nothing was ever actually deleted —
+    // the row above disappears optimistically, then the next fetchSources()
+    // pulls the same, still-undeleted source right back in from its real pool.
+    const projectId = this.state.activeProjectId;
+    const delUrl = projectId
+      ? this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/sources/' + encodeURIComponent(key)
+      : this.proxyUrl() + '/api/sources?source=' + encodeURIComponent(key);
+    fetch(delUrl, { method: 'DELETE' })
       .then(r => r.json())
       .then(result => {
         if (result.error) { this.logAdd('⊘', `Delete failed for "${name}": ${result.error}`, 'sources'); }
         else { this.logAdd('●', `Deleted "${name}" (${result.spansRemoved || 0} spans removed)`, 'sources'); this.fetchRecycleBin(); }
       })
-      .catch(err => this.logAdd('⊘', `Delete failed for "${name}": ${err.message}`, 'sources'));
+      .catch(err => this.logAdd('⊘', `Delete failed for "${name}": ${err.message}`, 'sources'))
+      // Re-sync with the server's real state either way — a failed delete
+      // should show the source still there, not leave the optimistic removal
+      // standing in for a delete that never actually happened.
+      .finally(() => this.fetchSources());
   }
 
   async restoreSource(name) {
@@ -8732,6 +9121,24 @@ class Component extends DCLogic {
       disconnectOllama: () => this.disconnectOllama(),
       retryOllamaFetch: () => this.connectOllama(),
       stopOllamaPermClick: (e) => e.stopPropagation(),
+      openOllamaSetup: () => this.requestOllamaConnect(),
+      // ── Ollama setup diagnosis (Connect-Ollama modal stages) ──
+      ollamaDiagChecking: S._ollamaDiagStage === 'checking',
+      ollamaDiagProxyDown: S._ollamaDiagStage === 'proxy-unreachable',
+      ollamaDiagNotInstalled: S._ollamaDiagStage === 'not-installed',
+      ollamaDiagCorsBlocked: S._ollamaDiagStage === 'cors-blocked',
+      ollamaDiagReady: S._ollamaDiagStage === 'ready',
+      ollamaDiagGenericError: S._ollamaDiagStage === 'error',
+      ollamaDiagShowRecheck: ['proxy-unreachable', 'not-installed', 'cors-blocked', 'error'].includes(S._ollamaDiagStage),
+      ollamaDiagDetail: S._ollamaDiagDetail,
+      ollamaDiagUrl: ON_GH_PAGES ? (S._ollamaUrl || 'http://localhost:11434') : (S._ollamaDiagTarget || 'the configured Ollama URL'),
+      ollamaProxyUrlText: this.proxyUrl(),
+      ollamaOrigin: (typeof window !== 'undefined' && window.location.origin) || 'this page',
+      ollamaInstallSteps: this._ollamaInstallSteps(),
+      ollamaCorsSteps: this._ollamaCorsSteps(),
+      ollamaCopyNpmStart: () => this.copyOllamaCommand('npm start'),
+      ollamaCopyNpmStartLabel: S._ollamaCopiedCmd === 'npm start' ? 'Copied' : 'Copy',
+      recheckOllama: () => this.runOllamaDiagnosis(),
       ...this._localModelProps(S),
       settingsOpen: S.settingsOpen,
       toggleSettings: () => this.toggleSettings(),
@@ -8988,9 +9395,32 @@ class Component extends DCLogic {
       onEoCodeWorkspaceChange: (e) => this.setState({ eoCodeWorkspace: e.target.value }),
       eoCodeModel: S.eoCodeModel || 'qwen2.5-coder:1.5b',
       onEoCodeModelChange: (e) => this.setState({ eoCodeModel: e.target.value }),
+      // Which model actually plans this run — see runEoCode's dispatch
+      // comment. "Nothing fancy": one toggle, not a settings panel.
+      eoCodeSourceIsOllama: S.eoCodeSource !== 'webllm',
+      eoCodeSourceIsWebLLM: S.eoCodeSource === 'webllm',
+      setEoCodeSourceOllama: () => this.setState({ eoCodeSource: 'ollama' }),
+      setEoCodeSourceWebLLM: () => this.setState({ eoCodeSource: 'webllm' }),
+      eoCodeSourceOllamaColor: S.eoCodeSource !== 'webllm' ? '#1F5A4C' : '#8C877C',
+      eoCodeSourceOllamaBg: S.eoCodeSource !== 'webllm' ? '#F4F8F6' : 'none',
+      eoCodeSourceWebLLMColor: S.eoCodeSource === 'webllm' ? '#1F5A4C' : '#8C877C',
+      eoCodeSourceWebLLMBg: S.eoCodeSource === 'webllm' ? '#F4F8F6' : 'none',
+      eoCodeWebLLMReady: S.localModelStatus === 'ready',
+      eoCodeWebLLMStatusText: S.localModelStatus === 'ready'
+        ? `Ready — ${(typeof window !== 'undefined' && window.EOWebLLM) ? window.EOWebLLM.modelLabel() : 'the local model'} will plan this run.`
+        : S.localModelStatus === 'loading'
+          ? `Downloading… ${(S.localModelProgress && S.localModelProgress.percent) || 0}%`
+          : S.localModelStatus === 'unsupported'
+            ? (S.localModelError || 'Not supported in this browser.')
+            : S.localModelStatus === 'error'
+              ? (S.localModelError || 'Failed to load.')
+              : 'Not started — turn it on under Settings → Local model.',
+      eoCodeWebLLMStatusColor: S.localModelStatus === 'ready' ? '#1F5A4C' : S.localModelStatus === 'error' || S.localModelStatus === 'unsupported' ? '#C0341A' : '#8C877C',
+      eoCodeWebLLMNotStarted: S.localModelStatus === 'idle',
+      startEoCodeWebLLM: () => { if (window.EOWebLLM) window.EOWebLLM.init(); },
       eoCodeRunning: S.eoCodeRunning,
       eoCodeNotRunning: !S.eoCodeRunning,
-      eoCodeRunDisabled: S.eoCodeRunning || !(S.eoCodePrompt || '').trim(),
+      eoCodeRunDisabled: S.eoCodeRunning || !(S.eoCodePrompt || '').trim() || (S.eoCodeSource === 'webllm' && S.localModelStatus !== 'ready'),
       runEoCode: () => this.runEoCode(),
       stopEoCode: () => this.stopEoCode(),
       hasEoCodeSteps: (S.eoCodeSteps || []).length > 0,

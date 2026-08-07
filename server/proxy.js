@@ -69,7 +69,7 @@ import { cabinetStats } from "./project-memory.js";
 import { buildMemoryMessage, emptyMemory } from "./conversation-memory.js";
 import { webSearchAndFetch, flattenDdgTopics } from "./web-search.js";
 import { runSessionMessage } from "./code-longform-session.js";
-import { runEoCodeTask, listWorkspaces, listWorkspaceFiles } from "./eocode-agent.js";
+import { runEoCodeTask, listWorkspaces, listWorkspaceFiles, startEoCodeSession, stepEoCodeSession, cancelEoCodeSession } from "./eocode-agent.js";
 import { loadMorphologyPrior, discoverNarratorContext } from "./longform-node-context.js";
 
 // ── CLI args with validation ──
@@ -3025,6 +3025,18 @@ const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // Private Network Access: this proxy is only ever reached from a browser
+  // as "public page (GitHub Pages) fetches a local/private target" — the
+  // exact shape PNA's preflight permission check exists to gate. Without
+  // this header, Chromium-family browsers (Chrome, Brave, Edge...) silently
+  // block any *preflighted* cross-origin request here — POSTs with a JSON
+  // body, like eoCode's /api/eocode/run, but not plain GETs like /health,
+  // which never preflight and so never hit this check. That asymmetry (GETs
+  // fine, JSON POSTs blocked) is what makes this easy to miss: the server
+  // already trusts any Origin (see Allow-Origin: * above), so granting the
+  // private-network preflight too is consistent with the trust this proxy
+  // already extends, not a new boundary.
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
 
   if (req.method === "OPTIONS") { res.writeHead(200); res.end(); return; }
 
@@ -3122,8 +3134,22 @@ const server = http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ models }));
       } catch (err) {
+        // A bare err.message ("fetch failed") tells the reader nothing they
+        // can act on. Node's fetch nests the real reason in err.cause — an
+        // ECONNREFUSED/ENOTFOUND there means nothing is listening at TARGET
+        // at all (Ollama not installed, not running, or on a different
+        // port), which is a distinct fix from a slow-but-present upstream.
+        // The setup guide in ui/index.html (requestOllamaConnect /
+        // runOllamaDiagnosis) branches on `reason` to show the right one.
+        const causeCode = err.cause?.code || err.cause?.errors?.[0]?.code;
+        const reason = causeCode === "ECONNREFUSED" || causeCode === "ENOTFOUND" || causeCode === "EHOSTUNREACH"
+          ? "not-running"
+          : err.name === "AbortError" ? "timeout" : "unknown";
+        const message = reason === "not-running" ? `No Ollama instance found at ${TARGET}.`
+          : reason === "timeout" ? `Timed out waiting for Ollama at ${TARGET}.`
+          : "Could not reach Ollama: " + err.message;
         res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Could not reach Ollama: " + err.message }));
+        res.end(JSON.stringify({ error: message, reason, target: TARGET }));
       }
     })();
     return;
@@ -5449,6 +5475,93 @@ const server = http.createServer((req, res) => {
         if (!aborted) res.end();
       }
     });
+    return;
+  }
+
+  // eoCode stepping API — the SAME agent as /api/eocode/run, driven one turn
+  // at a time by a caller supplying its own model text instead of a server-
+  // owned Ollama adapter. Exists for WebLLM: a model running in the reader's
+  // own browser can plan and write code as well as a server-side one, but it
+  // cannot touch this machine's filesystem or run a shell, so tool execution
+  // stays here unconditionally — only "what should I do next" text
+  // generation moves to wherever the caller's model runs. Plain JSON
+  // request/response, not SSE: the client already controls pacing (it waits
+  // on its own model between steps), so there is nothing for the server to
+  // push proactively.
+  if (req.method === "POST" && req.url === "/api/eocode/session/start") {
+    let body = "";
+    let bodySize = 0;
+    req.on("data", chunk => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(new Error("Request body too large")); return; }
+      body += chunk.toString("utf8");
+    });
+    req.on("end", () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
+        return;
+      }
+      try {
+        const started = startEoCodeSession({
+          workspace: data.workspace || "default",
+          prompt: data.prompt,
+          maxSteps: Number.isFinite(data.maxSteps) ? data.maxSteps : 20,
+          foldK: Number.isFinite(data.foldK) ? data.foldK : undefined,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(started));
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url.startsWith("/api/eocode/session/") && req.url.endsWith("/step")) {
+    let body = "";
+    let bodySize = 0;
+    req.on("data", chunk => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(new Error("Request body too large")); return; }
+      body += chunk.toString("utf8");
+    });
+    req.on("end", () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
+        return;
+      }
+      const sessionId = req.url.slice("/api/eocode/session/".length, -"/step".length);
+      if (typeof data.raw !== "string") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "'raw' (the model's raw response text) is required" }));
+        return;
+      }
+      try {
+        const stepped = stepEoCodeSession({ sessionId, raw: data.raw });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(stepped));
+      } catch (err) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url.startsWith("/api/eocode/session/") && req.url.endsWith("/cancel")) {
+    const sessionId = req.url.slice("/api/eocode/session/".length, -"/cancel".length);
+    const cancelled = cancelEoCodeSession(sessionId);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ cancelled }));
     return;
   }
 
