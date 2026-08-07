@@ -35,6 +35,39 @@ Every run is recorded to `eval/results/runs/<timestamp>__<model>.jsonl` (one
 JSON object per task, full detail) and folded into `eval/results/
 scoreboard.md` (a human-readable, append-only history, newest first).
 
+## How small can it get? (size sweep: 0.5b / 1.5b / 3b / 7b, CPU-only)
+
+The most direct version of the question this eval exists to answer.
+`qwen2.5-coder` at four sizes, same four tasks (Level 1 x2, Level 2 x2), same
+harness, same machine (4 CPU cores, no GPU), one real run per size (see
+`eval/results/scoreboard.md` for the raw numbers, nothing cherry-picked):
+
+| Model | Level 1-2 tasks passed | What actually happened |
+|---|---|---|
+| `qwen2.5-coder:0.5b` | **0/4** | Never targets the real file. `write_file` gets called with the literal placeholder text copied out of its own tool description (`"relative/path.js"`, `"real/path.js"`) instead of the task's actual required filename — it is not losing the task to a long prompt, it cannot reliably fill in a tool-call argument template with real values at all. Same 0/4 before and after the prompt-folding fix below, which rules out context growth as the cause at this size. |
+| `qwen2.5-coder:1.5b` | **1/4** | A real qualitative jump: `level1-fizzbuzz` passes cleanly (writes the right file, runs it, observes real output, then calls finish). Still fails a Level 1 task on a genuine JS syntax error (an unterminated string) rather than a wrong-target mistake, and fails Level 2 partly by inventing `require("csv-parser")` — a real npm package — despite the protocol stating explicitly, every run, that no packages are installed and there is no network. |
+| `qwen2.5-coder:3b` | **1/4** | Same pass count as 1.5b on this small sample, but further along in kind: `level2-csv-quoted-comma` now converges to a real, running `convert.js` (multiple write/run cycles, real oracle checks executed against it) — it just never fixes the actual quoted-comma bug, converging on the same naive `split(",")` this eval's own 7b runs already characterized. Two tasks end via an honest self-reported failure (`finish()` called with a summary describing what went wrong) instead of silently running out of steps. |
+| `qwen2.5-coder:7b` | 2/4 (best single run; see below) | Reliably passes Level 1 and can self-correct Level 2 given the right environmental facts (see the section below) — but spends its entire step budget alternating `read_file`/`edit_file` on Level 3+ real-codebase tasks and essentially never calls `run_shell` to verify. |
+
+**The honest boundary from this sweep, on this task set:** 0.5B is not a
+capability gap to tune around — it cannot reliably instantiate a tool call
+with real arguments, a floor below "agentic," not on it. Something changes
+qualitatively between 0.5B and 1.5B: 1.5B is the smallest size in this sweep
+that completes a real single-shot task end-to-end (writes the file, runs it,
+observes real output, calls finish honestly). Going from 1.5B to 3B did not
+clear more tasks in this one-run-per-size sample — it changed the SHAPE of
+the failures (closer to a working fix, more honest self-reports) without
+yet crossing into a pass. None of the three sub-7B sizes reliably
+self-correct (Level 2) or touch a real multi-file codebase (Level 3+) —
+those remain 7B-and-up territory in this environment, and even 7B's own
+Level 3+ record above is a real, characterized failure, not a pass.
+
+This is a single run per size, not a statistically robust estimate — the
+7B section below shows real run-to-run variance on the very same tasks
+(same model, same task, PASS on one run and FAIL on another). Treat the
+table above as "what happened," not "what always happens"; a repeated sweep
+with multiple seeds per size is the natural next step, not yet done here.
+
 ## Real results so far (`qwen2.5-coder:7b`, CPU-only, this environment)
 
 Across several real runs in one session (see `eval/results/scoreboard.md`
@@ -85,21 +118,37 @@ The redirect that shaped this design: don't build a generic ReAct scaffold
 from scratch — build the agent out of primitives this codebase already has.
 
 - **`agent/tools.mjs`** — the agent's "organs": `read_file`, `write_file`,
-  `edit_file`, `run_shell`, `finish`, each bound to one sandbox directory.
-  This is a fixed, hand-grown set for now (see "Future direction" below).
-  `edit_file` (old_string/new_string, unique-match-or-refuse — the same
-  discipline this very harness's own editing tool uses) was grown once
+  `edit_file`, `run_shell`, `perceive`, `finish`, each bound to one sandbox
+  directory. This is a fixed, hand-grown set for now (see "Future direction"
+  below). `edit_file` (old_string/new_string, unique-match-or-refuse — the
+  same discipline this very harness's own editing tool uses) was grown once
   real, larger files entered the picture at Level 3+: `write_file` requires
   retyping the COMPLETE file, which is fine for a 20-line script but
   physically does not fit a CPU-bound model's per-step token budget once the
   file is a real few-hundred-line module. Without it, "real codebase" tasks
-  were impossible by construction, not a measured capability gap.
+  were impossible by construction, not a measured capability gap. `perceive`
+  (backed by `agent/senses.mjs`'s local-sense registry and `agent/media.mjs`,
+  see "Omnimodal organs" below) was grown once `read_file`'s blind
+  `readFileSync(..., "utf8")` turned out to silently corrupt any binary
+  asset instead of refusing honestly — a real, non-text-shaped gap, not a
+  hypothetical one.
 - **`agent/react-loop.mjs`** — the actual read-execute-observe-correct loop.
   The model emits exactly one JSON tool call per turn; the tool actually
   runs; the real result (including real errors) is appended as an
   observation; repeat until `finish` or a step cap. No hidden retry — if the
   model never runs its own code, that's a real, measured failure, not
-  something this loop papers over.
+  something this loop papers over. The loop's own conversation history gets
+  the same **surf/fold** treatment as codebase research below: the full
+  transcript (`result.messages`) is kept in full for the harness's own
+  record, but what's actually SENT to the model each step keeps only the
+  last `FOLD_WINDOW_STEPS` (3) steps verbatim and folds everything older
+  into one bounded, honest digest line per step — the same "never silently
+  truncate, always say what was withheld" discipline `foldToWorkingSet` and
+  `ingest.mjs`'s `surf` already use, applied here to the agent's own
+  tool-call history instead of retrieved research, because an unbounded
+  transcript sent whole every step is exactly the failure shape those exist
+  to prevent, and it is the CPU-bound small model under test (fixed context,
+  e.g. 4096 tokens) that pays for it, not this harness.
 - **`agent/holon-coder.mjs`** — the **recursive holonic task** wrapper.
   Reuses `server/task-log.js`'s real append-only fold spine (the same one
   `code-longform.js`/`narrative-longform.js`/`holonic-task.js` already
@@ -172,12 +221,19 @@ eval/
   agent/            the agent itself — tools, react loop, holonic wrapper, ingest
                     (holon-coder.test.mjs: offline coverage of the bidirectional
                     nesting — run with `node --test eval/agent/holon-coder.test.mjs`)
+                    media.mjs: honest binary sniff + from-scratch WAV parser/
+                    writer, no ffmpeg; senses.mjs: the sniff->route->fold
+                    dispatcher (registry of local senses + a named gap
+                    report against server/senses-catalog.js for anything
+                    unhandled) — see "Omnimodal organs" below
+                    (media.test.mjs, senses.test.mjs, tools.test.mjs cover it)
   adapters/         ollama-adapter.mjs (real), scripted-adapter.mjs (dry-run)
   levels/           Level 1-7 task definitions + independent oracles
     level1-csv-to-json/       task.json, test.mjs
     level1-fizzbuzz/
     level2-csv-quoted-comma/  task.json, seed/check.mjs, test.mjs
     level2-jsonl-quirk/
+    level2-wav-duration-bug/  task.json, seed/check.mjs, test.mjs — see "Omnimodal organs" below
   results/
     runs/*.jsonl    raw per-run, per-task results
     scoreboard.md   human-readable history, newest first
@@ -225,6 +281,123 @@ trusting the oracle (see git history for that verification).
   the replan decomposed. `retryConsidered`/`retryDeclined` — the replan ran
   but, even with real failure evidence, still judged the task undecomposable
   (an honest "no," not forced).
+
+## Omnimodal organs (started, narrow, honestly scoped)
+
+The agent's original tool set was entirely text-shaped: `read_file` ran every
+file through `readFileSync(abs, "utf8")` unconditionally, and `ingest.mjs`
+treats "source code ingests exactly like prose does" as the whole story. For
+a real binary asset (audio, an image) that doesn't fail loudly — `Buffer`
+decoding of non-UTF-8 bytes silently returns garbled replacement characters
+instead of throwing, so the agent would see garbage and reasonably treat it
+as garbage *text*, never as "this is a different medium, not text at all."
+eo-constitution's II.1 names exactly this failure for text specifically
+("stable spans are a false permanency"); forcing every OTHER medium through
+that same text-shaped tool without saying so is the same failure by another
+road.
+
+Real, tested changes close that specific gap, at the tool layer, and then
+generalize it into a registry instead of one hand-built tool per format:
+
+- **`read_file` now refuses binary content honestly** (`agent/media.mjs`'s
+  `sniffBinary` — the same NUL-byte-in-the-first-8000-bytes heuristic `git`
+  itself uses) instead of returning corrupted text. See
+  `agent/tools.test.mjs`.
+- **`perceive`, a new organ, sniffs a file's real format and routes it to
+  the narrowest LOCAL sense this app has for it** (`agent/senses.mjs`), each
+  entry a plain `{ id, test, perceive }` triple, not a bespoke tool:
+  - **`wav`** — a WAV (RIFF/WAVE) file's real chunk layout, sample rate,
+    channels, bits per sample, duration, and a loudness envelope (below),
+    via a from-scratch, dependency-free RIFF chunk walker
+    (`agent/media.mjs`'s `parseWav`/`writeWav`). No ffmpeg: WAV's on-disk
+    format is a small, fully public byte layout simple enough to decode
+    correctly by hand, which matters because ffmpeg isn't installed in
+    every environment this harness runs in (this one included) —
+    eoreader6's own
+    `packages/engine/perceiver/{audio,image,video}/material.js` already do
+    real perceptual reduction over ffmpeg-decoded media, and this is a
+    companion for the environments where that decode step isn't available,
+    not a replacement for it.
+  - **`png`** — a second, genuinely different, zero-dependency local sense,
+    proving the registry generalizes rather than being WAV-shaped in
+    disguise: PNG's `IHDR` chunk is REQUIRED by the format spec to be the
+    very first chunk at a FIXED offset (unlike WAV, which is exactly why
+    WAV needed a walker and PNG does not), so real width/height/bit-depth/
+    color-type come straight off the header bytes. Pixel content (`IDAT`,
+    zlib-compressed, per-scanline filtered) is **not** decoded — a stated
+    gap (`pixelDataGap` in the result), not a silent claim this sees actual
+    image content the way the audio envelope sees actual samples.
+  - **anything else** — no local sense claims it, so `perceive` reports a
+    SPECIFIC, honest gap instead of a bare "unsupported": it names which of
+    this app's own already-cataloged vision/OCR/detection systems
+    (`server/senses-catalog.js` — the same catalog the UI's Senses tab
+    draws from, real models like Qwen3-VL, dots.mocr, SAM 3) would apply,
+    and says plainly that none has a live endpoint configured in this
+    sandbox. "Tag in other ML systems applicable to this data type," done
+    honestly, is naming the real ones and admitting the wiring gap — not
+    silently doing nothing, and not pretending a decode happened.
+- **The WAV sense's loudness envelope is FIXED-SIZE, not proportional to
+  the clip** (`agent/media.mjs`'s `computeEnergyEnvelope`), because a tool
+  result becomes part of the model's PROMPT on the very next turn
+  (`react-loop.mjs`'s `formatObservation`), and a naive per-frame energy
+  dump (eoreader6's own `perceiver/audio/material.js::reduce()` returns one
+  RMS value per 400-sample frame) would make a single tool call's prompt
+  cost scale with the audio file's length — reintroducing, for audio, the
+  exact "context grows with content size" failure this eval already refuses
+  for text (`MAX_READ_CHARS`, `ingest.mjs`'s surf-then-fold-to-a-token-
+  budget). So the envelope folds to a caller-chosen, FIXED bucket count
+  (default 16) — inspecting a 100-second clip costs the same context as a
+  0.1-second one (`media.test.mjs` asserts this directly: two clips 1000x
+  apart in length produce byte-identical-length envelope JSON), and how
+  many real samples were folded into each bucket is reported honestly
+  (`framesPerBucket`), never a silent average standing in for raw data.
+  This is a stronger bound than `surf`'s token budget — it doesn't even
+  scale with how much content clears a relevance floor, since "roughly how
+  loud was this fifth of the clip" has no relevance floor to begin with —
+  but it is the same fold-to-a-declared-budget shape, applied to a modality
+  where the budget can be a plain constant instead of a computed one. Any
+  future local sense is expected to fold the same way, on the same
+  principle, not just WAV.
+- **A scored task, `level2-wav-duration-bug`**, exercises the `wav` sense
+  for real: the agent must write a script that computes a WAV file's
+  duration by walking its RIFF chunks, against a fixture that has a `LIST`
+  metadata chunk sitting between `fmt ` and `data` — the exact real-world
+  wrinkle that breaks the common "audio data starts at byte 44" shortcut.
+  The oracle (`test.mjs`) was hand-verified against both a correct
+  chunk-walking solution and a naive fixed-offset one before being trusted:
+  the naive version passes the no-extra-chunk case and fails exactly the
+  two extra-chunk cases, which is the intended discriminating behavior, not
+  an accident.
+
+**What this does and doesn't establish.** It establishes that the agent's
+tool layer can now tell a real non-text asset apart from text instead of
+silently mangling it, that a genuinely non-textual fact (a WAV's true chunk
+layout, not a guessed offset) can change whether a scored coding task
+passes, that a second, differently-shaped format (PNG) drops into the same
+registry without new tool-call machinery, and that a gap for an unhandled
+format is a specific, actionable one (a named, cataloged system with no
+endpoint) rather than a bare failure. It does **not** establish that the
+agentic-coding harness's core mechanisms — the ReAct loop, `holon-coder.mjs`'s
+decomposition, `ingest.mjs`'s surf/fold — are medium-agnostic in the sense
+eo-constitution's II.11 (the omnimodal *earning* test) means for engine-tier
+claims: that survival is earned by an invariance fixture across every text
+and every host, the way `eoreader6/goldens/multimodal` measured it for the
+*reading* engine's boundary-detection mechanism (`runTurn`) across
+text/audio/image/video. This harness is application tier (`eochat`, per
+Constitution I.4), not engine, so that specific bar does not apply to it
+directly — but the honest comparison still stands: eoreader6 has a real,
+run, scored cross-modal invariance fixture for its core reading mechanism;
+this eval, before this change, had none for its core coding mechanism, in
+either direction. A small registry of local senses plus one honest gap
+report for everything the registry doesn't cover is a real start, not that
+fixture — and it does not touch any of `senses-catalog.js`'s cataloged
+systems for real: no endpoint is configured anywhere in this environment, so
+`perceive` on a JPEG or a scanned page still returns the honest gap, not a
+working VLM call. Nothing here has been run against a real local model
+either (only the dry-run scripted adapter and the unit/oracle tests above,
+all offline) — whether `qwen2.5-coder:7b` can actually use `perceive`
+productively, the same open question this README already tracks honestly
+for Level 3+, is untested.
 
 ## Known scope and honest limitations
 
