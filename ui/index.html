@@ -1361,11 +1361,24 @@
       <sc-if value="{{ isEoCode }}">
       <div class="eo-panel-pad" style="flex:1; padding:22px 24px; display:flex; flex-direction:column; gap:12px; min-height:0; overflow:hidden;">
         <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#6E6A60;">eoCode — agentic coding</span>
-        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A local model plans, writes, and runs its own code in a real sandbox directory — read_file / write_file / edit_file / run_shell, one tool call at a time — with every step disclosed below as it happens, the same live transcript Claude Code or opencode show for their own tool calls. Needs a local Ollama model reachable from the server (<span style="font-family:'IBM Plex Mono', monospace;">ollama serve</span>).</span>
+        <span style="font-size:12px; color:#8C877C; line-height:1.5;">A model plans, writes, and runs its own code in a real sandbox directory — read_file / write_file / edit_file / run_shell, one tool call at a time — with every step disclosed below as it happens, the same live transcript Claude Code or opencode show for their own tool calls. The model can run on the server via Ollama, or right in this browser via WebLLM — either way, running the code stays on the server, since only it can safely touch a real filesystem.</span>
+
+        <div style="display:flex; gap:6px;">
+          <button type="button" onClick="{{ setEoCodeSourceOllama }}" style="border:1px solid #E4DFD5; border-radius:7px 0 0 7px; background: {{ eoCodeSourceOllamaBg }}; color: {{ eoCodeSourceOllamaColor }}; padding:6px 12px; font-family:inherit; font-size:11.5px; font-weight:500; cursor:pointer;">Ollama (server)</button>
+          <button type="button" onClick="{{ setEoCodeSourceWebLLM }}" style="border:1px solid #E4DFD5; border-left:0; border-radius:0 7px 7px 0; background: {{ eoCodeSourceWebLLMBg }}; color: {{ eoCodeSourceWebLLMColor }}; padding:6px 12px; font-family:inherit; font-size:11.5px; font-weight:500; cursor:pointer;">WebLLM (this browser)</button>
+        </div>
 
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
           <input type="text" value="{{ eoCodeWorkspace }}" onChange="{{ onEoCodeWorkspaceChange }}" disabled="{{ eoCodeRunning }}" placeholder="workspace name" style="width:150px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"/>
-          <input type="text" value="{{ eoCodeModel }}" onChange="{{ onEoCodeModelChange }}" disabled="{{ eoCodeRunning }}" placeholder="ollama model, e.g. qwen2.5-coder:1.5b" style="width:230px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"/>
+          <sc-if value="{{ eoCodeSourceIsOllama }}">
+            <input type="text" value="{{ eoCodeModel }}" onChange="{{ onEoCodeModelChange }}" disabled="{{ eoCodeRunning }}" placeholder="ollama model, e.g. qwen2.5-coder:1.5b" style="width:230px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F;"/>
+          </sc-if>
+          <sc-if value="{{ eoCodeSourceIsWebLLM }}">
+            <span style="font-size:11.5px; color: {{ eoCodeWebLLMStatusColor }};">{{ eoCodeWebLLMStatusText }}</span>
+            <sc-if value="{{ eoCodeWebLLMNotStarted }}">
+              <button type="button" onClick="{{ startEoCodeWebLLM }}" style="border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:5px 10px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">Start</button>
+            </sc-if>
+          </sc-if>
           <sc-if value="{{ eoCodeRunning }}">
             <button type="button" onClick="{{ stopEoCode }}" style="border:1px solid #C0341A; border-radius:7px; background:none; color:#C0341A; padding:7px 14px; font-family:inherit; font-size:12.5px; cursor:pointer;">Stop</button>
           </sc-if>
@@ -2668,12 +2681,18 @@ class Component extends DCLogic {
     settingsOpen: false,
     _settingsApiKeys: {},
     settingsDraftKeys: {},
-    // eoCode — the agentic-coding tab (see server/eocode-agent.js). A local
-    // Ollama model plans, writes, and runs its own code in a real sandbox
-    // directory via the same tool loop eval/agent/ already grew for the
-    // offline capability eval; every step streams in live over SSE as
-    // react-loop.mjs's onStep fires it, so eoCodeSteps is the live
-    // transcript the panel renders, not a summary computed after the fact.
+    // eoCode — the agentic-coding tab (see server/eocode-agent.js). A model
+    // plans, writes, and runs its own code in a real sandbox directory via
+    // the same tool loop eval/agent/ already grew for the offline capability
+    // eval; every step streams into eoCodeSteps live as it happens, not as a
+    // summary computed after the fact. `eoCodeSource` picks which model
+    // actually does the planning: 'ollama' drives the whole run server-side
+    // over one SSE connection (POST /api/eocode/run); 'webllm' drives it
+    // from THIS browser's own in-tab model one step at a time (POST
+    // /api/eocode/session/start + /step) — tool execution (reading/writing
+    // real files, running a real shell) always happens server-side either
+    // way, since only the server can safely touch a real filesystem.
+    eoCodeSource: 'ollama',
     eoCodeWorkspace: 'default', eoCodeModel: 'qwen2.5-coder:1.5b', eoCodePrompt: '',
     eoCodeRunning: false, eoCodeSteps: [], eoCodeError: null, eoCodeResult: null,
     eoCodeFiles: [], eoCodeWorkspaces: [],
@@ -3219,7 +3238,18 @@ class Component extends DCLogic {
     return 'ok';
   }
 
-  async runEoCode() {
+  // Dispatches to whichever model source the reader picked. Both paths
+  // share the exact same live-transcript rendering (eoCodeStepVals) because
+  // both feed eoCodeSteps the same {phase, ...} event shape — the ollama
+  // path gets it from react-loop.mjs's onStep over SSE, the webllm path
+  // gets it from the session-step API's response, but nothing downstream of
+  // eoCodeSteps needs to know which one produced an event.
+  runEoCode() {
+    if (this.state.eoCodeSource === 'webllm') return this.runEoCodeWebLLM();
+    return this.runEoCodeOllama();
+  }
+
+  async runEoCodeOllama() {
     const prompt = (this.state.eoCodePrompt || '').trim();
     if (!prompt || this.state.eoCodeRunning) return;
     const workspace = (this.state.eoCodeWorkspace || 'default').trim() || 'default';
@@ -3276,6 +3306,79 @@ class Component extends DCLogic {
       if (err.name !== 'AbortError') {
         this.setState({ eoCodeError: err.message });
         this.logAdd('⊘', `eoCode error: ${err.message}`, 'eocode');
+      }
+    } finally {
+      this.setState({ eoCodeRunning: false });
+      this._eoCodeAbort = null;
+      this.fetchEoCodeWorkspaces();
+    }
+  }
+
+  // WebLLM path: the model text generation happens right here, in this tab,
+  // via window.EOWebLLM.stream (the exact same call askConversation's own
+  // local-mode branch already uses) — but tool execution (reading/writing
+  // real files, running a real shell) cannot happen in a browser, so each
+  // turn is a round trip to the session-stepping API: ask the server what
+  // to show the model (promptView), generate locally, hand the raw result
+  // back to the server to actually run, repeat until it reports done.
+  async runEoCodeWebLLM() {
+    const prompt = (this.state.eoCodePrompt || '').trim();
+    if (!prompt || this.state.eoCodeRunning) return;
+    if (!window.EOWebLLM || this.state.localModelStatus !== 'ready') {
+      this.setState({ eoCodeError: 'The in-browser model is not ready yet — install/start it under Settings → Local model, or switch to Ollama above.' });
+      return;
+    }
+    const workspace = (this.state.eoCodeWorkspace || 'default').trim() || 'default';
+    const modelLabel = window.EOWebLLM.modelLabel();
+    this.setState({ eoCodeRunning: true, eoCodeSteps: [], eoCodeError: null, eoCodeResult: null, eoCodeFiles: [] });
+    this.logAdd('⌁', `eoCode (WebLLM): "${prompt.slice(0, 44)}${prompt.length > 44 ? '…' : ''}" (${modelLabel})`, 'eocode');
+    this._eoCodeAbort = new AbortController();
+    let sessionId = null;
+    try {
+      const startRes = await fetch(this.proxyUrl() + '/api/eocode/session/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, workspace, maxSteps: 20 }),
+        signal: this._eoCodeAbort.signal,
+      });
+      if (!startRes.ok) throw new Error(`eoCode session/start returned ${startRes.status}`);
+      const started = await startRes.json();
+      sessionId = started.sessionId;
+      this.setState({ eoCodeWorkspace: started.workspace });
+
+      let promptView = started.promptView;
+      let done = false;
+      while (!done) {
+        let raw = '';
+        for await (const delta of window.EOWebLLM.stream(promptView, { signal: this._eoCodeAbort.signal })) {
+          raw += delta;
+        }
+        const stepRes = await fetch(this.proxyUrl() + `/api/eocode/session/${sessionId}/step`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ raw }),
+          signal: this._eoCodeAbort.signal,
+        });
+        if (!stepRes.ok) throw new Error(`eoCode session/step returned ${stepRes.status}`);
+        const stepped = await stepRes.json();
+        this.setState(s => ({ eoCodeSteps: s.eoCodeSteps.concat(stepped.events) }));
+        done = stepped.done;
+        if (done) {
+          const data = stepped.result;
+          this.setState({ eoCodeResult: data, eoCodeFiles: (data && data.files) || [] });
+          const outcome = data.finished ? `finished: ${data.summary || '(no summary given)'}`
+            : data.stuckLoopAbort ? 'stopped — stuck in a repeating failure loop'
+            : data.hitStepCap ? 'stopped — ran out of steps before finishing'
+            : 'stopped';
+          this.logAdd(data.finished ? '●' : '⊘', `eoCode ${outcome}`, 'eocode');
+        } else {
+          promptView = stepped.promptView;
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        this.setState({ eoCodeError: err.message });
+        this.logAdd('⊘', `eoCode error: ${err.message}`, 'eocode');
+      } else if (sessionId) {
+        fetch(this.proxyUrl() + `/api/eocode/session/${sessionId}/cancel`, { method: 'POST' }).catch(() => {});
       }
     } finally {
       this.setState({ eoCodeRunning: false });
@@ -8991,9 +9094,32 @@ class Component extends DCLogic {
       onEoCodeWorkspaceChange: (e) => this.setState({ eoCodeWorkspace: e.target.value }),
       eoCodeModel: S.eoCodeModel || 'qwen2.5-coder:1.5b',
       onEoCodeModelChange: (e) => this.setState({ eoCodeModel: e.target.value }),
+      // Which model actually plans this run — see runEoCode's dispatch
+      // comment. "Nothing fancy": one toggle, not a settings panel.
+      eoCodeSourceIsOllama: S.eoCodeSource !== 'webllm',
+      eoCodeSourceIsWebLLM: S.eoCodeSource === 'webllm',
+      setEoCodeSourceOllama: () => this.setState({ eoCodeSource: 'ollama' }),
+      setEoCodeSourceWebLLM: () => this.setState({ eoCodeSource: 'webllm' }),
+      eoCodeSourceOllamaColor: S.eoCodeSource !== 'webllm' ? '#1F5A4C' : '#8C877C',
+      eoCodeSourceOllamaBg: S.eoCodeSource !== 'webllm' ? '#F4F8F6' : 'none',
+      eoCodeSourceWebLLMColor: S.eoCodeSource === 'webllm' ? '#1F5A4C' : '#8C877C',
+      eoCodeSourceWebLLMBg: S.eoCodeSource === 'webllm' ? '#F4F8F6' : 'none',
+      eoCodeWebLLMReady: S.localModelStatus === 'ready',
+      eoCodeWebLLMStatusText: S.localModelStatus === 'ready'
+        ? `Ready — ${(typeof window !== 'undefined' && window.EOWebLLM) ? window.EOWebLLM.modelLabel() : 'the local model'} will plan this run.`
+        : S.localModelStatus === 'loading'
+          ? `Downloading… ${(S.localModelProgress && S.localModelProgress.percent) || 0}%`
+          : S.localModelStatus === 'unsupported'
+            ? (S.localModelError || 'Not supported in this browser.')
+            : S.localModelStatus === 'error'
+              ? (S.localModelError || 'Failed to load.')
+              : 'Not started — turn it on under Settings → Local model.',
+      eoCodeWebLLMStatusColor: S.localModelStatus === 'ready' ? '#1F5A4C' : S.localModelStatus === 'error' || S.localModelStatus === 'unsupported' ? '#C0341A' : '#8C877C',
+      eoCodeWebLLMNotStarted: S.localModelStatus === 'idle',
+      startEoCodeWebLLM: () => { if (window.EOWebLLM) window.EOWebLLM.init(); },
       eoCodeRunning: S.eoCodeRunning,
       eoCodeNotRunning: !S.eoCodeRunning,
-      eoCodeRunDisabled: S.eoCodeRunning || !(S.eoCodePrompt || '').trim(),
+      eoCodeRunDisabled: S.eoCodeRunning || !(S.eoCodePrompt || '').trim() || (S.eoCodeSource === 'webllm' && S.localModelStatus !== 'ready'),
       runEoCode: () => this.runEoCode(),
       stopEoCode: () => this.stopEoCode(),
       hasEoCodeSteps: (S.eoCodeSteps || []).length > 0,
