@@ -20,29 +20,43 @@
 // per-step error, since a REPEATED identical error is itself evidence a
 // gentler nudge already failed), and an honest early abort if it still
 // does not budge — the same "do not silently burn the rest of the budget"
-// discipline the malformed-response abort below already uses.
-
-import { parseAction } from "./lib/parse-action.mjs";
-
-const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
-const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
-
+// discipline the malformed-response abort below already uses. Counting is
+// CUMULATIVE per exact (tool, args) across the whole attempt, never reset
+// by an intervening successful call: the real failure pattern is
+// edit_file(fail) -> read_file(succeed) -> edit_file(SAME fail) repeated,
+// and a naive "reset on anything non-matching" streak counter never once
+// saw it as a repeat, because the successful read in between reset it back
+// to 1 every single time. Reading the file again is normal and not itself
+// the problem; what matters is whether one SPECIFIC action keeps recurring
+// regardless of what else happens around it.
+//
 // SURF AND FOLD, applied to the running conversation. Ollama's /api/chat is
 // stateless per request, so every turn resends the WHOLE prompt — left
 // unbounded, a real run measured n_tokens climbing past 3400 within half a
-// dozen steps (system prompt + every raw assistant reply + every full tool
-// observation, replayed in full every single turn), which is most of a
-// small local model's entire context window spent on replaying its own
-// history rather than reasoning about the next step. This is the same
-// discipline task-log.js's foldToWorkingSet already applies to tasks —
-// "hand the model a small, bounded, current state, not more context as the
-// work grows" — applied here to conversation turns instead: the most
-// recent FOLD_K turns are replayed verbatim (recency is what a ReAct step
-// actually needs), everything older is folded to one short line per step,
-// and if even the fold gets long only the most recent folded lines are
-// shown, with an explicit count of what's withheld — never a silent
-// truncation.
-const DEFAULT_FOLD_K = 6;          // most recent turns kept in full
+// dozen steps, most of a small local model's entire context window spent
+// replaying its own history rather than reasoning about the next step.
+// Three independent sessions converged on the same fix, the same day: keep
+// the most recent turns verbatim (recency is what a ReAct step actually
+// needs to act on right now) and fold everything older into one compact
+// summary line per step, the same task-log.js foldToWorkingSet discipline
+// applied to conversation turns instead of tasks. What did NOT converge on
+// the first attempt: two of those three sessions independently bounded the
+// fold ITSELF by keeping only the most recent N folded lines and dropping
+// anything older — bounded, reported, and still picking what survives by
+// POSITION rather than relevance, the identical defect one layer down.
+// Fixed by scoring each folded line's lexical overlap with the current
+// window (the same lexical-presence discipline ingest.mjs's real corpus
+// search already uses) and keeping the highest-scoring lines when even the
+// compact digest does not fit — see AMENDMENT-13-PROPOSAL.md (eo-
+// constitution, ratified as II.18, the surf-before-fold test) for the full
+// accounting of why "bounded and reported" is not sufficient on its own.
+
+import { parseAction } from "./lib/parse-action.mjs";
+import { significantTerms, overlapScore } from "./lib/lexical-relevance.mjs";
+
+const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
+const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
+const DEFAULT_FOLD_K = 6;          // most recent turns kept verbatim — the same 4-7 "mouth" range task-log.js's foldToWorkingSet documents
 const MAX_FOLDED_SUMMARY_LINES = 12; // even the fold itself is bounded
 
 function summarizeResult(tool, result) {
@@ -62,14 +76,32 @@ function summarizeFoldedEntry(e) {
   return `step ${e.step}: ${e.tool}(${JSON.stringify(e.args)}) -> ${summarizeResult(e.tool, e.result)}`;
 }
 
-/** One compact user message standing in for everything folded out. */
-function buildFoldedSummaryMessage(entries) {
-  const shown = entries.length > MAX_FOLDED_SUMMARY_LINES ? entries.slice(-MAX_FOLDED_SUMMARY_LINES) : entries;
-  const withheldExtra = entries.length - shown.length;
-  const header = withheldExtra > 0
-    ? `EARLIER STEPS (folded to keep this prompt small — showing the last ${shown.length} of ${entries.length} folded step(s); ${withheldExtra} even-earlier step(s) withheld entirely):`
-    : `EARLIER STEPS (folded to keep this prompt small — ${shown.length} step(s), full detail withheld):`;
-  return { role: "user", content: `${header}\n${shown.map(summarizeFoldedEntry).join("\n")}` };
+/**
+ * One compact user message standing in for everything folded out. If the
+ * full set of folded summary lines fits the budget, show them all — every
+ * step still leaves a trace, nothing vanishes silently. If it does not,
+ * SURF before folding further: score each line's lexical overlap with
+ * `focusText` (the verbatim recent window the model is actually looking at
+ * right now) and keep the highest-scoring lines, restored to chronological
+ * order — not the most recent lines by position, which is exactly the
+ * truncation-wearing-a-fold's-report-format defect this whole mechanism
+ * exists to avoid.
+ */
+function buildFoldedSummaryMessage(entries, focusText) {
+  const lines = entries.map((e, index) => ({ index, line: summarizeFoldedEntry(e) }));
+  if (lines.length <= MAX_FOLDED_SUMMARY_LINES) {
+    return { role: "user", content: `EARLIER STEPS (folded to keep this prompt small — ${lines.length} step(s), full detail withheld):\n${lines.map((l) => l.line).join("\n")}` };
+  }
+
+  const focusTerms = significantTerms(focusText);
+  const kept = [...lines]
+    .map((l) => ({ ...l, score: overlapScore(focusTerms, l.line) }))
+    .sort((a, b) => b.score - a.score || b.index - a.index)
+    .slice(0, MAX_FOLDED_SUMMARY_LINES)
+    .sort((a, b) => a.index - b.index); // restore chronological order
+  const withheld = lines.length - kept.length;
+  const header = `EARLIER STEPS (folded to keep this prompt small — showing ${kept.length} of ${lines.length} folded step(s), kept by relevance to what you are looking at right now, not just recency; ${withheld} more folded step(s) withheld):`;
+  return { role: "user", content: `${header}\n${kept.map((k) => k.line).join("\n")}` };
 }
 
 /**
@@ -85,7 +117,8 @@ function buildPromptView(system, intro, foldedTurns, foldK) {
   }
   const kept = foldedTurns.slice(-foldK);
   const folded = foldedTurns.slice(0, -foldK);
-  return [system, intro, buildFoldedSummaryMessage(folded.map((t) => t.entry)), ...kept.flatMap((t) => t.msgs)];
+  const focusText = kept.flatMap((t) => t.msgs).map((m) => m.content).join(" ");
+  return [system, intro, buildFoldedSummaryMessage(folded.map((t) => t.entry), focusText), ...kept.flatMap((t) => t.msgs)];
 }
 
 const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
@@ -143,8 +176,11 @@ export function createSession({ taskPrompt, groundingBlock = null, toolset, fold
     summary: null,
     step: 0,
     malformedStreak: 0,
-    repeatFailStreak: 0,
-    lastFailedCallKey: null,
+    // Keyed by exact (tool, args) — how many times THIS specific call has
+    // failed, total, across the whole attempt so far. See the STUCK-LOOP
+    // DETECTION note at the top of this file for why this must be cumulative
+    // rather than reset by an intervening successful call.
+    failureCounts: new Map(),
     stuckLoopAbort: false,
     // Set once no further applyResponse call should happen: finished,
     // stuckLoopAbort, or the malformed-response abort threshold.
@@ -213,24 +249,24 @@ export function applyResponse(session, raw) {
   const result = session.tools[parsed.tool].run(parsed.args);
   const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
   const isFailure = result && typeof result === "object" && "error" in result;
-  session.repeatFailStreak = isFailure && callKey === session.lastFailedCallKey ? session.repeatFailStreak + 1 : isFailure ? 1 : 0;
-  session.lastFailedCallKey = isFailure ? callKey : null;
+  const repeatCount = isFailure ? (session.failureCounts.get(callKey) ?? 0) + 1 : 0;
+  if (isFailure) session.failureCounts.set(callKey, repeatCount);
 
-  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: session.repeatFailStreak || undefined };
+  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatCount || undefined };
   session.transcript.push(entry);
   events.push({ ...entry, phase: "tool_result" });
 
   let observation = formatObservation(parsed.tool, result);
-  if (session.repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
-    observation += `\n\nSTUCK LOOP: this is the ${session.repeatFailStreak}${session.repeatFailStreak === 2 ? "nd" : session.repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
+  if (repeatCount >= STUCK_LOOP_NUDGE_AT) {
+    observation += `\n\nSTUCK LOOP: this exact ${parsed.tool} call (the SAME arguments) has now failed ${repeatCount} times, the same way every time — reading the file in between has not changed what you try next. Repeating it again will fail again. Stop: re-read the OBSERVATION above and base your next argument on what it actually says, not on what you expect it to say.`;
   }
   const observationMsg = { role: "user", content: observation };
   session.messages.push(observationMsg);
   session.foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
 
-  if (session.repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
+  if (repeatCount >= STUCK_LOOP_ABORT_AT) {
     session.stuckLoopAbort = true;
-    const abortEntry = { step, note: `aborted after ${session.repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` };
+    const abortEntry = { step, note: `aborted after ${repeatCount} total identical failing ${parsed.tool} calls across the attempt (stuck loop, not a step-budget exhaustion)` };
     session.transcript.push(abortEntry);
     events.push({ ...abortEntry, phase: "aborted" });
     session.done = true;
