@@ -1,0 +1,9 @@
+=== minimal-seeding narrative run started, REAL model=llama3.2:latest, zero declared entities ===
+[16:10:55] scene 1 (open) — calling model...
+[16:11:38] scene 1 done — 283 words in 43s
+[16:11:38]   new character surfaced: Mrs — registered so later scenes see it
+[16:11:38]   new character surfaced: Jake — registered so later scenes see it
+[16:11:38] scene 2 (plant:quiet-shift) — calling model...
+[16:12:20] scene 2 done — 294 words in 42s
+[16:12:20]   new character surfaced: Tom — registered so later scenes see it
+[16:12:20] scene 3 (beat) — calling model...
