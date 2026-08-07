@@ -3134,8 +3134,22 @@ const server = http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ models }));
       } catch (err) {
+        // A bare err.message ("fetch failed") tells the reader nothing they
+        // can act on. Node's fetch nests the real reason in err.cause — an
+        // ECONNREFUSED/ENOTFOUND there means nothing is listening at TARGET
+        // at all (Ollama not installed, not running, or on a different
+        // port), which is a distinct fix from a slow-but-present upstream.
+        // The setup guide in ui/index.html (requestOllamaConnect /
+        // runOllamaDiagnosis) branches on `reason` to show the right one.
+        const causeCode = err.cause?.code || err.cause?.errors?.[0]?.code;
+        const reason = causeCode === "ECONNREFUSED" || causeCode === "ENOTFOUND" || causeCode === "EHOSTUNREACH"
+          ? "not-running"
+          : err.name === "AbortError" ? "timeout" : "unknown";
+        const message = reason === "not-running" ? `No Ollama instance found at ${TARGET}.`
+          : reason === "timeout" ? `Timed out waiting for Ollama at ${TARGET}.`
+          : "Could not reach Ollama: " + err.message;
         res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Could not reach Ollama: " + err.message }));
+        res.end(JSON.stringify({ error: message, reason, target: TARGET }));
       }
     })();
     return;
