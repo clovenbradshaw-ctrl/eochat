@@ -80,6 +80,16 @@ const routeListPatch = [
 ].join("\n");
 
 export const DRY_RUN_SCRIPTS = {
+  "level5-constitution-rename-ask": [
+    { decompose: false },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: "node assay/route.mjs ask <evidence.json>  classify evidence and return the routed placement", new_string: "node assay/route.mjs classify <evidence.json>  classify evidence and return the routed placement" } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'if (mode === "ask") {', new_string: 'if (mode === "classify") {' } },
+    { tool: "edit_file", args: { path: "README.md", old_string: "npm run route -- ask  <evidence>.json             # classify evidence, get the routed tier", new_string: "npm run route -- classify <evidence>.json             # classify evidence, get the routed tier" } },
+    { tool: "edit_file", args: { path: "README.md", old_string: "`level_test` is only for engine organs (IV.3 growth rule). `ask` accepts a", new_string: "`level_test` is only for engine organs (IV.3 growth rule). `classify` accepts a" } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs classify claims/holonic-task.claim.json" } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs ask claims/holonic-task.claim.json" } },
+    { tool: "finish", args: { summary: "renamed the ask subcommand to classify in route.mjs and README.md; left AMENDMENT-9-PROPOSAL.md's unrelated use of the word alone" } },
+  ],
   "level3-constitution-list-command": [
     { decompose: false },
     { tool: "read_file", args: { path: "assay/route.mjs" } },

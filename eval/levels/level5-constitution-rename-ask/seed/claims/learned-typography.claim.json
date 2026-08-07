@@ -1,0 +1,26 @@
+{
+  "claim_id": "learned-typography",
+  "what": "the recurring line-forms by which THIS document marks its own divisions — speaker turns, chapter openings, section breaks — learned from the material's own regularities and held per-text; the division is received from the communicator, the typography that marks it is derived, and neither is assumed",
+  "proposed_placement": "priors",
+  "expect": "pass",
+  "notes": "Recorded 2026-07-31, alongside its own counterexample. Seitsemän veljestä (pg11940) declares its cast 2321 times as a line-initial capital run followed by a period, and declares its chapters as LUKU headings; a reading that surveyed character n-grams instead consumed a surrogate for a book that had already named its speakers. But hardcoding that form is the opposite error and gets no tier at all: an assumed ^[A-Z]{2,}\\. is a surface with no giver. The form must be learned from the material and then RECEIVED by the engine, which is why this sits in priors beside priors/coref/ rather than in the engine. Companion to document-who-for: the who-for is received, and so is the typography that carries it.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": true,
+    "giver": "the communicator",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": []
+  }
+}
