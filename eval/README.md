@@ -118,15 +118,20 @@ The redirect that shaped this design: don't build a generic ReAct scaffold
 from scratch — build the agent out of primitives this codebase already has.
 
 - **`agent/tools.mjs`** — the agent's "organs": `read_file`, `write_file`,
-  `edit_file`, `run_shell`, `finish`, each bound to one sandbox directory.
-  This is a fixed, hand-grown set for now (see "Future direction" below).
-  `edit_file` (old_string/new_string, unique-match-or-refuse — the same
-  discipline this very harness's own editing tool uses) was grown once
+  `edit_file`, `run_shell`, `perceive`, `finish`, each bound to one sandbox
+  directory. This is a fixed, hand-grown set for now (see "Future direction"
+  below). `edit_file` (old_string/new_string, unique-match-or-refuse — the
+  same discipline this very harness's own editing tool uses) was grown once
   real, larger files entered the picture at Level 3+: `write_file` requires
   retyping the COMPLETE file, which is fine for a 20-line script but
   physically does not fit a CPU-bound model's per-step token budget once the
   file is a real few-hundred-line module. Without it, "real codebase" tasks
-  were impossible by construction, not a measured capability gap.
+  were impossible by construction, not a measured capability gap. `perceive`
+  (backed by `agent/senses.mjs`'s local-sense registry and `agent/media.mjs`,
+  see "Omnimodal organs" below) was grown once `read_file`'s blind
+  `readFileSync(..., "utf8")` turned out to silently corrupt any binary
+  asset instead of refusing honestly — a real, non-text-shaped gap, not a
+  hypothetical one.
 - **`agent/react-loop.mjs`** — the actual read-execute-observe-correct loop.
   The model emits exactly one JSON tool call per turn; the tool actually
   runs; the real result (including real errors) is appended as an
@@ -216,12 +221,19 @@ eval/
   agent/            the agent itself — tools, react loop, holonic wrapper, ingest
                     (holon-coder.test.mjs: offline coverage of the bidirectional
                     nesting — run with `node --test eval/agent/holon-coder.test.mjs`)
+                    media.mjs: honest binary sniff + from-scratch WAV parser/
+                    writer, no ffmpeg; senses.mjs: the sniff->route->fold
+                    dispatcher (registry of local senses + a named gap
+                    report against server/senses-catalog.js for anything
+                    unhandled) — see "Omnimodal organs" below
+                    (media.test.mjs, senses.test.mjs, tools.test.mjs cover it)
   adapters/         ollama-adapter.mjs (real), scripted-adapter.mjs (dry-run)
   levels/           Level 1-7 task definitions + independent oracles
     level1-csv-to-json/       task.json, test.mjs
     level1-fizzbuzz/
     level2-csv-quoted-comma/  task.json, seed/check.mjs, test.mjs
     level2-jsonl-quirk/
+    level2-wav-duration-bug/  task.json, seed/check.mjs, test.mjs — see "Omnimodal organs" below
   results/
     runs/*.jsonl    raw per-run, per-task results
     scoreboard.md   human-readable history, newest first
@@ -270,6 +282,123 @@ trusting the oracle (see git history for that verification).
   but, even with real failure evidence, still judged the task undecomposable
   (an honest "no," not forced).
 
+## Omnimodal organs (started, narrow, honestly scoped)
+
+The agent's original tool set was entirely text-shaped: `read_file` ran every
+file through `readFileSync(abs, "utf8")` unconditionally, and `ingest.mjs`
+treats "source code ingests exactly like prose does" as the whole story. For
+a real binary asset (audio, an image) that doesn't fail loudly — `Buffer`
+decoding of non-UTF-8 bytes silently returns garbled replacement characters
+instead of throwing, so the agent would see garbage and reasonably treat it
+as garbage *text*, never as "this is a different medium, not text at all."
+eo-constitution's II.1 names exactly this failure for text specifically
+("stable spans are a false permanency"); forcing every OTHER medium through
+that same text-shaped tool without saying so is the same failure by another
+road.
+
+Real, tested changes close that specific gap, at the tool layer, and then
+generalize it into a registry instead of one hand-built tool per format:
+
+- **`read_file` now refuses binary content honestly** (`agent/media.mjs`'s
+  `sniffBinary` — the same NUL-byte-in-the-first-8000-bytes heuristic `git`
+  itself uses) instead of returning corrupted text. See
+  `agent/tools.test.mjs`.
+- **`perceive`, a new organ, sniffs a file's real format and routes it to
+  the narrowest LOCAL sense this app has for it** (`agent/senses.mjs`), each
+  entry a plain `{ id, test, perceive }` triple, not a bespoke tool:
+  - **`wav`** — a WAV (RIFF/WAVE) file's real chunk layout, sample rate,
+    channels, bits per sample, duration, and a loudness envelope (below),
+    via a from-scratch, dependency-free RIFF chunk walker
+    (`agent/media.mjs`'s `parseWav`/`writeWav`). No ffmpeg: WAV's on-disk
+    format is a small, fully public byte layout simple enough to decode
+    correctly by hand, which matters because ffmpeg isn't installed in
+    every environment this harness runs in (this one included) —
+    eoreader6's own
+    `packages/engine/perceiver/{audio,image,video}/material.js` already do
+    real perceptual reduction over ffmpeg-decoded media, and this is a
+    companion for the environments where that decode step isn't available,
+    not a replacement for it.
+  - **`png`** — a second, genuinely different, zero-dependency local sense,
+    proving the registry generalizes rather than being WAV-shaped in
+    disguise: PNG's `IHDR` chunk is REQUIRED by the format spec to be the
+    very first chunk at a FIXED offset (unlike WAV, which is exactly why
+    WAV needed a walker and PNG does not), so real width/height/bit-depth/
+    color-type come straight off the header bytes. Pixel content (`IDAT`,
+    zlib-compressed, per-scanline filtered) is **not** decoded — a stated
+    gap (`pixelDataGap` in the result), not a silent claim this sees actual
+    image content the way the audio envelope sees actual samples.
+  - **anything else** — no local sense claims it, so `perceive` reports a
+    SPECIFIC, honest gap instead of a bare "unsupported": it names which of
+    this app's own already-cataloged vision/OCR/detection systems
+    (`server/senses-catalog.js` — the same catalog the UI's Senses tab
+    draws from, real models like Qwen3-VL, dots.mocr, SAM 3) would apply,
+    and says plainly that none has a live endpoint configured in this
+    sandbox. "Tag in other ML systems applicable to this data type," done
+    honestly, is naming the real ones and admitting the wiring gap — not
+    silently doing nothing, and not pretending a decode happened.
+- **The WAV sense's loudness envelope is FIXED-SIZE, not proportional to
+  the clip** (`agent/media.mjs`'s `computeEnergyEnvelope`), because a tool
+  result becomes part of the model's PROMPT on the very next turn
+  (`react-loop.mjs`'s `formatObservation`), and a naive per-frame energy
+  dump (eoreader6's own `perceiver/audio/material.js::reduce()` returns one
+  RMS value per 400-sample frame) would make a single tool call's prompt
+  cost scale with the audio file's length — reintroducing, for audio, the
+  exact "context grows with content size" failure this eval already refuses
+  for text (`MAX_READ_CHARS`, `ingest.mjs`'s surf-then-fold-to-a-token-
+  budget). So the envelope folds to a caller-chosen, FIXED bucket count
+  (default 16) — inspecting a 100-second clip costs the same context as a
+  0.1-second one (`media.test.mjs` asserts this directly: two clips 1000x
+  apart in length produce byte-identical-length envelope JSON), and how
+  many real samples were folded into each bucket is reported honestly
+  (`framesPerBucket`), never a silent average standing in for raw data.
+  This is a stronger bound than `surf`'s token budget — it doesn't even
+  scale with how much content clears a relevance floor, since "roughly how
+  loud was this fifth of the clip" has no relevance floor to begin with —
+  but it is the same fold-to-a-declared-budget shape, applied to a modality
+  where the budget can be a plain constant instead of a computed one. Any
+  future local sense is expected to fold the same way, on the same
+  principle, not just WAV.
+- **A scored task, `level2-wav-duration-bug`**, exercises the `wav` sense
+  for real: the agent must write a script that computes a WAV file's
+  duration by walking its RIFF chunks, against a fixture that has a `LIST`
+  metadata chunk sitting between `fmt ` and `data` — the exact real-world
+  wrinkle that breaks the common "audio data starts at byte 44" shortcut.
+  The oracle (`test.mjs`) was hand-verified against both a correct
+  chunk-walking solution and a naive fixed-offset one before being trusted:
+  the naive version passes the no-extra-chunk case and fails exactly the
+  two extra-chunk cases, which is the intended discriminating behavior, not
+  an accident.
+
+**What this does and doesn't establish.** It establishes that the agent's
+tool layer can now tell a real non-text asset apart from text instead of
+silently mangling it, that a genuinely non-textual fact (a WAV's true chunk
+layout, not a guessed offset) can change whether a scored coding task
+passes, that a second, differently-shaped format (PNG) drops into the same
+registry without new tool-call machinery, and that a gap for an unhandled
+format is a specific, actionable one (a named, cataloged system with no
+endpoint) rather than a bare failure. It does **not** establish that the
+agentic-coding harness's core mechanisms — the ReAct loop, `holon-coder.mjs`'s
+decomposition, `ingest.mjs`'s surf/fold — are medium-agnostic in the sense
+eo-constitution's II.11 (the omnimodal *earning* test) means for engine-tier
+claims: that survival is earned by an invariance fixture across every text
+and every host, the way `eoreader6/goldens/multimodal` measured it for the
+*reading* engine's boundary-detection mechanism (`runTurn`) across
+text/audio/image/video. This harness is application tier (`eochat`, per
+Constitution I.4), not engine, so that specific bar does not apply to it
+directly — but the honest comparison still stands: eoreader6 has a real,
+run, scored cross-modal invariance fixture for its core reading mechanism;
+this eval, before this change, had none for its core coding mechanism, in
+either direction. A small registry of local senses plus one honest gap
+report for everything the registry doesn't cover is a real start, not that
+fixture — and it does not touch any of `senses-catalog.js`'s cataloged
+systems for real: no endpoint is configured anywhere in this environment, so
+`perceive` on a JPEG or a scanned page still returns the honest gap, not a
+working VLM call. Nothing here has been run against a real local model
+either (only the dry-run scripted adapter and the unit/oracle tests above,
+all offline) — whether `qwen2.5-coder:7b` can actually use `perceive`
+productively, the same open question this README already tracks honestly
+for Level 3+, is untested.
+
 ## Known scope and honest limitations
 
 - **This session's git/GitHub access is scoped to the `clovenbradshaw-ctrl`
@@ -317,6 +446,17 @@ trusting the oracle (see git history for that verification).
   void fidelity) and kept as a **separate, optional safety gate** for a
   future scenario where this agent operates directly on eochat/eoreader6
   itself — it is not part of the Level 1-7 scoring loop.
+
+## `eval/chat/` — the same discipline, applied to normal chatting
+
+This eval is entirely about coding tasks. `eval/chat/` asks a different
+question with the same methodology: does the holonic-task spine that
+`react-loop.mjs`'s own prompt-folding above reuses from `task-log.js` (and
+that `narrative-longform.js`/`code-longform.js`/`svg-longform.js` already
+proved on long-form generation) also measurably improve ORDINARY multi-turn
+chat — specifically the desk (`server/conversation-memory.js`) and turn
+promotion (`server/conversation-holon.js`) already built for it — over a
+naive windowed-history baseline. See `eval/chat/README.md`.
 
 ## Future direction: growing organs constitutionally
 

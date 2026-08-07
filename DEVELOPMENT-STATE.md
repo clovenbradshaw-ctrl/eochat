@@ -464,6 +464,129 @@ claims in organ documentation should be trusted. Staged in eochat only
 because `eo-constitution` was not reachable from the session that did this
 work — belongs there, not here, once someone with access can move it.
 
+## A sibling initiative: does the holonic spine help NORMAL chatting, not just long-form generation?
+
+Everything above is about one blink of generation — a single long document
+built incrementally. eochat separately already built a holonic mechanism for
+ORDINARY multi-turn chat (not this session's work, pre-existing):
+`server/conversation-memory.js`'s "desk" (a small, bounded, always-injected,
+verbatim fact ledger — the per-turn analogue of `foldToWorkingSet`'s "mouth")
+and `server/conversation-holon.js` (turn promotion via real
+existence-dependency on `task-log.js`'s own spine, never text
+classification). Nothing before this session measured what the desk actually
+buys over the plain windowed-history baseline a normal chat completion
+endpoint gives you once a conversation runs long — the comparison existed as
+an architectural claim, not a measurement.
+
+**`eval/chat/`** — the "normal chatting" counterpart to `eval/`'s Agentic
+Coding Capability Eval, same discipline (mechanical oracles, every run
+recorded, nothing cherry-picked). Two context-assembly pipelines
+(`eval/chat/pipelines.mjs`), both built from the REAL functions
+`turn-controller.js` itself calls (`buildHistoryMessages`, `applyTurn`,
+`buildMemoryMessage` — hoisted to module-level exports in
+`turn-controller.js` this session, same reasoning as the pre-existing
+`buildGroundedSystemMessage` export, so the eval tests the real prompt, not
+a copy of it): a windowed-only baseline vs. windowed-plus-desk. Four
+scenarios replay identical scripted conversations through both and check,
+mechanically, whether a fact/denial/eviction property holds. First run:
+**4/4 scenarios pass, 17/17 checks** — see `eval/chat/README.md` for the
+full breakdown and, importantly, its own "Honest limits" section (no real
+local model was run in this sandbox; this proves context assembly is
+correct and different between conditions, not that a real weak model
+reliably exploits the difference — the same gap `eval/run.mjs --dry-run` has
+relative to a real `--model` run).
+
+One real defect surfaced during construction, in the eval's own scenario
+script rather than the production code under test: `multi-fact-recall`'s
+second fact was originally scripted at a turn index still inside the real
+6-turn window by the time the conversation ended, so the baseline pipeline
+correctly still had it — the scenario's assumption was wrong, not the desk.
+Moving both facts earlier in the script (so filler turns actually push both
+out of the window) fixed it. Left in `eval/chat/README.md` as the same
+"verify the baseline actually failed for the reason you think it did"
+discipline this codebase's other domains already apply to their own
+oracles.
+
+**Deferred, scoped honestly:** a real Ollama-backed run (swapping
+`eval/chat/context-model.mjs`'s deterministic stand-in for
+`eval/adapters/ollama-adapter.mjs`, already built and reusable unchanged)
+and an L1 dead-air/streaming timing scenario (would need to drive
+`server/proxy.js`'s real HTTP/SSE surface, not just the pure
+context-assembly functions this eval isolates) — neither built this session,
+both named rather than silently skipped.
+
+## Navigating the cube: "entities are entities," made literal, plus a real fiction test
+
+Two more real things done this session, same "measured, not guessed" discipline.
+
+**`task-log.js` grows two small, generic primitives** (never widening its
+existing, deliberate Structure-row-only restriction — NUL/SIG/INS and
+DEF/EVA/REC stay refused, per the module's own header):
+
+- **`proposeDiscovered(log, discoveries)`** — the one registration path for
+  "something unplanned was noticed mid-generation; register it so
+  everything downstream sees it." `narrative-longform.js`'s
+  `extractNewNames` (a character the model introduces unasked) and
+  `code-longform.js`'s `discoverReferencedFiles` (a file a written file
+  references but nobody planned) were independently reimplementing the
+  exact same append loop — code-longform.js's own comment already said so
+  ("the exact same move as extractNewNames() discovering a character")
+  without the two ever sharing code. They do now: both call
+  `proposeDiscovered`, and both resolve to the identical cube cell (SEG,
+  Figure grain) — not merely an analogous one. Proven by a same-cell
+  assertion in both `narrative-longform.test.js` and `code-longform.test.js`.
+- **`isGrainProgression`/`isProductionOrder`/`checkCubeProgression`** — advisory
+  (never blocking, same discipline as `checkContinuity`) checks that a
+  single task's own trajectory through the cube never coarsens its grain
+  (Ground→Figure→Pattern only deepens, revisited but never backward — the
+  "spiral, not a flat loop" reading) and never runs its own operator
+  backward against `produce()`'s existing SEG-before-CON-before-SYN order.
+  Scoped correctly per the codebase's own "peer is first-class" discipline:
+  it compares one task_id's entries against ITSELF only, never across
+  different tasks — two different entities have no shared ladder to be
+  compared on.
+
+**Applied for real**, not just declared: `narrative-longform.js`'s
+introduce/plant/resolve moves now carry real (operator, grain) pairs (SEG,
+CON, SYN respectively, all at Figure grain), and `code-longform.js`'s file
+registration (planned or discovered) does too. Both engines' `write*`
+functions now return a `cubeFlags` field. 26 new/updated tests across
+`task-log.test.js`, `narrative-longform.test.js`, `code-longform.test.js` —
+full suite still 260/265 (same 5 pre-existing, unrelated failures as before
+this session).
+
+**A real fiction test, run for real**: `eval/narrative-runs/campaign-derby-novel/`
+— chapters 1-3 of a brand-new, structurally unrelated world (campaign-finance-
+reform thriller, Kentucky Derby week — not lighthouse, not the heist) through
+the real `writeNarrative()`. This sandbox has no Ollama and no model API key,
+so `scripts/run-campaign-derby-novel.mjs` stubs the network call with
+hand-authored prose (Claude, this session) instead of a local model — a real,
+different thing than the other domains' small-model runs, stated as such in
+the script's own header, not blurred.
+
+**Three real, measured bugs found on this real run, in `extractNewNames`
+(the "a character surfaced unasked" mechanism), fixed and regression-tested**
+— the mechanism was built and tuned against `LIGHTHOUSE_WORLD`'s spare,
+few-proper-noun style, and broke three distinct ways on denser,
+institution-heavy prose:
+1. A multi-word proper noun ("Blue Larkspur Farm") fragmented into one
+   spurious single-word entity per word. Fixed: match a run of consecutive
+   capitalized words as one candidate.
+2. Generic capitalized words that happened to recur as sentence-FIRST words
+   ("None", "One", "You", "Names", "Not", "Man") were false-flagged as
+   characters — sentence-initial capitalization proves nothing about
+   properness. Fixed: require at least one NON-sentence-initial occurrence.
+3. Round 2's own sentence-initial check missed DIALOGUE — a quotation mark
+   sitting between the terminal punctuation and the word ('He said. "You
+   heard me."') defeated the lookbehind, letting "You" and "Not" back in
+   via quote-masked false negatives. Fixed: the lookbehind now tolerates an
+   optional quote character. A related fix in the same pass: a possessive
+   join ("Ledger's Daughter") broke the multi-word run at the apostrophe,
+   fragmenting one real name into two — the run pattern now bridges `'s `.
+   Confirmed clean on a real re-run: zero spurious entities, "Ledger's
+   Daughter" registers as one name, `checkContinuity`/`checkNumericLocks`
+   both report 0 flags across all 3 chapters.
+
 ## Key files, for quick orientation
 
 - `eochat/server/task-log.js` (+`.test.js`) — the spine, do not modify lightly
@@ -477,3 +600,6 @@ work — belongs there, not here, once someone with access can move it.
 - `specs/composition-is-retrieval.md` — the theoretical grounding (main project root)
 - `work-website/` (main project root) — the real generated site, vocabulary fix confirmed working
 - `work-diagram/`, `work-diagram-qwen/` (main project root) — real generated flowcharts, llama3.2 vs qwen2.5:14b comparison
+- `eochat/eval/chat/` — Conversational Memory Capability Eval, the "does the holonic spine help NORMAL chatting" sibling initiative; `node eval/chat/run.mjs` to reproduce
+- `eochat/eval/narrative-runs/campaign-derby-novel/` — real 3-chapter fiction test, hand-authored prose through the real engine; `node scripts/run-campaign-derby-novel.mjs` to reproduce
+- `eochat/server/task-log.js`'s `proposeDiscovered`/`checkCubeProgression` — the shared "entities are entities" cube-navigation primitives both narrative-longform.js and code-longform.js now call

@@ -43,58 +43,65 @@ const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the atte
 const NO_VERIFY_NUDGE_AT = 4;
 const NO_VERIFY_NUDGE_EVERY = 3;
 
-// PROMPT FOLDING. `messages` below accumulates every raw response and every
-// full observation with no bound -- fine for the harness's own record, but
-// sent WHOLE to the adapter every single step it becomes exactly the
-// unbounded-context growth `ingest.mjs`'s surf/fold and task-log.js's
-// foldToWorkingSet exist to prevent, and it is the model under test that
-// pays for it: a CPU-bound small model has a small, fixed context window
-// (this eval's own Ollama adapter runs at num_ctx 4096), and a transcript
-// that keeps growing past it either gets silently mid-conversation-shifted
-// by the runtime or crowds out the actual task. Same fix, same place it
-// already lives in this codebase: keep the last FOLD_WINDOW_STEPS steps
-// verbatim (recent tool results are what the next decision actually turns
-// on), fold everything older into one bounded, honest digest line per step
-// -- never silently dropped, always says how much was condensed.
-const FOLD_WINDOW_STEPS = 3;
-const MAX_FOLDED_DIGEST_CHARS = 600;
+// SURF AND FOLD, applied to the running conversation. Ollama's /api/chat is
+// stateless per request, so every turn resends the WHOLE prompt — left
+// unbounded, a real run measured n_tokens climbing past 3400 within half a
+// dozen steps (system prompt + every raw assistant reply + every full tool
+// observation, replayed in full every single turn), which is most of a
+// small local model's entire context window spent on replaying its own
+// history rather than reasoning about the next step. This is the same
+// discipline task-log.js's foldToWorkingSet already applies to tasks —
+// "hand the model a small, bounded, current state, not more context as the
+// work grows" — applied here to conversation turns instead: the most
+// recent FOLD_K turns are replayed verbatim (recency is what a ReAct step
+// actually needs), everything older is folded to one short line per step,
+// and if even the fold gets long only the most recent folded lines are
+// shown, with an explicit count of what's withheld — never a silent
+// truncation.
+const DEFAULT_FOLD_K = 6;          // most recent turns kept in full
+const MAX_FOLDED_SUMMARY_LINES = 12; // even the fold itself is bounded
 
-function digestTranscriptEntry(entry) {
-  if (entry.malformed) return `step ${entry.step}: (unparseable response) ${entry.reason}`;
-  if (entry.tool === "finish") return `step ${entry.step}: finish`;
-  const argsStr = JSON.stringify(entry.args ?? {});
-  const briefArgs = argsStr.length > 100 ? `${argsStr.slice(0, 100)}…` : argsStr;
-  const outcome = entry.result && typeof entry.result === "object" && "error" in entry.result
-    ? `error: ${String(entry.result.error).slice(0, 100)}`
-    : "ok";
-  return `step ${entry.step}: ${entry.tool}(${briefArgs}) -> ${outcome}`;
+function summarizeResult(tool, result) {
+  if (result && typeof result === "object" && "error" in result) {
+    return `ERROR: ${String(result.error).slice(0, 140)}`;
+  }
+  if (tool === "read_file") return `ok (${result?.content?.length ?? 0} chars${result?.truncated ? ", truncated" : ""})`;
+  if (tool === "list_files") return `ok (${result?.files?.length ?? 0} file(s))`;
+  if (tool === "write_file" || tool === "edit_file") return `ok (${result?.bytesWritten ?? "?"} bytes written)`;
+  if (tool === "run_shell") return `exit ${result?.exitCode}${result?.truncated ? ", output truncated" : ""}`;
+  return "ok";
 }
 
-function foldOlderSteps(transcript, foldedCount) {
-  const digest = transcript.slice(0, foldedCount).map(digestTranscriptEntry).join("\n");
-  if (digest.length <= MAX_FOLDED_DIGEST_CHARS) return digest;
-  const withheld = digest.length - MAX_FOLDED_DIGEST_CHARS;
-  return `${digest.slice(0, MAX_FOLDED_DIGEST_CHARS)}… (${withheld} more char(s) of older-step history withheld — folded to the ${MAX_FOLDED_DIGEST_CHARS}-char budget, not silently grown)`;
+function summarizeFoldedEntry(e) {
+  if (e.malformed) return `step ${e.step}: (unparseable response) — ${e.reason}`;
+  if (e.note) return `step ${e.step}: ${e.note}`;
+  return `step ${e.step}: ${e.tool}(${JSON.stringify(e.args)}) -> ${summarizeResult(e.tool, e.result)}`;
+}
+
+/** One compact user message standing in for everything folded out. */
+function buildFoldedSummaryMessage(entries) {
+  const shown = entries.length > MAX_FOLDED_SUMMARY_LINES ? entries.slice(-MAX_FOLDED_SUMMARY_LINES) : entries;
+  const withheldExtra = entries.length - shown.length;
+  const header = withheldExtra > 0
+    ? `EARLIER STEPS (folded to keep this prompt small — showing the last ${shown.length} of ${entries.length} folded step(s); ${withheldExtra} even-earlier step(s) withheld entirely):`
+    : `EARLIER STEPS (folded to keep this prompt small — ${shown.length} step(s), full detail withheld):`;
+  return { role: "user", content: `${header}\n${shown.map(summarizeFoldedEntry).join("\n")}` };
 }
 
 /**
- * The actual prompt sent to the model each step: fixed prefix (system +
- * task), a folded digest of everything older than the window (only once
- * there IS anything to fold), then the last FOLD_WINDOW_STEPS steps
- * verbatim. `messages` itself (the harness's full record) is left
- * untouched by this -- folding only changes what the model is actually
- * shown, never what gets recorded.
+ * Build what's actually SENT to the model this turn: system + task intro,
+ * always; then either every turn verbatim (a short run) or the most recent
+ * `foldK` turns verbatim plus one folded summary message standing in for
+ * everything older. `foldedTurns` pairs each transcript entry with the raw
+ * message(s) it produced, so folding never has to re-derive them.
  */
-function buildPromptMessages(messages, transcript, windowSteps) {
-  const stepsSoFar = transcript.length;
-  if (stepsSoFar <= windowSteps) return messages;
-  const foldedCount = stepsSoFar - windowSteps;
-  const foldedMsg = {
-    role: "user",
-    content: `EARLIER STEPS (${foldedCount} step(s) folded to keep this prompt small, not silently dropped):\n${foldOlderSteps(transcript, foldedCount)}`,
-  };
-  const recent = messages.slice(2 + foldedCount * 2);
-  return [messages[0], messages[1], foldedMsg, ...recent];
+function buildPromptView(system, intro, foldedTurns, foldK) {
+  if (foldedTurns.length <= foldK) {
+    return [system, intro, ...foldedTurns.flatMap((t) => t.msgs)];
+  }
+  const kept = foldedTurns.slice(-foldK);
+  const folded = foldedTurns.slice(0, -foldK);
+  return [system, intro, buildFoldedSummaryMessage(folded.map((t) => t.entry)), ...kept.flatMap((t) => t.msgs)];
 }
 
 const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
@@ -115,6 +122,144 @@ function formatObservation(toolName, result) {
 }
 
 /**
+ * Everything a react-loop run needs to carry between steps, with NO
+ * adapter/generate call baked in — this is what makes the same per-step
+ * logic drivable either by runReactLoop's own for-loop (an Ollama-style
+ * adapter driving itself) or by an external stepping API where a CLIENT
+ * (e.g. a browser running WebLLM) supplies each raw response one HTTP call
+ * at a time. Tool execution always happens here, server-side, regardless
+ * of where the model itself runs — read_file/write_file/edit_file/run_shell
+ * need real filesystem/process access a browser cannot give them.
+ *
+ * @param {object} opts
+ * @param {string} opts.taskPrompt
+ * @param {string} [opts.groundingBlock]
+ * @param {{tools: object, toolCalls: array}} opts.toolset
+ * @param {number} [opts.foldK] see buildPromptView above. Default 6.
+ */
+export function createSession({ taskPrompt, groundingBlock = null, toolset, foldK = DEFAULT_FOLD_K }) {
+  const { tools, toolCalls } = toolset;
+  const toolNames = Object.keys(tools);
+  const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description)) };
+
+  const userIntro = groundingBlock
+    ? `TASK:\n${taskPrompt}\n\nRESEARCH (surfaced before you started, folded to what fit the budget):\n${groundingBlock}`
+    : `TASK:\n${taskPrompt}`;
+  const intro = { role: "user", content: userIntro };
+
+  return {
+    tools, toolNames, toolCalls, system, intro, foldK,
+    // The full, honest, append-only record of everything said — never
+    // truncated. What's actually SENT to the model each turn is the
+    // separate, bounded `foldedTurns` view (see promptViewFor below).
+    messages: [system, intro],
+    foldedTurns: [], // { entry, msgs }[] — one per step that needed another generate() call after it
+    transcript: [],
+    finished: false,
+    summary: null,
+    step: 0,
+    malformedStreak: 0,
+    repeatFailStreak: 0,
+    lastFailedCallKey: null,
+    stuckLoopAbort: false,
+    noVerifyStreak: 0,
+    // Set once no further applyResponse call should happen: finished,
+    // stuckLoopAbort, or the malformed-response abort threshold.
+    done: false,
+  };
+}
+
+/** The bounded prompt to show the model for the session's CURRENT step. */
+export function promptViewFor(session) {
+  return buildPromptView(session.system, session.intro, session.foldedTurns, session.foldK);
+}
+
+/**
+ * Apply exactly ONE raw model response to a session: parse it, run the tool
+ * (or record why it couldn't), fold the observation into the session, and
+ * report what happened as the same {phase, ...} event shape onStep already
+ * uses — so a stepping HTTP API can disclose a client-driven run exactly
+ * like runReactLoop discloses a server-driven one, with no duplicate
+ * rendering logic anywhere downstream.
+ *
+ * Mutates `session` in place (and returns it) — sessions are meant to be
+ * held by a caller (an in-memory map, keyed by session id) across calls.
+ *
+ * @returns {{ events: object[], done: boolean }}
+ */
+export function applyResponse(session, raw) {
+  const events = [];
+  const step = session.step;
+  session.step += 1;
+
+  const assistantMsg = { role: "assistant", content: raw };
+  session.messages.push(assistantMsg);
+  events.push({ step, phase: "assistant_raw", raw });
+
+  const parsed = parseAction(raw, session.toolNames);
+  if (!parsed.ok) {
+    session.malformedStreak += 1;
+    const entry = { step, raw, malformed: true, reason: parsed.reason };
+    session.transcript.push(entry);
+    events.push({ ...entry, phase: "malformed" });
+    const nudge = `Your last response could not be parsed: ${parsed.reason}. Respond with exactly one JSON object: {"tool": "<name>", "args": {...}}.`;
+    const nudgeMsg = { role: "user", content: nudge };
+    session.messages.push(nudgeMsg);
+    session.foldedTurns.push({ entry, msgs: [assistantMsg, nudgeMsg] });
+    if (session.malformedStreak >= 3) {
+      const abortEntry = { step, note: "aborted after 3 consecutive malformed responses" };
+      session.transcript.push(abortEntry);
+      events.push({ ...abortEntry, phase: "aborted" });
+      session.done = true;
+    }
+    return { events, done: session.done };
+  }
+  session.malformedStreak = 0;
+
+  if (parsed.tool === "finish") {
+    session.finished = true;
+    session.summary = typeof parsed.args.summary === "string" ? parsed.args.summary : "(no summary given)";
+    const entry = { step, tool: "finish", args: parsed.args };
+    session.transcript.push(entry);
+    events.push({ ...entry, phase: "finish" });
+    session.done = true;
+    return { events, done: true };
+  }
+
+  events.push({ step, phase: "tool_call", tool: parsed.tool, args: parsed.args });
+  const result = session.tools[parsed.tool].run(parsed.args);
+  const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
+  const isFailure = result && typeof result === "object" && "error" in result;
+  session.repeatFailStreak = isFailure && callKey === session.lastFailedCallKey ? session.repeatFailStreak + 1 : isFailure ? 1 : 0;
+  session.lastFailedCallKey = isFailure ? callKey : null;
+  session.noVerifyStreak = parsed.tool === "run_shell" ? 0 : session.noVerifyStreak + 1;
+
+  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: session.repeatFailStreak || undefined, noVerifyStreak: session.noVerifyStreak || undefined };
+  session.transcript.push(entry);
+  events.push({ ...entry, phase: "tool_result" });
+
+  let observation = formatObservation(parsed.tool, result);
+  if (session.repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
+    observation += `\n\nSTUCK LOOP: this is the ${session.repeatFailStreak}${session.repeatFailStreak === 2 ? "nd" : session.repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
+  } else if (session.noVerifyStreak >= NO_VERIFY_NUDGE_AT && (session.noVerifyStreak - NO_VERIFY_NUDGE_AT) % NO_VERIFY_NUDGE_EVERY === 0) {
+    observation += `\n\nVERIFICATION REMINDER: that is ${session.noVerifyStreak} tool calls in a row without running anything. Reading and editing a file is not evidence it works. Call run_shell now and actually execute your code (or the task's test/check command) before making any more edits.`;
+  }
+  const observationMsg = { role: "user", content: observation };
+  session.messages.push(observationMsg);
+  session.foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
+
+  if (session.repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
+    session.stuckLoopAbort = true;
+    const abortEntry = { step, note: `aborted after ${session.repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` };
+    session.transcript.push(abortEntry);
+    events.push({ ...abortEntry, phase: "aborted" });
+    session.done = true;
+  }
+
+  return { events, done: session.done };
+}
+
+/**
  * @param {object} opts
  * @param {string} opts.taskPrompt      the task description shown to the model
  * @param {string} [opts.groundingBlock] optional surf/fold research context (see holon-coder.mjs)
@@ -123,97 +268,52 @@ function formatObservation(toolName, result) {
  * @param {number} [opts.maxSteps]
  * @param {number} [opts.maxTokensPerStep]
  * @param {number} [opts.seed]
+ * @param {number} [opts.foldK] how many recent turns are replayed to the
+ *   model verbatim before older ones fold to a one-line summary each (see
+ *   buildPromptView above). Default 6 — the same 4-7 "mouth" range
+ *   task-log.js's foldToWorkingSet documents.
+ * @param {Function} [opts.onStep] optional (transcriptEntry) => void, called
+ *   the instant each transcript entry is recorded — the live-disclosure hook.
+ *   Purely observational: it cannot alter the loop's own decisions, and a
+ *   throwing onStep is never allowed to break a real eval run, so it is
+ *   called inside a try/catch that only logs.
  */
 export async function runReactLoop({
   taskPrompt, groundingBlock = null, toolset, adapter, maxSteps = 8, maxTokensPerStep = 200, seed = 0,
+  foldK = DEFAULT_FOLD_K, onStep = null,
 }) {
-  const { tools, toolCalls } = toolset;
-  const toolNames = Object.keys(tools);
-  const system = PROTOCOL(toolNames.map((n) => tools[n].description));
+  const emit = onStep
+    ? (entry) => { try { onStep(entry); } catch (err) { console.error(`[react-loop] onStep handler threw: ${err.message}`); } }
+    : () => {};
 
-  const userIntro = groundingBlock
-    ? `TASK:\n${taskPrompt}\n\nRESEARCH (surfaced before you started, folded to what fit the budget):\n${groundingBlock}`
-    : `TASK:\n${taskPrompt}`;
+  const session = createSession({ taskPrompt, groundingBlock, toolset, foldK });
 
-  const messages = [
-    { role: "system", content: system },
-    { role: "user", content: userIntro },
-  ];
-
-  const transcript = [];
-  let finished = false;
-  let summary = null;
   let step = 0;
-  let malformedStreak = 0;
-  let repeatFailStreak = 0;
-  let lastFailedCallKey = null;
-  let stuckLoopAbort = false;
-  let noVerifyStreak = 0;
-
   for (; step < maxSteps; step++) {
-    const promptMessages = buildPromptMessages(messages, transcript, FOLD_WINDOW_STEPS);
-    const raw = await adapter.generate(promptMessages, { maxTokens: maxTokensPerStep, seed: seed + step });
-    messages.push({ role: "assistant", content: raw });
-
-    const parsed = parseAction(raw, toolNames);
-    if (!parsed.ok) {
-      malformedStreak += 1;
-      transcript.push({ step, raw, malformed: true, reason: parsed.reason });
-      const nudge = `Your last response could not be parsed: ${parsed.reason}. Respond with exactly one JSON object: {"tool": "<name>", "args": {...}}.`;
-      messages.push({ role: "user", content: nudge });
-      if (malformedStreak >= 3) {
-        transcript.push({ step, note: "aborted after 3 consecutive malformed responses" });
-        break;
-      }
-      continue;
+    const promptView = promptViewFor(session);
+    if (session.foldedTurns.length > foldK) {
+      emit({ step, phase: "folded", keptTurns: Math.min(session.foldedTurns.length, foldK), foldedTurns: session.foldedTurns.length - foldK });
     }
-    malformedStreak = 0;
-
-    if (parsed.tool === "finish") {
-      finished = true;
-      summary = typeof parsed.args.summary === "string" ? parsed.args.summary : "(no summary given)";
-      transcript.push({ step, tool: "finish", args: parsed.args });
-      break;
-    }
-
-    const result = tools[parsed.tool].run(parsed.args);
-    const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
-    const isFailure = result && typeof result === "object" && "error" in result;
-    repeatFailStreak = isFailure && callKey === lastFailedCallKey ? repeatFailStreak + 1 : isFailure ? 1 : 0;
-    lastFailedCallKey = isFailure ? callKey : null;
-
-    noVerifyStreak = parsed.tool === "run_shell" ? 0 : noVerifyStreak + 1;
-
-    transcript.push({ step, tool: parsed.tool, args: parsed.args, result, repeatFailStreak: repeatFailStreak || undefined, noVerifyStreak: noVerifyStreak || undefined });
-
-    let observation = formatObservation(parsed.tool, result);
-    if (repeatFailStreak >= STUCK_LOOP_NUDGE_AT) {
-      observation += `\n\nSTUCK LOOP: this is the ${repeatFailStreak}${repeatFailStreak === 2 ? "nd" : repeatFailStreak === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has failed the SAME way every time. Repeating it again will fail again. Stop: re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say.`;
-    } else if (noVerifyStreak >= NO_VERIFY_NUDGE_AT && (noVerifyStreak - NO_VERIFY_NUDGE_AT) % NO_VERIFY_NUDGE_EVERY === 0) {
-      observation += `\n\nVERIFICATION REMINDER: that is ${noVerifyStreak} tool calls in a row without running anything. Reading and editing a file is not evidence it works. Call run_shell now and actually execute your code (or the task's test/check command) before making any more edits.`;
-    }
-    messages.push({ role: "user", content: observation });
-
-    if (repeatFailStreak >= STUCK_LOOP_ABORT_AT) {
-      stuckLoopAbort = true;
-      transcript.push({ step, note: `aborted after ${repeatFailStreak} consecutive identical failing ${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` });
-      break;
-    }
+    emit({ step, phase: "generating" });
+    const raw = await adapter.generate(promptView, { maxTokens: maxTokensPerStep, seed: seed + step });
+    const { events, done } = applyResponse(session, raw);
+    for (const event of events) emit(event);
+    if (done) break;
   }
 
   return {
-    finished,
-    summary,
-    steps: step + (finished || transcript.at(-1)?.note ? 1 : 0),
-    stepsRun: transcript.length,
-    hitStepCap: !finished && !stuckLoopAbort && step >= maxSteps,
+    finished: session.finished,
+    summary: session.summary,
+    steps: step + (session.finished || session.transcript.at(-1)?.note ? 1 : 0),
+    stepsRun: session.transcript.length,
+    hitStepCap: !session.finished && !session.stuckLoopAbort && step >= maxSteps,
     // A distinct honest reason from hitStepCap: the loop stopped itself
     // early because it detected it was not converging, not because it ran
     // out of budget -- these must not read alike (same discipline
     // task-log.js's `closed` vs `halted_by` distinguishes).
-    stuckLoopAbort,
-    transcript,
-    toolCalls: [...toolCalls],
-    messages,
+    stuckLoopAbort: session.stuckLoopAbort,
+    transcript: session.transcript,
+    toolCalls: [...session.toolCalls],
+    messages: session.messages,
   };
 }
