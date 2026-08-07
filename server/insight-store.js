@@ -343,6 +343,22 @@ function extractYearPrefix(line) {
   return { year: null, rest: line };
 }
 
+// Strips a TRAILING "by <year>" clause from an already-split VALUE ("500 by
+// 2030" -> "500", year 2030) — the mirror image of extractYearPrefix's
+// leading clause, and at least as common in practice: found on real sample
+// data that "Affordable housing units: 500 by 2030" (the value carrying its
+// own year) is a far more natural way to write a plan goal than "By 2030:
+// Affordable housing units = 500" (the line carrying it). Without this,
+// "500 by 2030" fails parseValue's number pattern outright (the trailing
+// digits aren't valid unit text) and silently becomes type "text" — which
+// then makes a goal-vs-current delta report "type-mismatch" even though
+// both sides are plainly numbers.
+function extractTrailingYear(value) {
+  const m = value.match(/^(.*\S)\s+by\s+(?:the\s+year\s+)?(\d{4})\.?$/i);
+  if (m) return { value: m[1], year: parseInt(m[2], 10) };
+  return { value, year: null };
+}
+
 function splitDelimitedRow(line) {
   if (/^\|.*\|$/.test(line)) {
     return line.split("|").slice(1, -1).map((c) => c.trim());
@@ -387,16 +403,28 @@ export function extractCandidateFacts(text, { defaultKind = null } = {}) {
 
   const pushKV = (rawKey, rawValue, kind, quote, lineNo, asOfYear = null) => {
     const key = String(rawKey || "").trim();
-    const value = String(rawValue || "").trim();
+    let value = String(rawValue || "").trim();
     if (!key || !value) return;
     if (key.length > 100 || value.length > 200) return;
+
+    // A leading year (extractYearPrefix, applied by the caller before this
+    // point) always wins if present; otherwise check the value itself for a
+    // trailing "by <year>" clause — see extractTrailingYear's header. Either
+    // way the stored VALUE is the clean number/text, never the raw line —
+    // `quote` below still carries the full original line for the audit trail.
+    let finalAsOfYear = asOfYear;
+    if (!finalAsOfYear) {
+      const trailing = extractTrailingYear(value);
+      if (trailing.year) { value = trailing.value; finalAsOfYear = trailing.year; }
+    }
+
     // `kind` is whatever structural signal is in force (a header, a table
     // column, a "By <year>" prefix, or the document-level default the
     // caller chose) — trusted as-is. When none of those set anything, kind
     // is an honest null rather than a guess from the line's own words —
     // see this section's header for why a sentence-level fallback was
     // removed rather than kept as a softer "advisory" signal.
-    facts.push({ rawKey: key, rawValue: value, kind: kind || null, quote, line: lineNo, asOfYear });
+    facts.push({ rawKey: key, rawValue: value, kind: kind || null, quote, line: lineNo, asOfYear: finalAsOfYear });
   };
 
   lines.forEach((raw, i) => {

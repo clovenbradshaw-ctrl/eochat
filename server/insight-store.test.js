@@ -148,7 +148,8 @@ test("extractCandidateFacts pulls key:value lines and tags kind from section hea
   assert.equal(facts.length, 2);
   assert.equal(facts[0].kind, "goal");
   assert.equal(facts[0].rawKey, "Affordable housing units");
-  assert.equal(facts[0].rawValue, "500 by 2030");
+  assert.equal(facts[0].rawValue, "500"); // trailing "by 2030" is stripped into asOfYear, not left in the value
+  assert.equal(facts[0].asOfYear, 2030);
   assert.equal(facts[1].kind, "current_state");
   assert.equal(facts[1].rawValue, "210");
 });
@@ -159,6 +160,25 @@ test("extractCandidateFacts honors a leading 'By <year>' / '(<year>)' prefix as 
   assert.equal(facts[0].asOfYear, 2030);
   assert.equal(facts[0].rawKey, "Affordable housing units");
   assert.equal(facts[0].rawValue, "500");
+});
+
+test("extractCandidateFacts strips a TRAILING 'by <year>' clause from the value — the far more natural phrasing real plan documents actually use", () => {
+  // Found on real sample data: without this, parseValue("500 by 2030") is
+  // type 'text' (the trailing digits aren't valid unit text), which silently
+  // makes a goal-vs-current delta report 'type-mismatch' against a clean
+  // current-state number, even though both sides are plainly numeric.
+  const facts = extractCandidateFacts("Affordable housing units: 500 by 2030");
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].rawValue, "500");
+  assert.equal(facts[0].asOfYear, 2030);
+  assert.equal(parseValue(facts[0].rawValue).type, "number");
+});
+
+test("extractCandidateFacts does not strip a trailing year from a value that already carries a real unit before it", () => {
+  const facts = extractCandidateFacts("Stormwater capacity: 12M gallons by 2028");
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].rawValue, "12M gallons");
+  assert.equal(facts[0].asOfYear, 2028);
 });
 
 test("extractCandidateFacts reads a markdown table using header names to pick key/value columns", () => {
