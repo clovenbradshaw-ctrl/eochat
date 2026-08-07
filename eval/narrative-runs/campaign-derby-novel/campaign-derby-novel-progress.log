@@ -1,22 +1,22 @@
 === campaign/derby novel run started (hand-authored chapters, no real model backend available) ===
-[15:49:34] pre-flight mechanical check: clean, 0 flags
-[15:49:34] scene 1 (open) — calling model...
-[15:49:34] scene 1 done — 945 words in 0s
-[15:49:34]   new character surfaced: Sunlight Desk — registered so later scenes see it
-[15:49:34]   new character surfaced: Kentucky — registered so later scenes see it
-[15:49:34]   new character surfaced: Derby — registered so later scenes see it
-[15:49:34]   new character surfaced: Priya — registered so later scenes see it
-[15:49:34]   new character surfaced: Post — registered so later scenes see it
-[15:49:34]   new character surfaced: Bluegrass Forward Fund — registered so later scenes see it
-[15:49:34]   new character surfaced: Colson Merritt — registered so later scenes see it
-[15:49:34]   new character surfaced: Blue Larkspur Farm — registered so later scenes see it
-[15:49:34] scene 2 (introduce) — calling model...
-[15:49:34] scene 2 done — 907 words in 0s
-[15:49:34]   new character surfaced: Merritt — registered so later scenes see it
-[15:49:34]   new character surfaced: Paper Trail — registered so later scenes see it
-[15:49:34]   new character surfaced: Ledger's Daughter — registered so later scenes see it
-[15:49:34] scene 3 (introduce) — calling model...
-[15:49:34] scene 3 done — 759 words in 0s
-[15:49:34]   new character surfaced: Wynn — registered so later scenes see it
-[15:49:34]   new character surfaced: Halloran — registered so later scenes see it
-[15:49:34] done — wrote campaign-derby-novel.md, campaign-derby-novel-report.md
+[15:54:14] pre-flight mechanical check: clean, 0 flags
+[15:54:14] scene 1 (open) — calling model...
+[15:54:14] scene 1 done — 945 words in 0s
+[15:54:14]   new character surfaced: Sunlight Desk — registered so later scenes see it
+[15:54:14]   new character surfaced: Kentucky — registered so later scenes see it
+[15:54:14]   new character surfaced: Derby — registered so later scenes see it
+[15:54:14]   new character surfaced: Priya — registered so later scenes see it
+[15:54:14]   new character surfaced: Post — registered so later scenes see it
+[15:54:14]   new character surfaced: Bluegrass Forward Fund — registered so later scenes see it
+[15:54:14]   new character surfaced: Colson Merritt — registered so later scenes see it
+[15:54:14]   new character surfaced: Blue Larkspur Farm — registered so later scenes see it
+[15:54:14] scene 2 (introduce) — calling model...
+[15:54:14] scene 2 done — 907 words in 0s
+[15:54:14]   new character surfaced: Merritt — registered so later scenes see it
+[15:54:14]   new character surfaced: Paper Trail — registered so later scenes see it
+[15:54:14]   new character surfaced: Ledger's Daughter — registered so later scenes see it
+[15:54:14] scene 3 (introduce) — calling model...
+[15:54:14] scene 3 done — 759 words in 0s
+[15:54:14]   new character surfaced: Wynn — registered so later scenes see it
+[15:54:14]   new character surfaced: Halloran — registered so later scenes see it
+[15:54:14] done — wrote campaign-derby-novel.md, campaign-derby-novel-report.md

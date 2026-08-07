@@ -109,7 +109,14 @@ const TEMPERATURE = 0.75;
 // Measured: 340 cut a scene off mid-sentence ("a journey into the unknown
 // beckoned, one that only she") on a 220-260 word target — llama3.2 runs
 // verbose enough that 340 tokens for ~250 words left no closing headroom.
-const SCENE_TOKENS = 420;
+// DEFAULT only — a world with a bigger targetWords range (chapter-scale
+// prose, not LIGHTHOUSE_WORLD's 220-260-word scenes) needs a bigger budget
+// or every real scene truncates mid-sentence regardless of what the prompt
+// asks for. Declared as an overridable option on writeNarrative (below)
+// rather than left a silent constant a bigger world would collide with —
+// the same "declared budget, not a buried constant" discipline
+// foldToWorkingSet's own `k` argument already models.
+const DEFAULT_SCENE_TOKENS = 420;
 const TAIL_WORDS = 80;
 const WORKING_SET_K = 7; // task-log.js's own declared default; named here so it's visible as a choice
 const MAX_SCENES_GUARD = 40; // a runaway guard, never the intended stopping condition — see haltedBy
@@ -644,7 +651,7 @@ function extractNewNames(text, known) {
  * declared anywhere in this function — `nextMove` decides one step at a
  * time from the log's own state, and the loop stops when it says `close`.
  */
-export async function writeNarrative(world, { model = "llama3.2:latest", seed = 20260801, onProgress = null, maxScenes = MAX_SCENES_GUARD } = {}) {
+export async function writeNarrative(world, { model = "llama3.2:latest", seed = 20260801, onProgress = null, maxScenes = MAX_SCENES_GUARD, sceneTokens = DEFAULT_SCENE_TOKENS } = {}) {
   validateWorld(world);
   const progress = onProgress || ((msg) => console.log(`[${new Date().toISOString().slice(11, 19)}] ${msg}`));
   const system = buildSystem(world);
@@ -671,7 +678,7 @@ export async function writeNarrative(world, { model = "llama3.2:latest", seed = 
 
     progress(`scene ${sceneCount} (${move.kind}${move.commitmentId ? ":" + move.commitmentId : ""}) — calling model...`);
     const t0 = Date.now();
-    let text = await callModel(model, [{ role: "system", content: system }, { role: "user", content: prompt }], SCENE_TOKENS, { seed: seed + sceneCount });
+    let text = await callModel(model, [{ role: "system", content: system }, { role: "user", content: prompt }], sceneTokens, { seed: seed + sceneCount });
     progress(`scene ${sceneCount} done — ${wc(text)} words in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 
     // Trial checks use a COPY of lockedNumbers — checkNumericLocks locks the
@@ -688,7 +695,7 @@ export async function writeNarrative(world, { model = "llama3.2:latest", seed = 
       text = await callModel(
         model,
         [{ role: "system", content: system }, { role: "user", content: correctionPrompt }],
-        SCENE_TOKENS,
+        sceneTokens,
         { seed: seed + sceneCount * 100 + revisionAttempts },
       );
       flags = [...checkContinuity(world, text), ...checkNumericLocks(world, text, { ...lockedNumbers })];

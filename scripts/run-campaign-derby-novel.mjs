@@ -256,4 +256,6 @@ async function main() {
   onProgress(`done — wrote ${namePrefix}.md, ${namePrefix}-report.md`);
 }
 
-main();
+// Guarded so run-campaign-derby-novel-real.mjs can import CAMPAIGN_DERBY_WORLD
+// without also triggering this file's own stubbed fake run as a side effect.
+if (import.meta.url === `file://${process.argv[1]}`) main();
