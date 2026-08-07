@@ -12,6 +12,8 @@ const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent worki
 
 ${toolDescriptions.map((d) => `- ${d}`).join("\n")}
 
+ENVIRONMENT: this sandbox has Node.js built-in modules only — no npm packages are installed and there is no network access to install any. A require()/import of anything other than a Node.js built-in (fs, path, etc.) will fail. Write dependency-free code.
+
 RULES:
 - Respond with EXACTLY ONE JSON object per turn: {"tool": "<name>", "args": {...}}. Nothing else — no prose, no markdown fences.
 - Use run_shell to actually RUN your code / the test command and READ the output before deciding you are done. Do not guess that something works.
