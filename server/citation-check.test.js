@@ -178,6 +178,25 @@ test("a case change past the FIRST character is still caught, not swallowed by t
   assert.equal(r.unverified.length, 1);
 });
 
+test("a verbatim source prefix truncated to a display budget is verified, not flagged", () => {
+  // The mechanical citator splices the source's own bytes, cut to a display
+  // budget with an ellipsis. The "…" is not part of the source, so exact-match
+  // would fail; the bytes before it ARE the source's, so this must pass.
+  const source = "I am by birth a Genevese, and my family is one of the most distinguished of that republic.";
+  const table = [{ index: 1, source_id: "s", text: source }];
+  const truncated = source.slice(0, 30) + "…";
+  const r = verifyQuotedFidelity(`He claims "${truncated}" [1].`, table);
+  assert.equal(r.verified, 1);
+  assert.equal(r.unverified.length, 0);
+});
+
+test("a fabricated quote ending in an ellipsis still fails when its prefix is NOT in the source", () => {
+  const table = [{ index: 1, source_id: "s", text: "I am by birth a Genevese, and my family is one of the most distinguished." }];
+  const r = verifyQuotedFidelity('He claims "Born in the city of Ingolstadt, he studied medicine…" [1].', table);
+  assert.equal(r.verified, 0);
+  assert.equal(r.unverified.length, 1);
+});
+
 test("a short quoted fragment is below the checked threshold and reported as such", () => {
   const r = verifyQuotedFidelity('He said "no" [1].', TABLE);
   assert.equal(r.quotesChecked, 0);

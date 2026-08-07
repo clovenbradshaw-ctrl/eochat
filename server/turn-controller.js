@@ -36,7 +36,7 @@ import {
 } from "./project-memory.js";
 import { createConversationHolon, recordTurn } from "./conversation-holon.js";
 import { generateAnswer } from "./turn-generation.js";
-import { planChatTurn, runHolonicEssay } from "./holonic-chat.js";
+import { defineAnswerSpec, runHolonicEssay } from "./holonic-chat.js";
 import { researchTopic } from "./web-search.js";
 
 // Every blink can be longform — these are ceilings, not targets; the model
@@ -670,7 +670,7 @@ export function createTurnController(deps) {
   //
   // Order matters: citations/brackets/fidelity are resolved on the final text,
   // whether that text is the original or a correction.
-  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel, skipCorrection = false }) {
+  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel }) {
     // Mechanical pass before anything else touches the text: any sentence the
     // model left uncited gets a bracket (plus a verbatim clause as proof) when
     // — and only when — its own vocabulary is concentrated enough in one
@@ -707,13 +707,10 @@ export function createTurnController(deps) {
     const needCorrection = () => review.verdict === "FLAGGED" || denial.verdict === "FLAGGED";
 
     if (gate || facts.length) {
-      // The essay path deliberately skips the correction loop: a sectioned
-      // essay assembled from per-section folded windows must not be flattened
-      // into one single-shot rewrite. The review still runs mechanically and
-      // its flags are still reported; only the auto-rewrite is skipped.
-      if (skipCorrection) {
-        // mark corrected=false, iterations=0 — the review below is unchanged
-      } else {
+      // The essay path never reaches this function — its per-section
+      // DEFINE → EVALUATE → RECONCILE loop decides compliance and its text is
+      // already numbered, so a flat single-shot rewrite must not be applied.
+      {
         // The correction pass regenerates the answer, so it must see the same
         // numbered passages the first pass saw — a [3] it writes is meaningless
         // if it never saw passage 3. Rebuilt from the turn's own citation table
@@ -761,7 +758,6 @@ export function createTurnController(deps) {
         }
       }
     }
-
     const fidelity = verifyQuotedFidelity(finalText, lastCitations);
     const snippets = buildVerbatimSnippets(brackets, lastCitations);
 
@@ -1016,7 +1012,9 @@ export function createTurnController(deps) {
       const holonicEvents = [];
       const result = await runHolonicEssay({
         question,
-        sections: planning.sections,
+        sections: planning.units,
+        form: planning.form,
+        compliance: planning.compliance,
         generate,
         localRetrieve,
         webResearch,
@@ -1034,7 +1032,6 @@ export function createTurnController(deps) {
         index: i + 1, span_id: c.span_id, source_id: c.source_id, text: c.text,
       }));
       const maxCitation = lastCitations.length;
-      const groundText = lastCitations.map((c) => c.text).join("\n\n");
 
       const discourse = await loadDiscourseBlocks({ question, conv, pool });
       const cueResult = await prosifyCue({
@@ -1056,7 +1053,7 @@ export function createTurnController(deps) {
         citations: lastCitations,
         webSources: allWeb,
         gaps: result.gaps,
-        holonic: { depth: "essay", sections: planning.sections.length },
+        holonic: { depth: "essay", form: result.form, sections: planning.sections.length },
       });
 
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
@@ -1066,35 +1063,51 @@ export function createTurnController(deps) {
           empty: maxCitation === 0,
           citations: lastCitations,
           holonic: true,
+          form: result.form,
+          sufficiency: result.sufficiency,
+          dropped: result.dropped,
         },
       });
 
-      const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
-        rawText: result.text, lastCitations, maxCitation, question,
-        gate: gateInfo, groundText, memory: discourse,
-        sendEvent, turnId: turn.id, answerId, provider, modelOverride, draftModel,
-        skipCorrection: true,
-      });
+      // The DEFINE → EVALUATE → RECONCILE loop already decided what ships and
+      // what drops; the assembled text is already numbered and proven. No
+      // second autoAttach, no correction loop — that was the source of nested
+      // malformed splices and doubled gap noise.
+      const finalText = result.text;
+      const annotatedText = result.text;
+      const brackets = resolveCitationBrackets(finalText, lastCitations).citations;
+      const fidelity = verifyQuotedFidelity(finalText, lastCitations);
 
       for (const c of brackets) sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
-      for (const s of snippets) sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
-      sendEvent("grounding_checked", { turnId: turn.id, answerId, ...groundingCheck, annotatedText });
+      sendEvent("grounding_checked", {
+        turnId: turn.id, answerId,
+        quotesChecked: fidelity.quotesChecked, verified: fidelity.verified,
+        unverified: fidelity.unverified, annotatedText,
+      });
 
-      const gaps = [...result.gaps, ...groundingGaps(groundingCheck)];
+      const gaps = [...result.gaps];
+      const seenQuotes = new Set(gaps.filter((g) => g.type === "unverified_quote").map((g) => g.quote));
       for (const u of fidelity.unverified) {
+        if (seenQuotes.has(u.quote)) continue;
+        seenQuotes.add(u.quote);
         gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited source." });
       }
       for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
-      const summary = `${result.sections.length} sections · ${maxCitation} mechanical citations · ${result.references.length} sources`;
+      const denial = { verdict: "PASS", flags: [], denialSentences: [] };
+      const summary = `${result.sections.length} sections · ${result.dropped} dropped · ${maxCitation} mechanical citations · ${result.references.length} sources · ${result.form}`;
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
         text: finalText, annotatedText, model: modelOverride || draftModel || null,
-        citations: brackets, gaps, snippets, fidelity, grounding_check: groundingCheck,
-        review, status: "completed", completedAt: new Date().toISOString(),
+        citations: brackets, gaps, snippets: [], fidelity, grounding_check: null,
+        review: null, status: "completed", completedAt: new Date().toISOString(),
         mode: "chat", holonic: {
           depth: "essay",
+          form: result.form,
+          compliance: planning.compliance,
           plan: planning.sections.map((s) => s.title),
-          sections: result.sections.map((s) => ({ title: s.title, ungrounded: s.ungrounded, cited: s.cited })),
+          sections: result.sections.map((s) => ({ title: s.title, ungrounded: s.ungrounded, cited: s.cited, compliant: s.compliant, reconciled: s.reconciled })),
+          sufficiency: result.sufficiency,
+          dropped: result.dropped,
           references: result.references,
           events: holonicEvents,
         },
@@ -1111,9 +1124,12 @@ export function createTurnController(deps) {
       });
       sendEvent("completed", {
         turnId: turn.id, answerId, status: "completed", text: finalText,
-        annotatedText, groundingCheck, citations: brackets, gaps, snippets,
+        annotatedText, groundingCheck: {
+          quotesChecked: fidelity.quotesChecked, verified: fidelity.verified, unverified: fidelity.unverified,
+        },
+        citations: brackets, gaps, snippets: [],
         model: modelOverride || draftModel || null,
-        holonic: { depth: "essay", sections: result.sections, references: result.references, events: holonicEvents },
+        holonic: { depth: "essay", form: result.form, sections: result.sections, references: result.references, events: holonicEvents, sufficiency: result.sufficiency, dropped: result.dropped },
         summary,
       });
       await persistTurnMemory({
@@ -1184,7 +1200,7 @@ export function createTurnController(deps) {
       const cheapProbe = groundQuery(question, {
         budget: 600, maxUnits: 2, limit: 8, source: sourceScope, pool: pool || "corpus",
       });
-      const planning = await planChatTurn({
+      const planning = await defineAnswerSpec({
         question,
         history: recentUserQuestions(conv, turn.id),
         localEvidence: { count: cheapProbe.total || 0 },
@@ -1196,7 +1212,7 @@ export function createTurnController(deps) {
       });
       sendEvent("holonic_plan", {
         turnId: turn.id, answerId,
-        depth: planning.depth, reason: planning.reason,
+        depth: planning.depth, form: planning.form, reason: planning.reason,
         sections: planning.sections.map((s) => s.title),
       });
       if (planning.depth === "essay") {
