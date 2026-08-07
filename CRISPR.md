@@ -269,7 +269,84 @@ expensive way once the corpus-search stage is real.
   only ever a *discovery* surface and Software Heritage is the thing actually
   cited in the ledger.
 
-## 6. Recommended first step
+## 6. Where this sits against the market — not just the research literature
+
+§2 checked this against research: CBR, Krueger, clone detection, Aroma,
+Software Heritage, Voyager, ADAS. That is the right prior art for the
+*mechanism*. It says nothing about whether the mechanism is what the market
+already does when the exact same problem — "the user described a whole app,
+don't hand-code it from zero" — is a live commercial category today. Checked
+directly, the answer sharpens the recommendation rather than confirming it.
+
+- **v0.app, Bolt.new, and Lovable — the current "describe an app, get an
+  app" market leaders — do not search a live code corpus and adapt what
+  they find.** They generate fresh code in a curated, consistent idiom
+  (v0.app specifically: shadcn/ui + Tailwind + Next.js) plus a small number
+  of hand-authored starter templates (Bolt ships curated templates for
+  landing pages, SaaS, dashboards). None of the public descriptions of any
+  of them mention retrieving and adapting an arbitrary GitHub repository at
+  generation time. That omission from three well-funded, heavily-used
+  products is itself evidence: a curated in-house library is the model the
+  market converged on, not live web-scale retrieval — most plausibly
+  because it sidesteps exactly the license/attribution exposure §3 already
+  treats as a hard gate, and gives consistent quality a scavenged clone
+  repo can't promise.
+- **Wix ADI is the closest real precedent for archetype-level "recognize
+  the kind, pick the template"** — ask a few questions about the business,
+  select a matching template, customize it. Worth noting plainly: it has
+  already been discontinued, folded into "Wix AI Website Builder." Even the
+  product that pioneered pure template-selection judged it insufficient on
+  its own and moved toward more generative methods.
+- **Retrieval-augmented code generation is real, validated research ground
+  — at a narrower grain than a whole app.** RepoCoder and the broader RACG
+  survey retrieve similar code from *within the same repository* to
+  complete the current file; this supports §4's component/utility-grain
+  stages (3–4), not `searchAppArchetype`'s whole-app grain, which sits
+  outside what this literature actually tests.
+- **Screenshot-to-code is a different, competing paradigm for "make it
+  look like Reddit," not a variant of this one.** Instead of inducing a
+  kind from a text description and searching for matching source, it
+  perceives the target's actual appearance (a screenshot or a URL) and
+  generates matching code via a vision model — no kind induction, no
+  search, no provenance question at all, because nothing is reused, only
+  observed. If "looks like Reddit" is meant visually rather than
+  functionally, this sidesteps CRISPR's whole mechanism and may simply be
+  the more direct tool for that framing. eoreader already has perceiver
+  architecture for text, audio, and video (`perceiver/text`,
+  `perceiver/audio`, `perceiver/video`, per `content-index.js`'s
+  `ENTITY_NAMES`); a live-webpage/screenshot perceiver would be a new, real,
+  currently-missing organ — arguably a more honest unlock for the literal
+  "looks like X" framing than an archetype text-search is.
+- **Yeoman and Cookiecutter confirm "organs as generators" is not a new
+  idea — it is a roughly 15-year-old, now-declining product category.** A
+  Yeoman generator already is a named, reusable unit that produces a
+  standardized thing, hand-authored and hand-registered exactly the way
+  `content-index.js`'s `ENTITY_NAMES` is today. The ecosystem's own
+  retrospective is blunt about where that leads unmaintained: "Yeoman and
+  Cookiecutter are dead; long live Copier." A kind registry that goes stale
+  without upkeep is not a hypothetical risk unique to this proposal — it is
+  the documented fate of the last two serious attempts at exactly this
+  idea.
+
+**The honest verdict:** almost every individual mechanism this document
+proposes already exists somewhere, and where it competes directly with a
+mature product (app generation) or a mature research area (repo-level
+retrieval), that prior art mostly argues *against* the piece of CRISPR built
+most recently — live external search as the primary mechanism — and
+*toward* the piece designed first and tested least: an internal, growing,
+license-clean organ registry (the Retain step, §4 stage 10 — the same
+shape as Voyager's skill library and Yeoman's generator ecosystem, minus
+their staleness problem, if kind induction keeps it self-maintaining
+instead of hand-curated). What genuinely does not already exist elsewhere,
+checked against all of the above: automatic kind induction (no product
+surveyed here asks a *model* to recognize the archetype — Wix ADI asks the
+*user*), a checked coordinate space for what got matched (the cube), and
+mandatory per-reuse provenance enforced as a law rather than left to each
+generator author's discretion. That is the actual, narrower claim this
+proposal can make — not "search GitHub before you code," which the market
+has already quietly tried adjacent versions of and moved past.
+
+## 7. Recommended first step
 
 Don't build the cube/kind/ledger machinery first. Wire steps 3–4 only (local
 registry, then package registry) in front of eoCode's existing hand-coding
@@ -278,6 +355,17 @@ sessions — how often "search first" would have skipped hand-coding entirely.
 That's the same real-material-before-theory discipline
 `ORGAN-STACK-REAL-DEPLOYMENT.md` already insists on for the engine; there's
 no reason CRISPR should get a pass on it just because it's new.
+
+**Revised after §6.** The step above was built and validated
+(`eval/agent/crispr-search.mjs`, tested live against `qwen2.5-coder:1.5b` on
+a real task) before §6 was written. Given what §6 found, the next
+investment should not be expanding external search further (more corpus
+stages, more registries) — it should be strengthening stage 10, Retain:
+turning every verified splice and every genuine hand-coded solution into a
+permanent, license-clean entry in eoCode's own organ registry, so external
+search stays a cold-start fallback for a kind eoCode has never seen, not
+the steady-state mechanism. That is the shape every product and research
+precedent in §6 that actually works at scale converged on independently.
 
 ## Sources
 
@@ -289,3 +377,9 @@ no reason CRISPR should get a pass on it just because it's new.
 - [Doe v. GitHub, Microsoft, and OpenAI — Wikipedia](https://en.wikipedia.org/wiki/Doe_v._GitHub,_Microsoft,_and_OpenAI)
 - [GitHub Copilot litigation case updates — Joseph Saveri Law Firm](https://githubcopilotlitigation.com/case-updates.html)
 - [SoftWare Heritage persistent IDentifiers (SWHID)](https://docs.softwareheritage.org/devel/swh-model/persistent-identifiers.html)
+- [Lovable vs Bolt vs v0: AI app builder comparison, 2026](https://particula.tech/blog/lovable-vs-bolt-vs-v0-ai-app-builders)
+- [The evolution from Wix ADI to Wix Harmony](https://www.wix.com/blog/wix-artificial-design-intelligence)
+- [Retrieval-Augmented Code Generation: A Survey with Focus on Repository-Level Approaches (arXiv:2510.04905)](https://arxiv.org/abs/2510.04905)
+- [RepoCoder: Repository-Level Code Completion Through Iterative Retrieval and Generation](https://openreview.net/forum?id=q09vTY1Cqh)
+- [screenshot-to-code (open source)](https://github.com/abi/screenshot-to-code)
+- [Yeoman and Cookiecutter are dead; long live Copier!](https://recallstack.gitlab.io/en/2020/04/18/yeoman-and-cookiecutter-are-dead-long-live-copier/)
