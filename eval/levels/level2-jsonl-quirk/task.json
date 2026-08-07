@@ -1,0 +1,10 @@
+{
+  "id": "level2-jsonl-quirk",
+  "level": 2,
+  "title": "Generate, run, self-correct: an environment quirk in the data format",
+  "seedDir": "seed",
+  "maxSteps": 8,
+  "maxTokensPerStep": 300,
+  "seed": 2002,
+  "taskPrompt": "Write a Node.js script named summarize.js in the current directory. It reads a file path from process.argv[2] containing JSON data — each record has an \"amount\" field (a number) — and prints the sum of every record's \"amount\" field to stdout as a single number (console.log(sum)), nothing else printed. There is a file check.mjs already in this directory (do not modify it) that verifies your solution against the real data format — run `node check.mjs` and make sure it prints \"CHECK: PASS\" before calling finish. If it fails, read the error output carefully and fix summarize.js."
+}

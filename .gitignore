@@ -12,3 +12,7 @@ server/web-history.jsonl
 .DS_Store
 sonata.mid
 *.mid
+
+# Scratch working directories the agentic eval creates and destroys per run —
+# not results (those are eval/results/), just throwaway sandbox state.
+eval/.sandbox/
