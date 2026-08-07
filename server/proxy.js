@@ -3025,6 +3025,18 @@ const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // Private Network Access: this proxy is only ever reached from a browser
+  // as "public page (GitHub Pages) fetches a local/private target" — the
+  // exact shape PNA's preflight permission check exists to gate. Without
+  // this header, Chromium-family browsers (Chrome, Brave, Edge...) silently
+  // block any *preflighted* cross-origin request here — POSTs with a JSON
+  // body, like eoCode's /api/eocode/run, but not plain GETs like /health,
+  // which never preflight and so never hit this check. That asymmetry (GETs
+  // fine, JSON POSTs blocked) is what makes this easy to miss: the server
+  // already trusts any Origin (see Allow-Origin: * above), so granting the
+  // private-network preflight too is consistent with the trust this proxy
+  // already extends, not a new boundary.
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
 
   if (req.method === "OPTIONS") { res.writeHead(200); res.end(); return; }
 

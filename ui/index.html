@@ -3233,7 +3233,10 @@ class Component extends DCLogic {
         body: JSON.stringify({ prompt, workspace, model }),
         signal: this._eoCodeAbort.signal,
       });
-      if (!res.ok) throw new Error(`eoCode endpoint returned ${res.status}`);
+      if (!res.ok) {
+        const bodyText = await res.text().catch(() => '');
+        throw new Error(`eoCode endpoint returned ${res.status}${bodyText ? `: ${bodyText.slice(0, 300)}` : ''}`);
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
