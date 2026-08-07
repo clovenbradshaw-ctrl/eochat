@@ -80,6 +80,44 @@ Model: `(dry-run, no model)` — 9/9 tasks passed.
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:2.7s
 
 
+## 2026-08-07T14-03-46-947Z__qwen2.5-coder_0.5b
+
+Model: `qwen2.5-coder:0.5b` — 0/4 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:5 wall:24.4s
+- **level1-fizzbuzz** (Level 1) — FAIL — finished:true decomposed:false iterationsToGreen:2 tools:4 wall:13.1s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:8 wall:25.1s
+- **level2-jsonl-quirk** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:7 tools:8 wall:78.2s
+
+
+## 2026-08-07T14-03-01-508Z__dry-run
+
+Model: `(dry-run, no model)` — 8/8 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:0.1s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.2s
+- **level2-jsonl-quirk** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:2.5s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:3.0s
+
+### Level 5
+- **level5-constitution-rename-ask** (Level 5) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:6 wall:2.7s
+
+### Level 6
+- **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:5.0s
+
+
 ## 2026-08-07T14-00-15-293Z__dry-run
 
 Model: `(dry-run, no model)` — 9/9 tasks passed.
@@ -156,6 +194,19 @@ Model: `(dry-run, no model)` — 9/9 tasks passed.
 
 ### Level 6
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:2.7s
+
+
+## 2026-08-07T13-53-52-118Z__qwen2.5-coder_0.5b
+
+Model: `qwen2.5-coder:0.5b` — 0/4 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:5 wall:20.5s
+- **level1-fizzbuzz** (Level 1) — FAIL — finished:false decomposed:false iterationsToGreen:2 tools:5 wall:15.7s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:8 wall:21.1s
+- **level2-jsonl-quirk** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:7 tools:8 wall:85.9s
 
 
 ## 2026-08-07T13-52-58-626Z__dry-run
@@ -311,21 +362,6 @@ Model: `qwen2.5-coder:7b` — 1/4 tasks passed.
 - **level4-constitution-veto-bug** (Level 4) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:14 wall:483.7s
 
 
-## 2026-08-07T06-43-50-659Z__qwen2.5-coder_7b
-
-Model: `qwen2.5-coder:7b` — 1/4 tasks passed.
-
-### Level 2
-- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:2 tools:8 wall:219.9s
-- **level2-jsonl-quirk** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:112.7s
-
-### Level 3
-- **level3-constitution-list-command** (Level 3) — FAIL — finished:false decomposed:false iterationsToGreen:0 tools:12 wall:1024.7s
-
-### Level 4
-- **level4-constitution-veto-bug** (Level 4) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:14 wall:870.4s
-
-
 ## 2026-08-07T06-44-25-599Z__dry-run
 
 Model: `(dry-run, no model)` — 8/8 tasks passed.
@@ -349,6 +385,21 @@ Model: `(dry-run, no model)` — 8/8 tasks passed.
 
 ### Level 6
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:5.2s
+
+
+## 2026-08-07T06-43-50-659Z__qwen2.5-coder_7b
+
+Model: `qwen2.5-coder:7b` — 1/4 tasks passed.
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:2 tools:8 wall:219.9s
+- **level2-jsonl-quirk** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:112.7s
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — FAIL — finished:false decomposed:false iterationsToGreen:0 tools:12 wall:1024.7s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:14 wall:870.4s
 
 
 ## 2026-08-07T06-11-12-680Z__qwen2.5-coder_7b
@@ -388,18 +439,6 @@ Model: `(dry-run, no model)` — 8/8 tasks passed.
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:5.2s
 
 
-## 2026-08-07T05-53-09-187Z__qwen2.5-coder_7b
-
-Model: `qwen2.5-coder:7b` — 0/3 tasks passed.
-
-### Level 2
-- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:0 tools:0 wall:325.1s
-- **level2-jsonl-quirk** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:3 tools:8 wall:301.5s
-
-### Level 3
-- **level3-constitution-list-command** (Level 3) — FAIL — finished:false decomposed:false iterationsToGreen:0 tools:0 wall:332.1s
-
-
 ## 2026-08-07T05-55-37-570Z__dry-run
 
 Model: `(dry-run, no model)` — 8/8 tasks passed.
@@ -425,17 +464,16 @@ Model: `(dry-run, no model)` — 8/8 tasks passed.
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:5.0s
 
 
-## 2026-08-07T05-22-56-208Z__qwen2.5-coder_7b
+## 2026-08-07T05-53-09-187Z__qwen2.5-coder_7b
 
-Model: `qwen2.5-coder:7b` — 2/4 tasks passed.
-
-### Level 1
-- **level1-csv-to-json** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:4 wall:274.4s
-- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:142.8s
+Model: `qwen2.5-coder:7b` — 0/3 tasks passed.
 
 ### Level 2
-- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:8 wall:368.7s
-- **level2-jsonl-quirk** (Level 2) — FAIL — finished:false decomposed:true iterationsToGreen:44 tools:104 wall:914.9s
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:0 tools:0 wall:325.1s
+- **level2-jsonl-quirk** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:3 tools:8 wall:301.5s
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — FAIL — finished:false decomposed:false iterationsToGreen:0 tools:0 wall:332.1s
 
 
 ## 2026-08-07T05-44-39-867Z__dry-run
@@ -493,6 +531,19 @@ Model: `(dry-run, no model)` — 5/5 tasks passed.
 
 ### Level 4
 - **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:3.1s
+
+
+## 2026-08-07T05-22-56-208Z__qwen2.5-coder_7b
+
+Model: `qwen2.5-coder:7b` — 2/4 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:4 wall:274.4s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:142.8s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:8 wall:368.7s
+- **level2-jsonl-quirk** (Level 2) — FAIL — finished:false decomposed:true iterationsToGreen:44 tools:104 wall:914.9s
 
 
 ## 2026-08-07T05-22-23-743Z__dry-run

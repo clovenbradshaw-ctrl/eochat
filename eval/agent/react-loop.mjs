@@ -27,6 +27,60 @@ import { parseAction } from "./lib/parse-action.mjs";
 const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
 const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
 
+// PROMPT FOLDING. `messages` below accumulates every raw response and every
+// full observation with no bound -- fine for the harness's own record, but
+// sent WHOLE to the adapter every single step it becomes exactly the
+// unbounded-context growth `ingest.mjs`'s surf/fold and task-log.js's
+// foldToWorkingSet exist to prevent, and it is the model under test that
+// pays for it: a CPU-bound small model has a small, fixed context window
+// (this eval's own Ollama adapter runs at num_ctx 4096), and a transcript
+// that keeps growing past it either gets silently mid-conversation-shifted
+// by the runtime or crowds out the actual task. Same fix, same place it
+// already lives in this codebase: keep the last FOLD_WINDOW_STEPS steps
+// verbatim (recent tool results are what the next decision actually turns
+// on), fold everything older into one bounded, honest digest line per step
+// -- never silently dropped, always says how much was condensed.
+const FOLD_WINDOW_STEPS = 3;
+const MAX_FOLDED_DIGEST_CHARS = 600;
+
+function digestTranscriptEntry(entry) {
+  if (entry.malformed) return `step ${entry.step}: (unparseable response) ${entry.reason}`;
+  if (entry.tool === "finish") return `step ${entry.step}: finish`;
+  const argsStr = JSON.stringify(entry.args ?? {});
+  const briefArgs = argsStr.length > 100 ? `${argsStr.slice(0, 100)}…` : argsStr;
+  const outcome = entry.result && typeof entry.result === "object" && "error" in entry.result
+    ? `error: ${String(entry.result.error).slice(0, 100)}`
+    : "ok";
+  return `step ${entry.step}: ${entry.tool}(${briefArgs}) -> ${outcome}`;
+}
+
+function foldOlderSteps(transcript, foldedCount) {
+  const digest = transcript.slice(0, foldedCount).map(digestTranscriptEntry).join("\n");
+  if (digest.length <= MAX_FOLDED_DIGEST_CHARS) return digest;
+  const withheld = digest.length - MAX_FOLDED_DIGEST_CHARS;
+  return `${digest.slice(0, MAX_FOLDED_DIGEST_CHARS)}… (${withheld} more char(s) of older-step history withheld — folded to the ${MAX_FOLDED_DIGEST_CHARS}-char budget, not silently grown)`;
+}
+
+/**
+ * The actual prompt sent to the model each step: fixed prefix (system +
+ * task), a folded digest of everything older than the window (only once
+ * there IS anything to fold), then the last FOLD_WINDOW_STEPS steps
+ * verbatim. `messages` itself (the harness's full record) is left
+ * untouched by this -- folding only changes what the model is actually
+ * shown, never what gets recorded.
+ */
+function buildPromptMessages(messages, transcript, windowSteps) {
+  const stepsSoFar = transcript.length;
+  if (stepsSoFar <= windowSteps) return messages;
+  const foldedCount = stepsSoFar - windowSteps;
+  const foldedMsg = {
+    role: "user",
+    content: `EARLIER STEPS (${foldedCount} step(s) folded to keep this prompt small, not silently dropped):\n${foldOlderSteps(transcript, foldedCount)}`,
+  };
+  const recent = messages.slice(2 + foldedCount * 2);
+  return [messages[0], messages[1], foldedMsg, ...recent];
+}
+
 const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
 
 ${toolDescriptions.map((d) => `- ${d}`).join("\n")}
@@ -80,7 +134,8 @@ export async function runReactLoop({
   let stuckLoopAbort = false;
 
   for (; step < maxSteps; step++) {
-    const raw = await adapter.generate(messages, { maxTokens: maxTokensPerStep, seed: seed + step });
+    const promptMessages = buildPromptMessages(messages, transcript, FOLD_WINDOW_STEPS);
+    const raw = await adapter.generate(promptMessages, { maxTokens: maxTokensPerStep, seed: seed + step });
     messages.push({ role: "assistant", content: raw });
 
     const parsed = parseAction(raw, toolNames);

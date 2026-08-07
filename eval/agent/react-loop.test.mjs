@@ -81,6 +81,48 @@ test("a successful call resets the repeat streak — only IDENTICAL failures cou
   }
 });
 
+test("older steps get folded to a bounded digest once the window is exceeded, but the full record is kept", async () => {
+  const sandboxDir = freshSandbox();
+  try {
+    writeFileSync(join(sandboxDir, "a.js"), "content\n");
+    // 6 distinct list_files calls (never repeats -> no stuck-loop interference), then finish.
+    const script = [
+      { tool: "list_files", args: {} }, { tool: "list_files", args: { path: "x1" } },
+      { tool: "list_files", args: { path: "x2" } }, { tool: "list_files", args: { path: "x3" } },
+      { tool: "list_files", args: { path: "x4" } }, { tool: "finish", args: { summary: "done" } },
+    ];
+    const adapter = createSpyAdapter(script);
+
+    const result = await runReactLoop({
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1,
+    });
+
+    assert.equal(result.finished, true);
+    // The FULL record (result.messages) must still hold every step -- folding
+    // must never lose data from the harness's own history.
+    const fullAssistantTurns = result.messages.filter((m) => m.role === "assistant");
+    assert.equal(fullAssistantTurns.length, script.length);
+
+    // What was actually SHOWN to the model on the last call must be bounded:
+    // the earliest step's raw args ("x1") must have been folded away, not
+    // sent verbatim, and a folded-digest notice must be present instead.
+    const lastCallMessages = adapter.calls.at(-1).messages;
+    assert.ok(
+      lastCallMessages.length < fullAssistantTurns.length * 2 + 2,
+      "the last prompt sent to the model must be smaller than the full unfolded history",
+    );
+    const foldedNotice = lastCallMessages.find((m) => /EARLIER STEPS/.test(m.content));
+    assert.ok(foldedNotice, "expected an explicit folded-history notice once the window is exceeded");
+    assert.ok(/step 0: list_files/.test(foldedNotice.content), "the folded digest should still mention what the condensed steps were");
+    // The earliest step's ORIGINAL raw assistant turn must not appear
+    // verbatim (only a condensed one-line digest of it, inside foldedNotice).
+    const rawStep1Call = JSON.stringify(script[1]);
+    assert.ok(!lastCallMessages.some((m) => m.content === rawStep1Call), "the earliest folded step's raw response must not be sent verbatim in the bounded prompt");
+  } finally {
+    rmSync(sandboxDir, { recursive: true, force: true });
+  }
+});
+
 test("a different failing call does not count toward the same streak", async () => {
   const sandboxDir = freshSandbox();
   try {
