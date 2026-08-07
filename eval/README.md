@@ -35,6 +35,39 @@ Every run is recorded to `eval/results/runs/<timestamp>__<model>.jsonl` (one
 JSON object per task, full detail) and folded into `eval/results/
 scoreboard.md` (a human-readable, append-only history, newest first).
 
+## How small can it get? (size sweep: 0.5b / 1.5b / 3b / 7b, CPU-only)
+
+The most direct version of the question this eval exists to answer.
+`qwen2.5-coder` at four sizes, same four tasks (Level 1 x2, Level 2 x2), same
+harness, same machine (4 CPU cores, no GPU), one real run per size (see
+`eval/results/scoreboard.md` for the raw numbers, nothing cherry-picked):
+
+| Model | Level 1-2 tasks passed | What actually happened |
+|---|---|---|
+| `qwen2.5-coder:0.5b` | **0/4** | Never targets the real file. `write_file` gets called with the literal placeholder text copied out of its own tool description (`"relative/path.js"`, `"real/path.js"`) instead of the task's actual required filename — it is not losing the task to a long prompt, it cannot reliably fill in a tool-call argument template with real values at all. Same 0/4 before and after the prompt-folding fix below, which rules out context growth as the cause at this size. |
+| `qwen2.5-coder:1.5b` | **1/4** | A real qualitative jump: `level1-fizzbuzz` passes cleanly (writes the right file, runs it, observes real output, then calls finish). Still fails a Level 1 task on a genuine JS syntax error (an unterminated string) rather than a wrong-target mistake, and fails Level 2 partly by inventing `require("csv-parser")` — a real npm package — despite the protocol stating explicitly, every run, that no packages are installed and there is no network. |
+| `qwen2.5-coder:3b` | **1/4** | Same pass count as 1.5b on this small sample, but further along in kind: `level2-csv-quoted-comma` now converges to a real, running `convert.js` (multiple write/run cycles, real oracle checks executed against it) — it just never fixes the actual quoted-comma bug, converging on the same naive `split(",")` this eval's own 7b runs already characterized. Two tasks end via an honest self-reported failure (`finish()` called with a summary describing what went wrong) instead of silently running out of steps. |
+| `qwen2.5-coder:7b` | 2/4 (best single run; see below) | Reliably passes Level 1 and can self-correct Level 2 given the right environmental facts (see the section below) — but spends its entire step budget alternating `read_file`/`edit_file` on Level 3+ real-codebase tasks and essentially never calls `run_shell` to verify. |
+
+**The honest boundary from this sweep, on this task set:** 0.5B is not a
+capability gap to tune around — it cannot reliably instantiate a tool call
+with real arguments, a floor below "agentic," not on it. Something changes
+qualitatively between 0.5B and 1.5B: 1.5B is the smallest size in this sweep
+that completes a real single-shot task end-to-end (writes the file, runs it,
+observes real output, calls finish honestly). Going from 1.5B to 3B did not
+clear more tasks in this one-run-per-size sample — it changed the SHAPE of
+the failures (closer to a working fix, more honest self-reports) without
+yet crossing into a pass. None of the three sub-7B sizes reliably
+self-correct (Level 2) or touch a real multi-file codebase (Level 3+) —
+those remain 7B-and-up territory in this environment, and even 7B's own
+Level 3+ record above is a real, characterized failure, not a pass.
+
+This is a single run per size, not a statistically robust estimate — the
+7B section below shows real run-to-run variance on the very same tasks
+(same model, same task, PASS on one run and FAIL on another). Treat the
+table above as "what happened," not "what always happens"; a repeated sweep
+with multiple seeds per size is the natural next step, not yet done here.
+
 ## Real results so far (`qwen2.5-coder:7b`, CPU-only, this environment)
 
 Across several real runs in one session (see `eval/results/scoreboard.md`
@@ -104,7 +137,18 @@ from scratch — build the agent out of primitives this codebase already has.
   runs; the real result (including real errors) is appended as an
   observation; repeat until `finish` or a step cap. No hidden retry — if the
   model never runs its own code, that's a real, measured failure, not
-  something this loop papers over.
+  something this loop papers over. The loop's own conversation history gets
+  the same **surf/fold** treatment as codebase research below: the full
+  transcript (`result.messages`) is kept in full for the harness's own
+  record, but what's actually SENT to the model each step keeps only the
+  last `FOLD_WINDOW_STEPS` (3) steps verbatim and folds everything older
+  into one bounded, honest digest line per step — the same "never silently
+  truncate, always say what was withheld" discipline `foldToWorkingSet` and
+  `ingest.mjs`'s `surf` already use, applied here to the agent's own
+  tool-call history instead of retrieved research, because an unbounded
+  transcript sent whole every step is exactly the failure shape those exist
+  to prevent, and it is the CPU-bound small model under test (fixed context,
+  e.g. 4096 tokens) that pays for it, not this harness.
 - **`agent/holon-coder.mjs`** — the **recursive holonic task** wrapper.
   Reuses `server/task-log.js`'s real append-only fold spine (the same one
   `code-longform.js`/`narrative-longform.js`/`holonic-task.js` already

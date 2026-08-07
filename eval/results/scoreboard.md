@@ -54,6 +54,19 @@ Model: `(dry-run, no model)` — 9/9 tasks passed.
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:2.7s
 
 
+## 2026-08-07T14-13-09-963Z__qwen2.5-coder_3b
+
+Model: `qwen2.5-coder:3b` — 1/4 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — FAIL — finished:false decomposed:false iterationsToGreen:0 tools:0 wall:173.2s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:41.7s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:8 wall:256.3s
+- **level2-jsonl-quirk** (Level 2) — FAIL — finished:true decomposed:false iterationsToGreen:0 tools:1 wall:17.8s
+
+
 ## 2026-08-07T14-11-11-993Z__dry-run
 
 Model: `(dry-run, no model)` — 9/9 tasks passed.
@@ -104,6 +117,19 @@ Model: `(dry-run, no model)` — 9/9 tasks passed.
 
 ### Level 6
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:2.7s
+
+
+## 2026-08-07T14-06-59-499Z__qwen2.5-coder_1.5b
+
+Model: `qwen2.5-coder:1.5b` — 1/4 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:6 wall:80.4s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:34.2s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:3 tools:8 wall:186.0s
+- **level2-jsonl-quirk** (Level 2) — FAIL — finished:true decomposed:true iterationsToGreen:4 tools:10 wall:39.6s
 
 
 ## 2026-08-07T14-03-46-947Z__qwen2.5-coder_0.5b
