@@ -2,6 +2,28 @@
 
 Each run is a local CPU model attempting the Level 1-7 task ladder (see eval/README.md). All planning and all coding is done by the model under test via the tool loop in eval/agent/ — the harness only sandboxes, seeds, scores, and records. Newest runs first.
 
+## 2026-08-07T17-55-42-800Z__dry-run
+
+Model: `(dry-run, no model)` — 2/2 tasks passed.
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:2.7s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:3.4s
+
+
+## 2026-08-07T16-28-48-098Z__qwen2.5-coder_7b
+
+Model: `qwen2.5-coder:7b` — 0/2 tasks passed.
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:20 wall:2330.8s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — FAIL — finished:false decomposed:false iterationsToGreen:5 tools:22 wall:2826.4s
+
+
 ## 2026-08-07T16-28-05-159Z__dry-run
 
 Model: `(dry-run, no model)` — 8/8 tasks passed.
