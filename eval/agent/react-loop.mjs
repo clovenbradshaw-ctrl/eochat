@@ -30,73 +30,103 @@
 // fold and no report. That is not a cosmetic gap — the local server this
 // eval actually runs against (`ollama serve`) is started with a 4096-TOKEN
 // context window and `--context-shift` enabled, which SILENTLY drops the
-// oldest tokens once the conversation overflows it. At maxSteps up to 22
-// and tool observations up to ~1000 tokens each (read_file's 4000-char
-// cap), the unbounded array could exceed 4096 tokens well before the step
-// cap — meaning the model could lose its own system prompt and task
-// description to a silent context-shift mid-attempt, a plausible
-// contributor to exactly the "re-reads the file and still repeats the same
-// wrong guess" pattern the stuck-loop detector above exists to catch. Fixed
-// by folding the same way every other budget here does — but folding by
-// RECENCY ALONE is not the surf-and-fold discipline the rest of this
-// harness uses; it is just truncation with a report attached. ingest.mjs's
-// surf() SEARCHES the ingested pool for what bears on the current query,
-// THEN folds to budget. The equivalent move here: score each older step by
-// lexical overlap with what is happening right now (the freshest
-// observation) — the same lexical-presence discipline ingest.mjs's real
-// corpus search already uses — and keep the most RELEVANT older steps, not
-// merely the most recent ones. This also composes naturally with the
-// stuck-loop detector above: a step where the model is repeating the same
-// failing call will, by construction, score its own past identical
-// failures as maximally relevant, surfacing exactly the evidence it needs
-// to stop repeating itself.
+// oldest tokens once the conversation overflows it. Two independent
+// sessions found and fixed this on the same day: one (against
+// qwen2.5-coder:0.5b) landed `buildPromptMessages`/`foldOlderSteps` below —
+// keep the last FOLD_WINDOW_STEPS steps verbatim, compress everything older
+// into one honest digest line per step, nothing ever fully vanishes without
+// a trace. The other (this branch, against qwen2.5-coder:7b) landed a
+// relevance-scored keep-the-most-relevant-N version — bounded and reported,
+// but capable of dropping an older step's content entirely, with only a
+// count left behind. Merged: the digest-everything structure is the better
+// base (a compressed trace survives for every step, which the drop-entirely
+// version could not guarantee), but its OWN internal budget enforcement
+// (`digest.slice(0, MAX_FOLDED_DIGEST_CHARS)`) had the identical defect
+// this whole fix exists to name — bounded, reported, and still picking what
+// to keep by POSITION (truncate the tail) rather than relevance. Fixed by
+// scoring each digest line's lexical overlap with the current window (the
+// same lexical-presence discipline ingest.mjs's real corpus search already
+// uses) and keeping the highest-scoring lines when even the compact digest
+// does not fit — see AMENDMENT-13-PROPOSAL.md (eo-constitution) for the
+// full accounting of why "bounded and reported" is not sufficient on its
+// own.
 
 import { parseAction } from "./lib/parse-action.mjs";
 import { significantTerms, overlapScore } from "./lib/lexical-relevance.mjs";
 
 const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
 const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
-const MESSAGE_WINDOW_TURNS = 6;  // a declared starting point (foldToWorkingSet's k=7 is the same kind of number), not derived from the model's actual context size — this harness has no tokenizer to measure against
+
+// PROMPT FOLDING. `messages` accumulates every raw response and every full
+// observation with no bound -- fine for the harness's own record
+// (`result.messages`, untouched by any of this), but sent WHOLE to the
+// adapter every single step it becomes exactly the unbounded-context growth
+// `ingest.mjs`'s surf/fold and task-log.js's foldToWorkingSet exist to
+// prevent. Keep the last FOLD_WINDOW_STEPS steps verbatim (recent tool
+// results are what the next decision actually turns on), fold everything
+// older into one bounded, relevance-selected digest line per step -- never
+// silently dropped, always says how much was condensed.
+const FOLD_WINDOW_STEPS = 3;
+const MAX_FOLDED_DIGEST_CHARS = 600;
+
+function digestTranscriptEntry(entry) {
+  if (entry.malformed) return `step ${entry.step}: (unparseable response) ${entry.reason}`;
+  if (entry.tool === "finish") return `step ${entry.step}: finish`;
+  const argsStr = JSON.stringify(entry.args ?? {});
+  const briefArgs = argsStr.length > 100 ? `${argsStr.slice(0, 100)}…` : argsStr;
+  const outcome = entry.result && typeof entry.result === "object" && "error" in entry.result
+    ? `error: ${String(entry.result.error).slice(0, 100)}`
+    : "ok";
+  return `step ${entry.step}: ${entry.tool}(${briefArgs}) -> ${outcome}`;
+}
 
 /**
- * SURF: score every older step-pair (assistant action + its observation)
- * by lexical overlap with the freshest observation. FOLD: keep the head
- * (system + task intro, never dropped), the latest step-pair (what the
- * model must react to right now, always kept), and the top-scoring older
- * pairs up to `windowTurns` total — reassembled in original chronological
- * order so the conversation still reads coherently, with an honest count
- * of what was withheld. Never silent, same as every other fold in this
- * harness.
+ * One digest line per folded step, newline-joined. If that whole digest
+ * still exceeds the char budget, SURF before folding further: score each
+ * line's lexical overlap with `focusText` (what the model is actually
+ * looking at right now — the verbatim recent window) and keep the
+ * highest-scoring lines, restored to chronological order, rather than
+ * truncating the tail by position.
  */
-function surfAndFoldMessagesForModel(messages, windowTurns) {
-  const head = messages.slice(0, 2); // system + task intro (with any groundingBlock)
-  const turns = messages.slice(2);
-  const maxKeptMessages = windowTurns * 2;
-  if (turns.length <= maxKeptMessages) return messages;
+function foldOlderSteps(transcript, foldedCount, focusText) {
+  const lines = transcript.slice(0, foldedCount).map((entry, index) => ({ index, line: digestTranscriptEntry(entry) }));
+  const joined = lines.map((l) => l.line).join("\n");
+  if (joined.length <= MAX_FOLDED_DIGEST_CHARS) return joined;
 
-  const latest = turns.slice(-2);
-  const older = turns.slice(0, -2);
-  const olderPairs = [];
-  for (let i = 0; i < older.length; i += 2) olderPairs.push({ index: i, pair: older.slice(i, i + 2) });
+  const focusTerms = significantTerms(focusText);
+  const kept = [];
+  let used = 0;
+  for (const item of [...lines].map((l) => ({ ...l, score: overlapScore(focusTerms, l.line) }))
+    .sort((a, b) => b.score - a.score || b.index - a.index)) {
+    if (used + item.line.length + 1 > MAX_FOLDED_DIGEST_CHARS) continue;
+    kept.push(item);
+    used += item.line.length + 1;
+  }
+  kept.sort((a, b) => a.index - b.index); // restore chronological order
+  const withheldCount = lines.length - kept.length;
+  const keptText = kept.map((k) => k.line).join("\n");
+  return `${keptText}\n(${withheldCount} more folded step-digest line(s) withheld by relevance — kept by lexical overlap with the current window, not just recency; folded to the ${MAX_FOLDED_DIGEST_CHARS}-char budget, not silently grown)`;
+}
 
-  const focusTerms = significantTerms(latest.map((m) => m.content).join(" "));
-  const scored = olderPairs.map(({ index, pair }) => ({
-    index, pair, overlap: overlapScore(focusTerms, pair.map((m) => m.content).join(" ")),
-  }));
-
-  const pairBudget = Math.max(0, Math.floor(maxKeptMessages / 2) - 1); // minus the always-kept latest pair
-  const kept = [...scored]
-    .sort((a, b) => b.overlap - a.overlap || b.index - a.index) // most relevant first, ties broken by recency
-    .slice(0, pairBudget)
-    .sort((a, b) => a.index - b.index) // back to chronological order for the model
-    .flatMap((s) => s.pair);
-
-  const withheldCount = olderPairs.length - Math.min(olderPairs.length, pairBudget);
-  const foldNote = {
+/**
+ * The actual prompt sent to the model each step: fixed prefix (system +
+ * task), a folded digest of everything older than the window (only once
+ * there IS anything to fold), then the last `windowSteps` steps verbatim.
+ * `messages` itself (the harness's full record) is left untouched by this —
+ * folding only changes what the model is actually shown, never what gets
+ * recorded.
+ */
+function buildPromptMessages(messages, transcript, windowSteps) {
+  const stepsSoFar = transcript.length;
+  if (stepsSoFar <= windowSteps) return messages;
+  const foldedCount = stepsSoFar - windowSteps;
+  const recent = messages.slice(2 + foldedCount * 2);
+  const focusText = recent.map((m) => m.content).join(" ");
+  const foldedMsg = {
     role: "user",
-    content: `[${withheldCount} earlier message(s) from this session were folded out to keep the prompt bounded — kept by relevance to what you are looking at right now, not just recency, so a step relevant to your current situation stays visible even if it happened a while ago. They really happened and their real results still apply, they are just not repeated here.]`,
+    content: `EARLIER STEPS (${foldedCount} step(s) folded to keep this prompt small, not silently dropped):\n${foldOlderSteps(transcript, foldedCount, focusText)}`,
   };
-  return [...head, foldNote, ...kept, ...latest];
+  return [messages[0], messages[1], foldedMsg, ...recent];
 }
 
 const PROTOCOL = (toolDescriptions) => `You are an autonomous coding agent working in a real sandbox directory. You have exactly these tools:
@@ -125,11 +155,11 @@ function formatObservation(toolName, result) {
  * @param {number} [opts.maxSteps]
  * @param {number} [opts.maxTokensPerStep]
  * @param {number} [opts.seed]
- * @param {number} [opts.messageWindowTurns] how many step-pairs of conversation history are surfaced to the model per call — see surfAndFoldMessagesForModel
+ * @param {number} [opts.foldWindowSteps] how many of the most recent steps are shown verbatim before older ones fold to a digest — see buildPromptMessages
  */
 export async function runReactLoop({
   taskPrompt, groundingBlock = null, toolset, adapter, maxSteps = 8, maxTokensPerStep = 200, seed = 0,
-  messageWindowTurns = MESSAGE_WINDOW_TURNS,
+  foldWindowSteps = FOLD_WINDOW_STEPS,
 }) {
   const { tools, toolCalls } = toolset;
   const toolNames = Object.keys(tools);
@@ -167,7 +197,8 @@ export async function runReactLoop({
     // research data, per the same reasoning harness.mjs bounds-but-never-
     // discards transcripts) — only what is actually SENT to the model is
     // folded.
-    const raw = await adapter.generate(surfAndFoldMessagesForModel(messages, messageWindowTurns), { maxTokens: maxTokensPerStep, seed: seed + step });
+    const promptMessages = buildPromptMessages(messages, transcript, foldWindowSteps);
+    const raw = await adapter.generate(promptMessages, { maxTokens: maxTokensPerStep, seed: seed + step });
     messages.push({ role: "assistant", content: raw });
 
     const parsed = parseAction(raw, toolNames);

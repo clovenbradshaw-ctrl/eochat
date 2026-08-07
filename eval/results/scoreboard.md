@@ -2,6 +2,31 @@
 
 Each run is a local CPU model attempting the Level 1-7 task ladder (see eval/README.md). All planning and all coding is done by the model under test via the tool loop in eval/agent/ — the harness only sandboxes, seeds, scores, and records. Newest runs first.
 
+## 2026-08-07T14-17-08-139Z__dry-run
+
+Model: `(dry-run, no model)` — 8/8 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:0.1s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.2s
+- **level2-jsonl-quirk** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.2s
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:1.4s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:2.1s
+
+### Level 5
+- **level5-constitution-rename-ask** (Level 5) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:6 wall:1.6s
+
+### Level 6
+- **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:3.1s
+
+
 ## 2026-08-07T14-08-17-118Z__dry-run
 
 Model: `(dry-run, no model)` — 8/8 tasks passed.
@@ -25,6 +50,57 @@ Model: `(dry-run, no model)` — 8/8 tasks passed.
 
 ### Level 6
 - **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:2.9s
+
+
+## 2026-08-07T14-03-46-947Z__qwen2.5-coder_0.5b
+
+Model: `qwen2.5-coder:0.5b` — 0/4 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:5 wall:24.4s
+- **level1-fizzbuzz** (Level 1) — FAIL — finished:true decomposed:false iterationsToGreen:2 tools:4 wall:13.1s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:8 wall:25.1s
+- **level2-jsonl-quirk** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:7 tools:8 wall:78.2s
+
+
+## 2026-08-07T14-03-01-508Z__dry-run
+
+Model: `(dry-run, no model)` — 8/8 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:0.1s
+- **level1-fizzbuzz** (Level 1) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.2s
+- **level2-jsonl-quirk** (Level 2) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:2 wall:0.1s
+
+### Level 3
+- **level3-constitution-list-command** (Level 3) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:4 wall:2.5s
+
+### Level 4
+- **level4-constitution-veto-bug** (Level 4) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:3 wall:3.0s
+
+### Level 5
+- **level5-constitution-rename-ask** (Level 5) — PASS — finished:true decomposed:false iterationsToGreen:2 tools:6 wall:2.7s
+
+### Level 6
+- **level6-constitution-stats-report** (Level 6) — PASS — finished:true decomposed:false iterationsToGreen:1 tools:3 wall:5.0s
+
+
+## 2026-08-07T13-53-52-118Z__qwen2.5-coder_0.5b
+
+Model: `qwen2.5-coder:0.5b` — 0/4 tasks passed.
+
+### Level 1
+- **level1-csv-to-json** (Level 1) — FAIL — finished:false decomposed:false iterationsToGreen:1 tools:5 wall:20.5s
+- **level1-fizzbuzz** (Level 1) — FAIL — finished:false decomposed:false iterationsToGreen:2 tools:5 wall:15.7s
+
+### Level 2
+- **level2-csv-quoted-comma** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:4 tools:8 wall:21.1s
+- **level2-jsonl-quirk** (Level 2) — FAIL — finished:false decomposed:false iterationsToGreen:7 tools:8 wall:85.9s
 
 
 ## 2026-08-07T13-48-49-746Z__dry-run

@@ -87,6 +87,48 @@ test("counting is CUMULATIVE across the whole attempt, not just consecutive — 
   }
 });
 
+test("older steps get folded to a bounded digest once the window is exceeded, but the full record is kept", async () => {
+  const sandboxDir = freshSandbox();
+  try {
+    writeFileSync(join(sandboxDir, "a.js"), "content\n");
+    // 6 distinct list_files calls (never repeats -> no stuck-loop interference), then finish.
+    const script = [
+      { tool: "list_files", args: {} }, { tool: "list_files", args: { path: "x1" } },
+      { tool: "list_files", args: { path: "x2" } }, { tool: "list_files", args: { path: "x3" } },
+      { tool: "list_files", args: { path: "x4" } }, { tool: "finish", args: { summary: "done" } },
+    ];
+    const adapter = createSpyAdapter(script);
+
+    const result = await runReactLoop({
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 10, seed: 1,
+    });
+
+    assert.equal(result.finished, true);
+    // The FULL record (result.messages) must still hold every step -- folding
+    // must never lose data from the harness's own history.
+    const fullAssistantTurns = result.messages.filter((m) => m.role === "assistant");
+    assert.equal(fullAssistantTurns.length, script.length);
+
+    // What was actually SHOWN to the model on the last call must be bounded:
+    // the earliest step's raw args ("x1") must have been folded away, not
+    // sent verbatim, and a folded-digest notice must be present instead.
+    const lastCallMessages = adapter.calls.at(-1).messages;
+    assert.ok(
+      lastCallMessages.length < fullAssistantTurns.length * 2 + 2,
+      "the last prompt sent to the model must be smaller than the full unfolded history",
+    );
+    const foldedNotice = lastCallMessages.find((m) => /EARLIER STEPS/.test(m.content));
+    assert.ok(foldedNotice, "expected an explicit folded-history notice once the window is exceeded");
+    assert.ok(/step 0: list_files/.test(foldedNotice.content), "the folded digest should still mention what the condensed steps were");
+    // The earliest step's ORIGINAL raw assistant turn must not appear
+    // verbatim (only a condensed one-line digest of it, inside foldedNotice).
+    const rawStep1Call = JSON.stringify(script[1]);
+    assert.ok(!lastCallMessages.some((m) => m.content === rawStep1Call), "the earliest folded step's raw response must not be sent verbatim in the bounded prompt");
+  } finally {
+    rmSync(sandboxDir, { recursive: true, force: true });
+  }
+});
+
 test("a different failing call does not count toward another call's streak", async () => {
   const sandboxDir = freshSandbox();
   try {
@@ -110,35 +152,41 @@ test("a different failing call does not count toward another call's streak", asy
 });
 
 // AMENDMENT-13-PROPOSAL.md (eo-constitution): folding the conversation
-// history by recency alone is truncation wearing a fold's report format —
-// it never asks whether the discarded material bears on what the model
-// needs right now. This locks down the real fix: an OLDER step that shares
-// real vocabulary with the CURRENT situation must survive over NEWER but
-// irrelevant steps, once the window forces a choice.
-test("surf-and-fold keeps an older, relevant step over newer, irrelevant ones — not just the most recent", async () => {
+// history by POSITION alone (whether that's "most recent" or "earliest
+// first") is truncation wearing a fold's report format — it never asks
+// whether the discarded material bears on what the model needs right now.
+// This locks down foldOlderSteps' own relevance-based selection: when even
+// the compact per-step digest exceeds its char budget, a RELEVANT step's
+// digest line must survive regardless of where it falls in the folded
+// range, including deliberately placed LAST among many irrelevant filler
+// steps — exactly where a naive "keep the first N characters" truncation
+// (the shape this whole fix replaced) would have cut it.
+test("foldOlderSteps keeps a relevant digest line over many irrelevant ones, even positioned where naive truncation would drop it", async () => {
   const sandboxDir = freshSandbox();
   try {
     writeFileSync(join(sandboxDir, "widget.js"), "function widgetFrobnicator() { return 42; }\n");
-    const readWidget = { tool: "read_file", args: { path: "widget.js" } };
-    const listFiles = { tool: "list_files", args: {} };
-    const adapter = createSpyAdapter([
-      readWidget,  // step 0 (A): OLD, relevant — mentions widgetFrobnicator
-      listFiles,   // step 1 (B): irrelevant
-      listFiles,   // step 2 (C): irrelevant
-      readWidget,  // step 3 (D): LATEST — also mentions widgetFrobnicator, becomes the focus
-      { tool: "finish", args: { summary: "done" } }, // step 4: what gets folded matters here
-    ]);
+    // Enough distinct filler steps to push the combined digest past the
+    // 600-char budget on their own, so relevance-based selection actually
+    // has to choose. Placed FIRST, so a naive "keep the first 600 chars"
+    // truncation would keep these and cut off what comes after.
+    const fillers = Array.from({ length: 16 }, (_, i) => ({
+      tool: "list_files", args: { path: `filler-directory-number-${i}` },
+    }));
+    const readWidgetOld = { tool: "read_file", args: { path: "widget.js" } }; // relevant, but LAST among the folded steps
+    const readWidgetRecent = { tool: "read_file", args: { path: "widget.js" } }; // the always-kept verbatim step (window=1) — becomes the focus
+    const script = [...fillers, readWidgetOld, readWidgetRecent, { tool: "finish", args: { summary: "done" } }];
+    const adapter = createSpyAdapter(script);
 
-    await runReactLoop({
-      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: 6, seed: 1, messageWindowTurns: 2,
+    const result = await runReactLoop({
+      taskPrompt: "irrelevant", toolset: createTools(sandboxDir), adapter, maxSteps: script.length + 2, seed: 1, foldWindowSteps: 1,
     });
 
-    // The prompt sent for the finish call (index 4) is what was actually
-    // folded once the window (2 turns) forced a choice among A/B/C.
-    const sentToModel = adapter.calls[4].messages.map((m) => m.content).join("\n");
-    const mentions = (sentToModel.match(/widgetFrobnicator/g) ?? []).length;
-    assert.equal(mentions, 2, "the OLD relevant read (A) must survive alongside the always-kept latest read (D) — a pure-recency fold would have dropped A for the more recent, irrelevant B/C");
-    assert.match(sentToModel, /folded out/i, "must honestly report that something was withheld");
+    assert.equal(result.finished, true);
+    const lastCallMessages = adapter.calls.at(-1).messages;
+    const foldedNotice = lastCallMessages.find((m) => /EARLIER STEPS/.test(m.content));
+    assert.ok(foldedNotice, "expected a folded-history notice");
+    assert.match(foldedNotice.content, /widget\.js/, "the relevant step's digest line must survive relevance-based selection even though it is the LAST folded entry, where a first-N-characters truncation would have cut it");
+    assert.match(foldedNotice.content, /withheld by relevance/i, "must report that the digest itself was further folded, and by what criterion — never silent");
   } finally {
     rmSync(sandboxDir, { recursive: true, force: true });
   }
