@@ -2139,16 +2139,43 @@
           <span style="font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#A39D91;">Model</span>
 
           <sc-if value="{{ isStaticBuild }}">
-            <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">This is the static build — there is no server here, so an answer comes either from a model running in this tab or from your own Anthropic key.</span>
+            <span style="font-size:11.5px; color:#8C877C; line-height:1.5;">No proxy is reachable right now, so an answer comes either from a model running in this tab, your own Ollama instance, or your own Anthropic key.</span>
             <div style="display:flex; gap:6px;">
               <button type="button" onClick="{{ staticSelectLocal }}" style="display:flex; align-items:center; gap:5px; border:1px solid {{ staticLocalBorder }}; background:{{ staticLocalBg }}; color:{{ staticLocalColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;"><i class="ph ph-cpu" style="font-size:12px;"></i>In-browser model</button>
               <button type="button" onClick="{{ staticSelectAnthropic }}" style="border:1px solid {{ staticAnthropicBorder }}; background:{{ staticAnthropicBg }}; color:{{ staticAnthropicColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;">Anthropic API</button>
+              <button type="button" onClick="{{ staticSelectOllama }}" style="border:1px solid {{ staticOllamaBorder }}; background:{{ staticOllamaBg }}; color:{{ staticOllamaColor }}; border-radius:8px; padding:5px 10px; font-family:inherit; font-size:11.5px; cursor:pointer;">Ollama</button>
             </div>
             <sc-if value="{{ staticProviderIsAnthropic }}">
               <div style="display:flex; flex-direction:column; gap:4px; padding-top:2px;">
                 <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Model</span>
                 <input type="text" placeholder="claude-sonnet-4-20250514" value="{{ settingsModel }}" onChange="{{ onSettingsModelChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;" />
                 <span style="font-size:11px; color:#8C877C; line-height:1.5;">Add your key above under API Keys — it is sent straight from this tab to Anthropic, never through a server.</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{ staticProviderIsOllama }}">
+              <div style="display:flex; flex-direction:column; gap:4px; padding-top:2px;">
+                <sc-if value="{{ ollamaNotAuthorized }}">
+                  <button type="button" onClick="{{ requestOllamaConnect }}" style="align-self:flex-start; border:1px solid #1F5A4C; border-radius:8px; background:#1F5A4C; color:#FFFDFA; font-family:'IBM Plex Mono', monospace; font-size:11px; padding:7px 9px; cursor:pointer;">Connect Ollama</button>
+                </sc-if>
+                <sc-if value="{{ ollamaFetching }}">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#8C877C;"><i class="ph ph-spinner eo-spin" style="font-size:10px;"></i> Fetching models from Ollama…</span>
+                </sc-if>
+                <sc-if value="{{ ollamaError }}">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size:10px; color:#c0341a;">{{ ollamaError }}</span>
+                    <button type="button" onClick="{{ retryOllamaFetch }}" style="align-self:flex-start; border:1px solid #c0341a; border-radius:5px; background:none; color:#c0341a; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 7px; cursor:pointer;">retry</button>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ ollamaReady }}">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6E6A60;">Model · {{ ollamaModelCount }}</span>
+                  <select value="{{ settingsModel }}" onChange="{{ onSettingsModelChange }}" style="border:1px solid #E0DACE; border-radius:8px; background:#FFFDFA; padding:7px 10px; font-family:'IBM Plex Mono', monospace; font-size:12px; color:#26241F; outline:none;">
+                    <sc-for list="{{ ollamaModelList }}" as="om">
+                      <option value="{{ om.name }}">{{ om.label }}</option>
+                    </sc-for>
+                  </select>
+                  <button type="button" onClick="{{ disconnectOllama }}" style="align-self:flex-start; border:0; background:none; color:#A39D91; font-family:'IBM Plex Mono', monospace; font-size:9px; padding:2px 0; cursor:pointer; text-decoration:underline;">disconnect</button>
+                </sc-if>
+                <span style="font-size:11px; color:#8C877C; line-height:1.5;">Connects straight from this tab to Ollama on the address you give it — nothing goes through a server.</span>
               </div>
             </sc-if>
           </sc-if>
@@ -2997,6 +3024,13 @@ class Component extends DCLogic {
     }, 15000);
   }
   proxyLive() { return (Date.now() - this.state.proxyAlive.getTime()) < 20000; }
+  // True on the static (GitHub Pages) build, which never has a proxy, OR
+  // whenever the health poll (checkHealth/_pingHealth) hasn't heard from one
+  // recently — a locally-run build whose proxy is simply not running right
+  // now. Everywhere ON_GH_PAGES used to gate the direct-model answer paths,
+  // this is the general form: the reason there's no proxy doesn't change
+  // what the browser has to do about it.
+  noProxyMode() { return ON_GH_PAGES || !this.proxyLive(); }
 
   // Corpus pool ONLY. Priors are witness-tier knowledge that steers surf and
   // fold; they are not things to ask questions of. An older proxy that ignores
@@ -3077,11 +3111,12 @@ class Component extends DCLogic {
         return;
       }
     } catch {}
-    // Static build: no proxy to ask, so the model picker is synthesized from
-    // what this page itself can answer with — the in-browser WebLLM model
-    // (auto-downloaded), the Anthropic API (direct browser call), and Ollama
-    // (direct connection to the reader's local instance).
-    if (ON_GH_PAGES) {
+    // No proxy to ask (static build, or a local build whose proxy is down),
+    // so the model picker is synthesized from what this page itself can
+    // answer with — the in-browser WebLLM model (auto-downloaded), the
+    // Anthropic API (direct browser call), and Ollama (direct connection to
+    // the reader's local instance).
+    if (this.noProxyMode()) {
       const localId = window.EOWebLLM ? window.EOWebLLM.modelId : 'Llama-3.2-3B-Instruct-q4f16_1-MLC';
       this.setState(s => ({
         _availableModels: [
@@ -3097,7 +3132,7 @@ class Component extends DCLogic {
 
   // Called when the reader picks "Ollama" from the provider dropdown.
   requestOllamaConnect() {
-    if (ON_GH_PAGES) {
+    if (this.noProxyMode()) {
       const url = prompt('Enter your Ollama host URL (e.g. http://localhost:11434):', this.state._ollamaUrl || 'http://localhost:11434');
       if (!url) return;
       this.setState({ _ollamaUrl: url, _ollamaShowPermission: true });
@@ -3119,7 +3154,7 @@ class Component extends DCLogic {
   async _doFetchOllamaModels() {
     try {
       let models = [];
-      if (ON_GH_PAGES) {
+      if (this.noProxyMode()) {
         const resp = await fetch((this.state._ollamaUrl || 'http://localhost:11434') + '/api/tags', { signal: AbortSignal.timeout(8000) });
         if (!resp.ok) throw new Error('upstream returned ' + resp.status);
         const data = await resp.json();
@@ -5551,11 +5586,12 @@ class Component extends DCLogic {
     // shrink back, or the next prompt starts inside a tall empty field.
     if (this.composerEl) { this.composerEl.style.height = 'auto'; }
     this.logAdd('→', `Sending ${mode !== 'chat' ? mode + ' ' : ''}question…`, 'chat');
-    const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
-    const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
+    const noProxy = this.noProxyMode();
+    const anthropic = noProxy && this.state.provider === 'anthropic';
+    const ollamaDirect = noProxy && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
     const localReady = this.state.localModel && this.state.localModelStatus === 'ready';
     if (anthropic) {
-      // Static build, Anthropic selected: generation happens in this tab via a
+      // No proxy, Anthropic selected: generation happens in this tab via a
       // direct browser call to the Anthropic API with the reader's own key.
       if (this._anthropicApiKey()) {
         await this.localAskConversation(q, attachments);
@@ -5563,27 +5599,28 @@ class Component extends DCLogic {
         await this.localUnavailableTurn(q, mode, 'no-anthropic-key', attachments);
       }
     } else if (ollamaDirect) {
-      // Static build, Ollama connected: generation happens in this tab via a
+      // No proxy, Ollama connected: generation happens in this tab via a
       // direct browser call to the reader's Ollama instance.
       await this.localAskConversation(q, attachments);
     } else if (localReady) {
       await this.localAskConversation(q, attachments);
-    } else if (ON_GH_PAGES) {
-      // Static build: the in-browser WebLLM model is the ONLY other answer
-      // path — there is no proxy or Ollama to fall back to, and firing
-      // askConversation at a localhost URL the visitor does not own can only
-      // fail confusingly. Say why instead.
+    } else if (noProxy) {
+      // No proxy (static build, or a local build whose proxy is down) and
+      // nothing else is ready: the in-browser WebLLM model is the only other
+      // answer path, and firing askConversation at a proxy that isn't
+      // answering can only fail confusingly. Say why instead.
       await this.localUnavailableTurn(q, mode, null, attachments);
     } else {
       await this.askConversation(q, mode, attachments);
     }
   }
 
-  // Static (GitHub Pages) deployments have no engine and no proxy: the
-  // in-browser WebLLM model and the Anthropic API are the only answer paths,
-  // so when the chosen one is not available there is nothing to fall back to.
-  // Put the actual reason in the conversation itself rather than quietly
-  // attempting the Ollama path, which cannot answer on this build.
+  // With no proxy reachable — the static (GitHub Pages) build, which never
+  // has one, or a local build whose proxy just isn't running — the in-browser
+  // WebLLM model and the Anthropic API are the only answer paths, so when the
+  // chosen one is not available there is nothing to fall back to. Put the
+  // actual reason in the conversation itself rather than quietly attempting
+  // the proxy path, which cannot answer here.
   async localUnavailableTurn(question, mode, reasonKey, attachments) {
     const localId = 'local-' + Date.now();
     this.updateActiveSpace(sp => ({
@@ -5605,7 +5642,7 @@ class Component extends DCLogic {
             ? 'The in-browser model is still downloading — wait for it to finish, then ask again.'
             : ON_GH_PAGES
               ? 'The in-browser model has not started. Reload this tab and it will download automatically.'
-              : 'The in-browser model is not turned on. Open Settings and turn on Local, then wait for the download to finish.';
+              : 'The in-browser model is not turned on, and no proxy is answering either. Open Settings and turn on Local, then wait for the download to finish — or point the proxy URL at a running proxy.';
 
     this.setState({ streamingLoading: false, streamingTurnId: null, thinkingPhase: null, thinkingMeta: null });
     patchTurn({
@@ -6052,8 +6089,8 @@ class Component extends DCLogic {
   async localAskConversation(question, attachments) {
     const localId = 'local-' + Date.now();
     const webAllowed = !!this.state.webSearch;
-    const anthropic = ON_GH_PAGES && this.state.provider === 'anthropic';
-    const ollamaDirect = ON_GH_PAGES && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
+    const anthropic = this.noProxyMode() && this.state.provider === 'anthropic';
+    const ollamaDirect = this.noProxyMode() && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
     // Snapshot before this turn is appended. Every earlier local-mode turn
     // lived only in this array — never resent — so a follow-up like
     // "reformat it into bullet points" reached the model as its entire
@@ -8017,7 +8054,7 @@ class Component extends DCLogic {
     // working answer path, and the alarming "no engine" banner and its
     // Retry/Set engine URL controls would be actively misleading there.
     const usingLocalModel = S.localModel && (S.localModelStatus === 'ready' || S.localModelStatus === 'loading');
-    const usingAnthropic = ON_GH_PAGES && S.provider === 'anthropic' && !!this._anthropicApiKey();
+    const usingAnthropic = this.noProxyMode() && S.provider === 'anthropic' && !!this._anthropicApiKey();
     const engineUnavailable = !live && !usingLocalModel && !usingAnthropic;
     // Selection is by referent id — the identity the engine assigned — so two
     // surfaces of the same referent select the same thing.
@@ -8901,8 +8938,8 @@ class Component extends DCLogic {
         { id: 'anthropic', label: 'Anthropic', placeholder: 'sk-ant-…', keyValue: S.settingsDraftKeys.anthropic || '', hasKey: !!S._settingsApiKeys.anthropic, onChange: (e) => this.setDraftKey('anthropic', e.target.value) },
         { id: 'openai', label: 'OpenAI', placeholder: 'sk-…', keyValue: S.settingsDraftKeys.openai || '', hasKey: !!S._settingsApiKeys.openai, onChange: (e) => this.setDraftKey('openai', e.target.value) },
       ],
-      settingsKeysHint: ON_GH_PAGES
-        ? 'On this static build keys stay in this browser only. The Anthropic key is sent straight to the Anthropic API from this tab (with Anthropic\u2019s browser-access header) — use a key you can rotate, since anyone with it can spend on it.'
+      settingsKeysHint: this.noProxyMode()
+        ? 'With no proxy reachable, keys stay in this browser only. The Anthropic key is sent straight to the Anthropic API from this tab (with Anthropic\u2019s browser-access header) — use a key you can rotate, since anyone with it can spend on it.'
         : 'Keys are stored in this browser and sent to the proxy at runtime. They do not persist across a proxy restart.',
       settingsProvider: S.provider,
       onSettingsProviderChange: (e) => {
@@ -8917,19 +8954,30 @@ class Component extends DCLogic {
       settingsLocalBg: S.localModel ? '#1F5A4C' : 'none',
       settingsLocalColor: S.localModel ? '#FFFDFA' : '#8C877C',
       settingsLocalIcon: S.localModelStatus === 'loading' ? 'ph ph-spinner eo-spin' : 'ph ph-cpu',
-      // On a server-backed deployment, Ollama's free-text provider/model
+      // On a proxy-backed deployment, Ollama's free-text provider/model
       // fields only mean something when Local is off — showing them
       // alongside the in-browser catalog is exactly the "which box controls
-      // what" confusion the static build's own picker exists to avoid, so
-      // they're hidden the moment Local is on there too, not just on GH
-      // Pages.
-      showServerProviderFields: !ON_GH_PAGES && !S.localModel,
-      // The static build has no server at all, so "Default provider" /
-      // "Model name" — built for typing an arbitrary Ollama tag — never
-      // applied there in the first place. It gets its own, much smaller
-      // choice instead: this tab's own model, or the reader's Anthropic key.
-      isStaticBuild: ON_GH_PAGES,
+      // what" confusion the no-proxy picker below exists to avoid, so
+      // they're hidden the moment Local is on there too, not just when
+      // there's no proxy.
+      showServerProviderFields: !this.noProxyMode() && !S.localModel,
+      // With no proxy reachable — static build or a local build whose proxy
+      // is down — "Default provider" / "Model name" (built for typing an
+      // arbitrary Ollama tag the proxy would forward to) don't apply. This
+      // key predates generalizing past the static build specifically; the
+      // condition now covers both.
+      isStaticBuild: this.noProxyMode(),
       staticProviderIsAnthropic: S.provider === 'anthropic',
+      // Ollama wasn't a button here originally — this picker was built for
+      // GitHub Pages, where a random visitor rarely has Ollama running on
+      // their own machine. Generalizing isStaticBuild to cover "any build
+      // with no proxy" also means a reader running their own proxy locally
+      // and finding it stopped, which is exactly someone likely to have
+      // Ollama — so it needs a real slot here, not just in the composer's
+      // separate "Choose model" popup (which only shows Ollama when Local is
+      // off, and this picker had no way to turn Local off once it lost its
+      // toggle button below).
+      staticProviderIsOllama: S.provider === 'ollama',
       staticSelectLocal: () => {
         const row = S._availableModels.find(m => m.id === 'local');
         this.setState({ provider: 'local', model: row ? row.defaultModel : S.model });
@@ -8938,12 +8986,19 @@ class Component extends DCLogic {
         const row = S._availableModels.find(m => m.id === 'anthropic');
         this.setState({ provider: 'anthropic', model: row ? row.defaultModel : S.model });
       },
-      staticLocalBorder: S.provider !== 'anthropic' ? '#1F5A4C' : '#E0DACE',
-      staticLocalBg: S.provider !== 'anthropic' ? '#E4EEE9' : '#FFFDFA',
-      staticLocalColor: S.provider !== 'anthropic' ? '#1F5A4C' : '#8C877C',
+      staticSelectOllama: () => {
+        this.setState({ provider: 'ollama' });
+        if (!S._ollamaAuthorized) this.requestOllamaConnect();
+      },
+      staticLocalBorder: S.provider === 'local' ? '#1F5A4C' : '#E0DACE',
+      staticLocalBg: S.provider === 'local' ? '#E4EEE9' : '#FFFDFA',
+      staticLocalColor: S.provider === 'local' ? '#1F5A4C' : '#8C877C',
       staticAnthropicBorder: S.provider === 'anthropic' ? '#1F5A4C' : '#E0DACE',
       staticAnthropicBg: S.provider === 'anthropic' ? '#E4EEE9' : '#FFFDFA',
       staticAnthropicColor: S.provider === 'anthropic' ? '#1F5A4C' : '#8C877C',
+      staticOllamaBorder: S.provider === 'ollama' ? '#1F5A4C' : '#E0DACE',
+      staticOllamaBg: S.provider === 'ollama' ? '#E4EEE9' : '#FFFDFA',
+      staticOllamaColor: S.provider === 'ollama' ? '#1F5A4C' : '#8C877C',
 
       // ── Settings → Senses. Hugging Face models installed into this browser
       // (window.EOSenses / senses-runtime.js). Every fact shown here about a
