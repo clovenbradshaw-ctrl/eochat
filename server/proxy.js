@@ -5412,13 +5412,26 @@ const server = http.createServer((req, res) => {
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
       });
+      // Small, sparse writes (one per whole tool call, seconds apart, unlike
+      // chat's dense token deltas) get more benefit from skipping Nagle's
+      // send-side coalescing delay than they lose from it -- cheap and safe
+      // to disable here since every SSE frame is already a complete, whole
+      // write.
+      res.socket.setNoDelay(true);
       const sendSSE = (event, payload) => {
         res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
       };
       // A client that navigates away mid-run should not leave a local model
-      // grinding on a step nobody is watching disclose.
+      // grinding on a step nobody is watching disclose. MUST be res.on
+      // ("close"), not req.on("close"): the request's own readable side
+      // closes as soon as its (tiny, already-consumed) body finishes
+      // reading -- which happens almost immediately, well before the
+      // response is done -- so req.on("close") set `aborted` true right at
+      // the start of every run, silently swallowing every SSE event after
+      // the first couple. res.on("close") fires when the actual underlying
+      // connection to the client ends, which is the real signal wanted here.
       let aborted = false;
-      req.on("close", () => { aborted = true; });
+      res.on("close", () => { aborted = true; });
 
       try {
         await runEoCodeTask({
