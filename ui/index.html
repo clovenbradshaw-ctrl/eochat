@@ -860,6 +860,32 @@
                   </div>
                 </sc-if>
               </sc-if>
+              <sc-if value="{{ localModel }}">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                  <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:#A39D91;">In-browser model</span>
+                  <sc-if value="{{ hasLocalCatalog }}">
+                    <div style="display:flex; flex-direction:column; gap:5px; max-height:220px; overflow-y:auto;" class="eo-scrollbar">
+                      <sc-for list="{{ localCatalog }}" as="lm">
+                        <button type="button" onClick="{{ lm.pick }}" style="display:flex; flex-direction:column; gap:2px; align-items:flex-start; border:1px solid {{ lm.border }}; border-radius:7px; background:{{ lm.bg }}; padding:6px 8px; cursor:pointer; font-family:inherit; text-align:left;">
+                          <span style="display:flex; align-items:center; gap:6px; width:100%;">
+                            <span style="font-size:11.5px; font-weight:500; color:#26241F; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ lm.label }}</span>
+                            <span style="font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#8C877C; flex:none;">{{ lm.size }}</span>
+                          </span>
+                          <sc-if value="{{ lm.state }}">
+                            <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; letter-spacing:.04em; color:{{ lm.stateColor }}; background:{{ lm.stateBg }}; border-radius:4px; padding:1px 5px;">{{ lm.state }}</span>
+                          </sc-if>
+                        </button>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ !hasLocalCatalog }}">
+                    <span style="font-size:10.5px; color:#A39D91; line-height:1.5;">No in-browser models available in this browser.</span>
+                  </sc-if>
+                  <sc-if value="{{ !isStaticBuild }}">
+                    <button type="button" onClick="{{ settingsToggleLocal }}" style="align-self:flex-start; border:0; background:none; color:#8C877C; font-family:'IBM Plex Mono', monospace; font-size:9.5px; padding:2px 0; cursor:pointer; text-decoration:underline;">Use a cloud or Ollama model instead</button>
+                  </sc-if>
+                </div>
+              </sc-if>
               <button type="button" onClick="{{ closeModelMenu }}" style="align-self:flex-end; border:0; background:none; color:#8C877C; font-family:'IBM Plex Mono', monospace; font-size:10px; padding:2px 4px; cursor:pointer;">done</button>
             </div>
           </sc-if>
