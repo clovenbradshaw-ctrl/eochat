@@ -1,3 +1,5 @@
+import { distillSubject } from "./holonic-chat.js";
+
 const SEARCH_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -127,6 +129,12 @@ async function fetchDuckDuckGoHtml(query, numResults, maxChars) {
 }
 
 async function fetchWikipedia(query, numResults, maxChars) {
+  // A search query must be a noun phrase, not the raw reader sentence: the
+  // full "Write me a 5 page essay about dolphins, after researching online
+  // first." fed to the search API matches stray words ("essay" → Voltaire),
+  // not the subject. distillSubject only rewrites instruction/essay phrasing;
+  // genuine topical queries pass through unchanged.
+  query = distillSubject(query) || query;
   const searchResp = await fetch(
     `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}` +
     `&srlimit=${Math.min(numResults, 5)}&format=json&origin=*`,

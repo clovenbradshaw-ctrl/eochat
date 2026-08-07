@@ -16,8 +16,29 @@ import { createTurnController } from "../server/turn-controller.js";
 function encode(obj) { return new TextEncoder().encode(JSON.stringify(obj) + "\n"); }
 
 // A fetch mock that streams the given NDJSON chunks, honoring AbortSignal.
+// The pipeline's holonic planning step (defineAnswerSpec) makes its own,
+// separate non-streaming `stream: false` call before the real answer call —
+// answered here with a fixed riff/no-units plan so it never eats into
+// `chunks`, which every caller of this mock writes to be consumed by the
+// real (streaming) answer generation only.
 function makeFetchMock(chunks, { neverEnds = false } = {}) {
   return async (url, opts) => {
+    let parsedBody = null;
+    try { parsedBody = JSON.parse(opts.body); } catch { /* not JSON */ }
+    if (parsedBody && parsedBody.stream === false) {
+      return {
+        ok: true,
+        json: async () => ({
+          message: {
+            content: JSON.stringify({
+              kind: "factual question", lookup: true, form: "reply",
+              reason: "mock planner reply — riff, no units", units: [],
+              compliance: { minWords: 10, require: [], forbid: [] },
+            }),
+          },
+        }),
+      };
+    }
     let i = 0;
     const signal = opts.signal;
     return {
@@ -327,8 +348,12 @@ async function testNeedleInHaystack(dir) {
   await (await run("What is the vault access code?")).done;
 
   // The probe's request must have carried the code in a system message, even
-  // though the code left the history window turns ago.
-  const probeRequest = requests.find((r) => r.body?.messages?.some((m) => m.role === "user" && m.content?.includes("What is the vault access code?")));
+  // though the code left the history window turns ago. Excludes the
+  // planner's own non-streaming DEFINE call — its synthetic user prompt
+  // ("Question: <question>\n...") also contains the question text, but it
+  // carries no desk/memory injection at all and isn't "the model answering",
+  // so matching on stream !== false picks the real chat completion instead.
+  const probeRequest = requests.find((r) => r.body?.stream !== false && r.body?.messages?.some((m) => m.role === "user" && m.content?.includes("What is the vault access code?")));
   assert.ok(probeRequest, "the probe must have reached the model");
   const injected = systemMessagesOf(probeRequest).join("\n");
   assert.ok(injected.includes(CODE), `the desk was not injected into the probe turn:\n${injected}`);

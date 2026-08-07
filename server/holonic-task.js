@@ -263,6 +263,11 @@ export class HolonicTask {
     // nodes are epistemic-value-dominant, late nodes minimize reader
     // surprise). "auto" is the default and defers to the planner.
     phaseStrategy = "auto",
+    // Optional transparency hook: invoked with the full message array before
+    // EVERY model call this task makes (plan, learn, per-section draft,
+    // iterate, replan). The caller can surface it (e.g. stream it to a
+    // reader-facing log) without the task changing its own behavior.
+    onModelCall = null,
   } = {}) {
     if (!task || typeof task !== "string") throw new TypeError("HolonicTask requires a { task } string");
 
@@ -282,6 +287,7 @@ export class HolonicTask {
     this.surplusThreshold = surplusThreshold;
     this.maxDepth = maxDepth;
     this.phaseStrategy = phaseStrategy;
+    this.onModelCall = onModelCall;
 
     this.planResult = null;
     this.subTaskResults = [];
@@ -296,6 +302,7 @@ export class HolonicTask {
 
   async _call(messages, maxTokens = 1024) {
     const totalPrompt = estimateTokens(messages.map(m => m.content).join(" "));
+    if (this.onModelCall) this.onModelCall(messages, maxTokens);
     const resp = await fetch(`${this.ollamaUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

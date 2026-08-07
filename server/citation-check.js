@@ -149,6 +149,14 @@ const ATTACH_WINDOW = 120;
 function quoteOccursIn(haystackNorm, quoteNorm) {
   if (haystackNorm.includes(quoteNorm)) return true;
   if (!quoteNorm) return false;
+  // The mechanical citator's proof clauses are the source's own bytes,
+  // truncated to a display budget with an ellipsis — the "…" is not part of
+  // the source, so exact-match fails. A quote that is a verbatim PREFIX of the
+  // cited passage up to that marker IS the source's bytes: accept it.
+  if (quoteNorm.endsWith("…")) {
+    const prefix = quoteNorm.slice(0, -1).trimEnd();
+    if (prefix.length >= 20 && haystackNorm.includes(prefix)) return true;
+  }
   const first = quoteNorm[0];
   const flipped = first === first.toUpperCase() ? first.toLowerCase() : first.toUpperCase();
   if (flipped === first) return false; // not a letter — no case to flip

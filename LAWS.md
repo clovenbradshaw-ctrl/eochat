@@ -660,6 +660,102 @@ itself — the fix was entirely in what was and wasn't asked of it.
 
 ---
 
+## L9 — No write vanishes for want of a home
+
+**Between a write to conversation state and a render that can show it, there
+is no path where the write's target silently does not exist.**
+
+`activeSpace()` fabricates a `{ id: 'default', turns: [], ... }` stand-in for
+rendering whenever the active project has zero real conversations yet — a
+brand-new project, opened without first pressing "+ New chat". That stand-in
+is a read-time convenience only; it is never written into `this.state.spaces`.
+`updateActiveSpace`, the one function every write path in the app goes
+through, maps over the REAL array looking for `sp.id === activeSpaceId`. When
+nothing matches, `.map()` returns the array unchanged — no error, no thrown
+exception, just the array coming back exactly as it went in.
+
+Measured directly: opening a fresh project and asking "hi!" ran every fetch
+to completion — `/api/ground` returned 200 with a real answer plan — and the
+reader saw nothing. Not an error, not a delay: the composer cleared, the
+network tab showed success, and the transcript stayed on "No messages yet"
+forever. A write that fails loudly gets noticed and reported; this one had
+already convinced the interface it succeeded, because from `send()`'s point
+of view it had — the fetch really did complete. The loss happened one layer
+up, in state a render never had a chance to see.
+
+### Clauses
+
+- **L9a — The shared write choke point must never silently drop a write.**
+  `updateActiveSpace` (or any future function playing its role) must not
+  return early, no-op, or map over an array with nothing found when its
+  target does not yet exist. Whatever it does instead must leave a real,
+  matching entry behind for the write to land in.
+- **L9b — An entry point that can be the FIRST action in a fresh context must
+  ensure a real, persisted target exists before depending on one.** `send()`
+  is the concrete case: before any answer path runs, it now confirms
+  `activeSpaceId` names a real entry in `state.spaces`, and awaits
+  `newConversation({ silent: true })` first if not — the same fallback
+  `newConversation` already used for "+ New chat" pressed with no proxy
+  reachable, reused here rather than re-invented.
+
+### Measurement
+
+`scripts/check-laws.mjs::checkNoWriteVanishes` — static, like L6 and L7 (the
+failure is a source-level guarantee, not something that needs a live proxy to
+observe). Confirms `ui/index.html`'s `updateActiveSpace` materializes a real
+space when none matches before writing, and confirms `send()` guards its own
+entry point the same way before calling any answer path.
+
+---
+
+## L10 — A narration handler must not crash the turn it narrates
+
+**A handler whose entire job is to describe what the engine already did must
+never be able to throw and replace that description with a misattributed
+error.**
+
+`_holonicLogEntry`'s own comment already promised this ("Pure narration of
+server facts, never throws"). It threw anyway: `holonic_plan` events carry
+`sections` as an array of section titles; `holonic_assemble` events carry a
+field of the identical name, `sections`, as a bare count — deliberate,
+documented, and fine on its own, right up until anything narrating
+`holonic_plan` trusts the field's shape from its OWN event alone rather than
+checking it. `(data.sections || []).join(' / ')` protects against `sections`
+being absent. It does nothing against `sections` being present and simply
+not an array — and a present-but-wrong-shape value is exactly what a same-
+named field on a sibling event invites.
+
+The failure compounded, rather than just occurring: the catch block wrapping
+this call labeled the resulting crash `"(Proxy unavailable — ...)"` — a
+specific, falsifiable claim, and a false one every single time it fired. The
+proxy answered every request in the turn; the crash was purely client-side,
+in code rendering data the proxy had already delivered successfully. A
+reader (or a future debugger) reading that label goes looking for a network
+or server problem that was never there.
+
+### Clauses
+
+- **L10a — A field name shared by more than one event type must be
+  type-checked at the point of use, not assumed from one event's contract.**
+  `Array.isArray(data.sections) ? data.sections : []`, not `data.sections ||
+  []` — the latter only guards against absence, never against a wrong type
+  arriving in a field's place.
+- **L10b — An error label states a cause it has verified, not a cause it
+  assumes.** A catch block covering more than one failure class (a failed
+  fetch AND a bug in the code parsing what the fetch returned) must not
+  default its message to naming only one of them. "Answer failed" is honest
+  regardless of which threw; "Proxy unavailable" is a diagnosis, and a catch
+  block is not qualified to make one it hasn't checked.
+
+### Measurement
+
+`scripts/check-laws.mjs::checkNarrationDoesNotCrashTurn` — static. Confirms
+`_holonicLogEntry`'s `holonic_plan` branch guards `data.sections` with
+`Array.isArray` before calling `.join`, and confirms `askConversation`'s
+catch block no longer labels every failure `"Proxy unavailable"`.
+
+---
+
 ## Candidate laws
 
 Observed as consistent practice but not yet enforced by a check. Promote by
