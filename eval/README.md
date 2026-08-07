@@ -268,6 +268,26 @@ format:
   real perceptual reduction (RMS/flux energy, luminance, frame-difference)
   over ffmpeg-decoded media, and this is a companion for the environments
   where that decode step isn't available, not a replacement for it.
+- **`perceive_audio` also returns a fixed-size loudness envelope**
+  (`agent/media.mjs`'s `computeEnergyEnvelope`), because a tool result
+  becomes part of the model's PROMPT on the very next turn
+  (`react-loop.mjs`'s `formatObservation`), and a naive per-frame energy
+  dump (eoreader6's own `perceiver/audio/material.js::reduce()` returns one
+  RMS value per 400-sample frame) would make a single tool call's prompt
+  cost scale with the audio file's length — reintroducing, for audio, the
+  exact "context grows with content size" failure this eval already refuses
+  for text (`MAX_READ_CHARS`, `ingest.mjs`'s surf-then-fold-to-a-token-
+  budget). So the envelope folds to a caller-chosen, FIXED bucket count
+  (default 16) — inspecting a 100-second clip costs the same context as a
+  0.1-second one (`media.test.mjs` asserts this directly: two clips 1000x
+  apart in length produce byte-identical-length envelope JSON), and how
+  many real samples were folded into each bucket is reported honestly
+  (`framesPerBucket`), never a silent average standing in for raw data.
+  This is a stronger bound than `surf`'s token budget — it doesn't even
+  scale with how much content clears a relevance floor, since "roughly how
+  loud was this fifth of the clip" has no relevance floor to begin with —
+  but it is the same fold-to-a-declared-budget shape, applied to a modality
+  where the budget can be a plain constant instead of a computed one.
 - **A new scored task, `level2-wav-duration-bug`**, exercises this for
   real: the agent must write a script that computes a WAV file's duration
   by walking its RIFF chunks, against a fixture that has a `LIST` metadata

@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join, resolve, relative, dirname } from "node:path";
-import { sniffBinary, looksLikeWav, parseWav } from "./media.mjs";
+import { sniffBinary, looksLikeWav, parseWav, computeEnergyEnvelope, DEFAULT_ENVELOPE_BUCKETS } from "./media.mjs";
 
 const MAX_READ_CHARS = 4000;
 const MAX_SHELL_OUTPUT_CHARS = 3000;
@@ -81,17 +81,26 @@ export function createTools(sandboxDir) {
       },
     },
     perceive_audio: {
-      description: 'perceive_audio({"path": "relative/clip.wav"}) — inspect a WAV (RIFF/WAVE) audio file\'s REAL structure: every chunk found in file order (id, byte size), the fmt chunk\'s sample rate/channels/bits-per-sample, and the computed duration in seconds (data chunk bytes / byte rate). Only WAV is supported; anything else, or a malformed file, reports a typed error honestly rather than a guess.',
-      run({ path }) {
+      description: `perceive_audio({"path": "relative/clip.wav", "buckets": 16}) — inspect a WAV (RIFF/WAVE) audio file's REAL structure: every chunk found in file order (id, byte size), the fmt chunk's sample rate/channels/bits-per-sample, the computed duration in seconds, and a loudness ENVELOPE — "buckets" numbers (default ${DEFAULT_ENVELOPE_BUCKETS}), each the RMS energy of an equal real slice of the clip, so you can see roughly where it's loud vs quiet. The envelope is ALWAYS exactly this many numbers, however long the clip is — a 10-minute recording costs you the same context as a 1-second one, never more; it tells you how many real samples were folded into each number (framesPerBucket), never a silent average pretending to be raw data. Only WAV is supported (16-bit PCM for the envelope); anything else, or a malformed file, reports a typed error honestly rather than a guess.`,
+      run({ path, buckets }) {
         let result;
         try {
           const abs = resolveInSandbox(sandboxDir, path);
           const raw = readFileSync(abs);
           result = parseWav(raw);
+          if (!result.error) {
+            const envelope = computeEnergyEnvelope(raw, result, buckets === undefined ? {} : { buckets });
+            if (envelope.error) result.energyEnvelopeError = envelope.error;
+            else {
+              result.energyEnvelope = envelope.envelope;
+              result.energyEnvelopeFramesPerBucket = envelope.framesPerBucket;
+              result.energyEnvelopeSamplesFolded = envelope.samplesFolded;
+            }
+          }
         } catch (err) {
           result = { error: err.message };
         }
-        record("perceive_audio", { path }, result);
+        record("perceive_audio", { path, buckets }, result);
         return result;
       },
     },

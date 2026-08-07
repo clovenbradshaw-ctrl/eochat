@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sniffBinary, looksLikeWav, parseWav, writeWav } from "./media.mjs";
+import { sniffBinary, looksLikeWav, parseWav, writeWav, computeEnergyEnvelope } from "./media.mjs";
 
 test("sniffBinary: plain source text has no NUL byte", () => {
   assert.equal(sniffBinary(Buffer.from("const x = 1;\nconsole.log(x);\n", "utf8")), false);
@@ -72,4 +72,63 @@ test("parseWav reports a typed gap when there is no data chunk at all, rather th
   const parsed = parseWav(wav);
   assert.match(parsed.error, /no 'data' chunk/);
   assert.ok(parsed.fmt);
+});
+
+// --- computeEnergyEnvelope: the actual claim under test is that its OUTPUT
+// SIZE — and therefore the prompt-token cost of handing it to a model — does
+// not grow with the input file's length. A tool result becomes part of the
+// next turn's prompt (react-loop.mjs's formatObservation), so an envelope
+// whose size scaled with the file would silently reintroduce, for audio, the
+// exact "context grows with content size" failure this eval's text tools
+// (MAX_READ_CHARS, surf/fold's token budget) already refuse to allow.
+
+function silenceThenTone(sampleCount, split) {
+  const samples = new Int16Array(sampleCount);
+  for (let i = split; i < sampleCount; i++) samples[i] = 20000; // loud, second half only
+  return samples;
+}
+
+test("computeEnergyEnvelope: output length is fixed by `buckets`, not by file length (the whole point)", () => {
+  const shortClip = writeWav({ samples: silenceThenTone(1_600, 800) }); // 0.1s
+  const longClip = writeWav({ samples: silenceThenTone(1_600_000, 800_000) }); // 100s — 1000x longer
+
+  const shortEnv = computeEnergyEnvelope(shortClip, parseWav(shortClip), { buckets: 16 });
+  const longEnv = computeEnergyEnvelope(longClip, parseWav(longClip), { buckets: 16 });
+
+  assert.equal(shortEnv.envelope.length, 16);
+  assert.equal(longEnv.envelope.length, 16);
+  assert.equal(JSON.stringify(shortEnv.envelope).length, JSON.stringify(longEnv.envelope).length, "the serialized prompt cost must be identical regardless of the 1000x file-length difference");
+  // The real work still happened — a 1000x longer clip folded 1000x more real samples per bucket, honestly reported, not silently averaged away.
+  assert.equal(longEnv.framesPerBucket, shortEnv.framesPerBucket * 1000);
+});
+
+test("computeEnergyEnvelope: the fixed-size envelope still preserves the real signal shape (silence half, loud half)", () => {
+  const wav = writeWav({ samples: silenceThenTone(1600, 800) });
+  const { envelope } = computeEnergyEnvelope(wav, parseWav(wav), { buckets: 16 });
+  const firstHalf = envelope.slice(0, 8);
+  const secondHalf = envelope.slice(8);
+  assert.ok(firstHalf.every((v) => v === 0), `expected silence in the first half, got ${firstHalf}`);
+  assert.ok(secondHalf.every((v) => v === 20000), `expected the loud tone in the second half, got ${secondHalf}`);
+});
+
+test("computeEnergyEnvelope: a clip shorter than the bucket count folds to fewer buckets, honestly, not padded", () => {
+  const wav = writeWav({ samples: new Int16Array(5) });
+  const env = computeEnergyEnvelope(wav, parseWav(wav), { buckets: 16 });
+  assert.equal(env.buckets, 5);
+  assert.equal(env.envelope.length, 5);
+});
+
+test("computeEnergyEnvelope: an odd sample count folds its remainder into the last bucket, and says so", () => {
+  const wav = writeWav({ samples: new Int16Array(19) }); // 19 / 4 buckets = 4 remainder 3
+  const env = computeEnergyEnvelope(wav, parseWav(wav), { buckets: 4 });
+  assert.equal(env.framesPerBucket, 4);
+  assert.equal(env.remainderFoldedIntoLastBucket, 3);
+});
+
+test("computeEnergyEnvelope: refuses non-16-bit PCM honestly instead of misreading it", () => {
+  const wav = writeWav({ samples: new Int16Array(10) });
+  const parsed = parseWav(wav);
+  parsed.fmt.bitsPerSample = 8; // simulate an 8-bit file without hand-building one
+  const env = computeEnergyEnvelope(wav, parsed);
+  assert.match(env.error, /16-bit/);
 });

@@ -87,6 +87,70 @@ export function parseWav(buf) {
   return { chunks, fmt, dataBytes, durationSeconds };
 }
 
+export const DEFAULT_ENVELOPE_BUCKETS = 16;
+
+/**
+ * The reason this function exists, not just parseWav: a tool result becomes
+ * part of the model's PROMPT on the very next turn — react-loop.mjs's
+ * `formatObservation` JSON-stringifies whatever a tool returns straight into
+ * the conversation. Returning real per-sample or even real per-frame energy
+ * (eoreader6/packages/engine/perceiver/audio/material.js's own `reduce()`,
+ * one RMS value per 400-sample frame) would make a tool call's PROMPT COST
+ * scale with the audio file's length — the exact failure this whole eval
+ * exists to avoid for text (ingest.mjs/engineGroundQuery's "surf, then fold
+ * to a bounded budget" discipline, `MAX_HANDOFF_CHARS` in holon-coder.mjs,
+ * `MAX_READ_CHARS` in tools.mjs's own read_file). A CPU-bound local model's
+ * context window does not get bigger because the WAV file did.
+ *
+ * So this folds to a FIXED bucket count, not a budget computed from input
+ * size — `buckets` numbers out, always, whether the file is 0.1s or 10
+ * minutes long. That is a stronger bound than a token budget (it does not
+ * even grow with how much content scores above a relevance floor, because
+ * "how loud was roughly this fifth of the clip" has no relevance floor to
+ * begin with) but it is the same fold-to-a-declared-budget shape: report
+ * exactly how many real samples were folded into each bucket, never pretend
+ * an average was the raw data.
+ */
+export function computeEnergyEnvelope(buf, parsed, { buckets = DEFAULT_ENVELOPE_BUCKETS } = {}) {
+  if (parsed.error) return { error: parsed.error };
+  const dataChunk = parsed.chunks?.find((c) => c.id === "data");
+  if (!dataChunk || !parsed.fmt) return { error: "cannot compute an energy envelope without both a 'fmt ' and 'data' chunk" };
+  const { bitsPerSample, channels } = parsed.fmt;
+  if (bitsPerSample !== 16) return { error: `energy envelope only supports 16-bit PCM samples (this file is ${bitsPerSample}-bit)` };
+  if (!Number.isInteger(buckets) || buckets < 1) return { error: `buckets must be a positive integer, got ${JSON.stringify(buckets)}` };
+
+  const bytesPerFrame = 2 * channels;
+  const frameCount = Math.floor(parsed.dataBytes / bytesPerFrame);
+  if (frameCount === 0) return { buckets: 0, samplesFolded: 0, envelope: [] };
+
+  const effectiveBuckets = Math.min(buckets, frameCount);
+  const framesPerBucket = Math.floor(frameCount / effectiveBuckets);
+  const envelope = [];
+  for (let b = 0; b < effectiveBuckets; b++) {
+    const start = b * framesPerBucket;
+    const end = b === effectiveBuckets - 1 ? frameCount : start + framesPerBucket; // the remainder from integer division folds into the LAST bucket, honestly, never dropped
+    let sumSq = 0;
+    for (let f = start; f < end; f++) {
+      let frameSumSq = 0;
+      for (let c = 0; c < channels; c++) {
+        const byteOffset = dataChunk.offset + (f * channels + c) * 2;
+        const v = buf.readInt16LE(byteOffset);
+        frameSumSq += v * v;
+      }
+      sumSq += frameSumSq / channels;
+    }
+    envelope.push(Math.round(Math.sqrt(sumSq / (end - start))));
+  }
+
+  return {
+    buckets: effectiveBuckets,
+    samplesFolded: frameCount,
+    framesPerBucket,
+    remainderFoldedIntoLastBucket: frameCount - framesPerBucket * effectiveBuckets,
+    envelope, // length === effectiveBuckets, ALWAYS — independent of frameCount, which is the whole point
+  };
+}
+
 function u32le(n) {
   const b = Buffer.alloc(4);
   b.writeUInt32LE(n >>> 0, 0);

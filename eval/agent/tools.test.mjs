@@ -120,6 +120,28 @@ test("perceive_audio reports a WAV file's real chunk layout and duration, walkin
     assert.deepEqual(result.chunks.map((c) => c.id), ["fmt ", "LIST", "data"]);
     assert.equal(result.fmt.sampleRate, 8000);
     assert.equal(result.durationSeconds, 0.2);
+    assert.equal(result.energyEnvelope.length, 16, "default envelope size");
+    assert.equal(result.energyEnvelopeSamplesFolded, 1600);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("perceive_audio's envelope size stays fixed at a caller-chosen bucket count regardless of clip length — the actual prompt-cost guarantee", () => {
+  const dir = freshSandbox();
+  try {
+    const shortWav = writeWav({ samples: new Int16Array(800) }); // 0.1s
+    const longWav = writeWav({ samples: new Int16Array(800_000) }); // 100s
+    writeFileSync(join(dir, "short.wav"), shortWav);
+    writeFileSync(join(dir, "long.wav"), longWav);
+    const { tools } = createTools(dir);
+
+    const short = tools.perceive_audio.run({ path: "short.wav", buckets: 8 });
+    const long = tools.perceive_audio.run({ path: "long.wav", buckets: 8 });
+
+    assert.equal(short.energyEnvelope.length, 8);
+    assert.equal(long.energyEnvelope.length, 8);
+    assert.equal(JSON.stringify(short.energyEnvelope).length, JSON.stringify(long.energyEnvelope).length);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
