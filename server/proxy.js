@@ -4947,16 +4947,43 @@ const server = http.createServer((req, res) => {
           // from already-decoded document text (the same text the UI's
           // file-formats.js extraction or a project source upload produces).
           // Never re-parses raw file bytes itself — see insight-store.js.
+          //
+          // `useModel: true` additionally runs proposeFactsWithModel() to
+          // catch prose the heuristic pass can't parse — see that function's
+          // own header in insight-store.js for why and its verification
+          // discipline. The model call itself is built here, the same
+          // "return an async (prompt) => text closure, pass it to a pure
+          // module" shape /api/conversations/summary already uses for
+          // foldTurn/updateSummary — insight-store.js makes no HTTP calls of
+          // its own and stays provider-agnostic and unit-testable.
           if (req.method === "POST" && segments.length === 5 && sub === "ingest") {
             const data = await readJsonBody();
             const text = data.content ?? data.text;
             if (!text) return sendJson(400, { error: "'content' (document text) is required" });
+            const useModel = data.useModel === true;
+            const callModel = useModel ? async (prompt) => {
+              const resp = await safeFetch(`${TARGET}/api/chat`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model: data.model || "llama3.2:latest",
+                  messages: [{ role: "user", content: prompt }],
+                  stream: false,
+                  options: { temperature: 0.2, num_predict: 1200, num_ctx: NUM_CTX },
+                }),
+              }, 60000);
+              if (!resp.ok) throw new Error(`Ollama ${resp.status}`);
+              const j = await resp.json();
+              return (j.message?.content || "").trim();
+            } : null;
             const result = await insightStore.ingestDocument(project.id, {
               text,
               kind: data.kind || null,
               asOf: data.asOf || null,
               sourceId: data.sourceId || (data.name ? `source:${data.name}` : null),
               sourceName: data.name || null,
+              useModel,
+              callModel,
             });
             return sendJson(200, result);
           }

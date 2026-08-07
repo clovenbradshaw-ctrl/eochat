@@ -1224,6 +1224,7 @@
                 <option value="definition">Definition</option>
               </select>
               <input type="text" value="{{ insightIngestAsOf }}" onChange="{{ onInsightIngestAsOfChange }}" placeholder="As of (e.g. 2030)" style="width:150px; border:1px solid #E4DFD5; border-radius:7px; background:#FFFDFA; padding:7px 9px; font-family:inherit; font-size:12px; color:#26241F;"/>
+              <button type="button" aria-pressed="{{ insightUseModel }}" title="Also ask a local model to find facts in prose the heuristic pass can't parse — slower, and every fact it proposes is verified against the source before being kept." onClick="{{ toggleInsightUseModel }}" style="display:flex; align-items:center; gap:5px; border:1px solid {{ insightUseModelBorder }}; border-radius:7px; background:{{ insightUseModelBg }}; color:{{ insightUseModelColor }}; font-family:'IBM Plex Mono', monospace; font-size:10.5px; padding:6px 9px; cursor:pointer;"><i class="ph ph-sparkle" style="font-size:12px;"></i>{{ insightUseModelLabel }}</button>
               <button type="button" onClick="{{ submitInsightIngest }}" disabled="{{ insightIngestSubmitDisabled }}" style="border:0; border-radius:7px; background:#1F5A4C; color:#FFFDFA; padding:7px 14px; font-family:inherit; font-size:12.5px; cursor:pointer;">{{ insightIngestButtonLabel }}</button>
             </div>
             <sc-if value="{{ hasInsightIngestResult }}">
@@ -2906,6 +2907,12 @@ class Component extends DCLogic {
     _insightOffline: false,
     _insightIngestText: '', _insightIngestName: '', _insightIngestKind: 'goal', _insightIngestAsOf: '',
     _insightIngestLoading: false, _insightIngestResult: null, _insightIngestError: null, _insightExtracting: false,
+    // Opt-in: also run the model-assisted extraction pass (insight-
+    // store.js's proposeFactsWithModel) for prose the heuristic pass can't
+    // parse. Off by default — it's slower and needs a local model — and its
+    // own result is always shown separately from the heuristic count, never
+    // blended into one "N facts found".
+    _insightUseModel: false,
     _insightResolveDrafts: {}, _insightForProjectId: null,
     // Expanding a standardized-key row shows its definitions/intervention
     // metrics (already in _insightRows) plus its full goal/current history —
@@ -4355,17 +4362,22 @@ class Component extends DCLogic {
     const text = this.state._insightIngestText.trim();
     if (!projectId || !text) return;
     this.setState({ _insightIngestLoading: true, _insightIngestError: null, _insightIngestResult: null });
-    const body = {
-      content: text,
-      name: this.state._insightIngestName.trim() || null,
-      kind: this.state._insightIngestKind,
-      asOf: this.state._insightIngestAsOf.trim() || null,
-    };
     try {
+      const useModel = this.state._insightUseModel;
       const res = await fetch(this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId) + '/insights/ingest', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(20000),
+        body: JSON.stringify({
+          content: text,
+          name: this.state._insightIngestName.trim() || null,
+          kind: this.state._insightIngestKind,
+          asOf: this.state._insightIngestAsOf.trim() || null,
+          useModel,
+        }),
+        // The model-assisted pass makes a real Ollama call server-side
+        // (60s timeout there) — the client has to wait at least that long,
+        // or every model-assisted ingest would abort here right as the
+        // server was about to answer.
+        signal: AbortSignal.timeout(useModel ? 90000 : 20000),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `proxy returned ${res.status}`);
@@ -11427,13 +11439,34 @@ class Component extends DCLogic {
       onInsightIngestAsOfChange: (e) => this.setState({ _insightIngestAsOf: e.target.value }),
       submitInsightIngest: () => this.submitInsightIngest(),
       insightIngestSubmitDisabled: S._insightIngestLoading || !S._insightIngestText.trim(),
-      insightIngestButtonLabel: S._insightIngestLoading ? 'Ingesting…' : 'Ingest',
+      insightIngestButtonLabel: S._insightIngestLoading ? (S._insightUseModel ? 'Ingesting (running model pass)…' : 'Ingesting…') : 'Ingest',
       hasInsightIngestResult: !!S._insightIngestResult,
-      insightIngestResultText: S._insightIngestResult
-        ? `${S._insightIngestResult.added} fact(s) recorded — ${S._insightIngestResult.resolved} merged onto standardized keys, ${S._insightIngestResult.unclear} need review below.`
-        : '',
+      insightIngestResultText: (() => {
+        const r = S._insightIngestResult;
+        if (!r) return '';
+        // Heuristic and model tiers are ALWAYS shown separately — see
+        // insight-store.js's ingestDocument header on why blending them
+        // into one count would hide which tier actually found what.
+        const parts = [`${r.heuristic?.added ?? r.added} fact(s) found by the heuristic pass`];
+        if (r.model) {
+          if (r.model.ran) {
+            parts.push(`${r.model.proposed} additional fact(s) proposed by the model` + (r.model.rejected ? `, ${r.model.rejected} rejected (quote not verbatim in source or malformed)` : ''));
+          } else {
+            parts.push(`model-assisted pass did not run — ${r.model.error}`);
+          }
+        }
+        parts.push(`${r.resolved} merged onto standardized keys, ${r.unclear} key(s) need review below`);
+        if (r.kindUnclear) parts.push(`${r.kindUnclear} fact(s) have an uncertain kind (goal/current/etc.) — check them in the table`);
+        return parts.join(' — ') + '.';
+      })(),
       hasInsightIngestError: !!S._insightIngestError,
       insightIngestError: S._insightIngestError,
+      insightUseModel: S._insightUseModel,
+      toggleInsightUseModel: () => this.setState(s => ({ _insightUseModel: !s._insightUseModel })),
+      insightUseModelLabel: S._insightUseModel ? 'AI-assisted extraction: on' : 'AI-assisted extraction: off',
+      insightUseModelBg: S._insightUseModel ? '#1F5A4C' : 'none',
+      insightUseModelColor: S._insightUseModel ? '#FFFDFA' : '#4A463E',
+      insightUseModelBorder: S._insightUseModel ? '#1F5A4C' : '#E4DFD5',
       setInsightFileInput: (el) => this.setInsightFileInput(el),
       triggerInsightFileInput: () => this.triggerInsightFileInput(),
       onInsightFileSelected: (e) => this.onInsightFileSelected(e),

@@ -14,11 +14,14 @@ import {
   InsightStore,
   normalizeKeyText,
   jaccardSimilarity,
+  keysStructurallyCorefer,
   matchKey,
   parseValue,
   sameValue,
   extractCandidateFacts,
+  classifyFactKind,
   slugifyKey,
+  proposeFactsWithModel,
 } from "./insight-store.js";
 
 function freshStore() {
@@ -56,6 +59,45 @@ test("matchKey returns exact for an alias match, auto for a close fuzzy match, c
   const unclear = matchKey("stormwater capacity", registry);
   assert.equal(unclear.status, "unclear");
   assert.deepEqual(unclear.candidates, []);
+});
+
+// ── keysStructurallyCorefer — the engine-tier, discover-cast.js-derived rule ─
+
+test("keysStructurallyCorefer merges by containment when the shared token is significant", () => {
+  assert.ok(keysStructurallyCorefer("Affordable Housing Units", "Housing Units"));
+  assert.ok(keysStructurallyCorefer("Housing Units", "Affordable Housing Units"));
+});
+
+test("keysStructurallyCorefer refuses to merge on a shared GENERIC token alone — the 'Prince Andrew/Prince Vasili' failure mode ported to plan vocabulary", () => {
+  // Both end in "units", but that is the only thing they share, and "units"
+  // is exactly the kind of generic measurement noun discover-cast.js's
+  // shared-leading-honorific carve-out warns against treating as identity.
+  assert.ok(!keysStructurallyCorefer("Affordable Housing Units", "Broadband Access Units"));
+  assert.ok(!keysStructurallyCorefer("Housing Target", "Graduation Target"));
+});
+
+test("matchKey never auto-merges on a fuzzy score alone — only structural containment produces 'auto'", () => {
+  const registry = [{ key: "housing_target_rate", label: "Housing target rate", aliases: [] }];
+  // "Annual Target Rate" scores 0.5 Jaccard against "Housing target rate"
+  // (shares "target"/"rate", both generic) — a high fuzzy score with NO
+  // significant shared token and no containment. Must stay a candidate at
+  // most, never auto-apply.
+  assert.ok(jaccardSimilarity("Annual Target Rate", "Housing target rate") >= 0.34);
+  const m = matchKey("Annual Target Rate", registry);
+  assert.notEqual(m.status, "auto");
+});
+
+test("matchKey reports an ambiguous structural match as candidates listing both, never guesses one", () => {
+  const registry = [
+    { key: "north_housing_units", label: "North district housing units", aliases: [] },
+    { key: "south_housing_units", label: "South district housing units", aliases: [] },
+  ];
+  // "Housing Units" structurally corefers with BOTH (containment both ways) —
+  // the "Prince across several princes" case. Must not silently pick one.
+  const m = matchKey("Housing Units", registry);
+  assert.equal(m.status, "candidates");
+  const keys = m.candidates.map((c) => c.key).sort();
+  assert.deepEqual(keys, ["north_housing_units", "south_housing_units"]);
 });
 
 test("slugifyKey produces a stable, filesystem/JSON-safe key from a label", () => {
@@ -136,6 +178,115 @@ test("extractCandidateFacts reads tab-separated rows (DOCX table extraction shap
   assert.equal(facts.length, 1);
   assert.equal(facts[0].rawKey, "Berth capacity");
   assert.equal(facts[0].rawValue, "3.4m");
+});
+
+// ── classifyFactKind — cube/index.js-derived amplitude classifier ───────────
+
+test("classifyFactKind confidently picks 'goal' for a sentence carrying decisive goal vocabulary", () => {
+  const r = classifyFactKind("The plan's goal is to increase affordable housing by 2030.");
+  assert.equal(r.kind, "goal");
+  assert.equal(r.confident, true);
+  assert.ok(r.amplitudes[0].amplitude > r.amplitudes[1].amplitude);
+});
+
+test("classifyFactKind confidently picks 'definition' for a sentence carrying decisive definition vocabulary", () => {
+  const r = classifyFactKind("Affordable housing is defined as housing costing no more than 30% of income.");
+  assert.equal(r.kind, "definition");
+  assert.equal(r.confident, true);
+});
+
+test("classifyFactKind reports no confident kind (never a silent default) for text with no evidence for any kind", () => {
+  const r = classifyFactKind("The sky was a pale grey over the harbor that morning.");
+  assert.equal(r.kind, null);
+  assert.equal(r.confident, false);
+});
+
+test("extractCandidateFacts falls back to classifyFactKind for a line with no header/table/date signal, and flags low confidence", () => {
+  // No section header set anything, no defaultKind given, no year prefix —
+  // the ONLY signal is the sentence's own vocabulary.
+  const facts = extractCandidateFacts("Youth graduation rate goal: 90% by 2030");
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "goal");
+  assert.equal(facts[0].kindConfident, true);
+});
+
+test("extractCandidateFacts marks kindConfident=true unconditionally when a structural signal (header) set the kind, regardless of the line's own vocabulary", () => {
+  const facts = extractCandidateFacts("GOALS\nStormwater capacity: 12M gallons\n");
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "goal");
+  assert.equal(facts[0].kindConfident, true);
+});
+
+// ── proposeFactsWithModel — model-assisted extraction, grounding-verified ──
+
+function stubModel(response) {
+  return async () => response;
+}
+
+test("proposeFactsWithModel accepts a candidate whose quote is a real, verbatim substring of the source", async () => {
+  const text = "Community Plan 2030\n\nThe city aims to increase the affordable housing stock by 40% by 2030 through zoning reform.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Affordable housing stock increase", value: "40%", kind: "goal", quote: "The city aims to increase the affordable housing stock by 40% by 2030 through zoning reform." },
+  ]));
+  const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
+  assert.equal(result.rejected.length, 0);
+  assert.equal(result.proposed.length, 1);
+  assert.equal(result.proposed[0].extractionMethod, "model");
+  assert.equal(result.proposed[0].kind, "goal");
+});
+
+test("proposeFactsWithModel rejects a candidate whose quote cannot be found verbatim in the source — a fabrication, not a fact", async () => {
+  const text = "Community Plan 2030\n\nThe city aims to increase the affordable housing stock by 40% by 2030.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Made up fact", value: "99%", kind: "goal", quote: "The city will eliminate all traffic congestion by 2030 through teleportation." },
+  ]));
+  const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
+  assert.equal(result.proposed.length, 0);
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reason, /not found verbatim/);
+});
+
+test("proposeFactsWithModel handles a model response that isn't valid JSON without throwing", async () => {
+  const callModel = stubModel("I don't see any additional facts in this document.");
+  const result = await proposeFactsWithModel("some text", { callModel, heuristicFacts: [] });
+  assert.equal(result.proposed.length, 0);
+  assert.equal(result.rejected.length, 1);
+});
+
+test("proposeFactsWithModel downgrades kindStatus to unclear when the model's claimed kind conflicts with a CONFIDENT mechanical reading of the same quote", async () => {
+  const text = "Report.\n\nAs of 2024, the current graduation rate stands at 74%, well below where it should be.";
+  const callModel = stubModel(JSON.stringify([
+    // Model mislabels a clearly current-state quote as a goal.
+    { rawKey: "Graduation rate", value: "74%", kind: "goal", quote: "As of 2024, the current graduation rate stands at 74%, well below where it should be." },
+  ]));
+  const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
+  assert.equal(result.proposed.length, 1);
+  assert.equal(result.proposed[0].kindConfident, false);
+  assert.equal(result.proposed[0].mechanicalKind, "current_state");
+});
+
+test("ingestDocument with useModel merges verified model facts through the same matchKey pipeline as heuristic facts, and reports the two tiers separately", async () => {
+  const store = freshStore();
+  const text = "GOALS\nAffordable housing units: 500 by 2030\n\nThe city also aims to cut its carbon footprint by 25% by 2030 through a new transit initiative.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Carbon footprint reduction", value: "25%", kind: "goal", quote: "The city also aims to cut its carbon footprint by 25% by 2030 through a new transit initiative." },
+  ]));
+  const result = await store.ingestDocument("p1", { text, useModel: true, callModel });
+  assert.equal(result.heuristic.added, 1);
+  assert.equal(result.model.ran, true);
+  assert.equal(result.model.proposed, 1);
+  assert.equal(result.added, 2);
+  const modelObs = result.observations.find((o) => o.extractionMethod === "model");
+  assert.ok(modelObs);
+  assert.equal(modelObs.keyStatus, "unclear"); // no registry key exists yet for either — same pipeline, not model-assigned
+});
+
+test("ingestDocument reports model.ran=false (not a crash, not silence) when useModel is requested with no callModel configured", async () => {
+  const store = freshStore();
+  const result = await store.ingestDocument("p1", { text: "Affordable housing units: 500\n", useModel: true });
+  assert.equal(result.added, 1); // heuristic pass still ran
+  assert.equal(result.model.ran, false);
+  assert.ok(result.model.error);
 });
 
 // ── InsightStore: ingestion, key merging, unclear flagging ──────────────

@@ -39,6 +39,16 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { MEMORY_DIR } from "./paths.js";
+// Grounding verification for model-proposed facts (proposeFactsWithModel,
+// below) reuses this app's own citation-fidelity primitives — the exact
+// check LAWS.md L8c requires of a model's chat answer ("every apparent
+// quotation... checked against the real source bytes... before being
+// shown") applied here to a model's proposed fact instead of its prose.
+// Not reinvented: normalizeForFidelity is the one whitespace/quote-mark
+// normalization this app uses everywhere a quote is compared to source
+// text, and quoteOccursIn is the same case-tolerant substring test
+// verifyQuotedFidelity uses on a chat answer's citations.
+import { normalizeForFidelity, quoteOccursIn } from "./citation-check.js";
 
 export const INSIGHTS_DIR = path.join(MEMORY_DIR, "insights");
 
@@ -57,13 +67,41 @@ async function writeAtomic(file, data) {
   await fsp.rename(tmp, file);
 }
 
-// ── Key normalization & fuzzy matching ──────────────────────────────────────
+// ── Key normalization & term binding ────────────────────────────────────────
 //
-// Two keys are the "same" if, after stripping case/punctuation/diacritics
-// down to a bag of words, they overlap enough (Jaccard over tokens) — cheap,
-// dependency-free, and good enough to tell "affordable housing units" from
-// "affordable housing target" (different denominators) while still catching
-// "Aff. Housing Units" as the same thing as "affordable housing units."
+// This is the same problem eoreader5's referents/discover-cast.js solves for
+// character names ("Victor" / "Victor Frankenstein" / "Frankenstein" are one
+// referent), and it draws the identical tier line rather than a fresh one:
+//
+//   ENGINE-tier — a STRUCTURAL test (token containment, excluding the generic
+//   words a whole document's vocabulary shares) — is the only thing allowed
+//   to auto-merge without a human. discover-cast.js's namesCorefer is
+//   "containment, or a shared final token (surname)" with an explicit carve-
+//   out that a shared LEADING token never merges ("Prince Andrew"/"Prince
+//   Vasili" share an honorific, not an identity). Community-plan vocabulary
+//   has the mirror-image failure mode at the TRAILING position instead of the
+//   leading one — "Affordable Housing Units" and "Broadband Access Units"
+//   share only the generic measurement noun "units" — so the excluded set
+//   here is GENERIC_TERM_WORDS rather than a leading-honorific list, but the
+//   discipline is the same rule, ported to this domain's own vocabulary
+//   (constitution amendment A7: same mechanism, native vocabulary per medium).
+//
+//   MODEL/STATISTICAL-tier — Jaccard overlap, or anything a model proposes —
+//   NEVER auto-merges, no matter how high the score. discover-cast.js's own
+//   header is explicit about why: "It also must not be applied blindly...
+//   an identity is a declaration about SPECIFIC surfaces, never a rule about
+//   a token, and a caller declaring one is asserting it on the record." A
+//   fuzzy score is offered as a `candidate` for a human (or a model's
+//   explicitly-attributed, always-reviewable suggestion — see
+//   proposeFactsWithModel below) to confirm, never applied silently. The
+//   previous version of this module auto-merged on Jaccard alone above a
+//   hand-set 0.72 threshold — exactly the "blind" application the tier line
+//   forbids — and is corrected here.
+//
+//   AMBIGUOUS — a raw key that structurally correferes with MORE than one
+//   canonical key is never assigned to either. discover-cast.js's
+//   clusterSurfaces does the same for "Prince" matching several princes:
+//   dropped to a gap, not guessed into whichever candidate sorted first.
 
 export function normalizeKeyText(s) {
   return String(s ?? "")
@@ -88,22 +126,57 @@ export function jaccardSimilarity(a, b) {
   return union ? inter / union : 0;
 }
 
+// Generic measurement/plan vocabulary that recurs across genuinely different
+// standard keys ("units", "rate", "target", "current") — a shared token from
+// this set is never, by itself, evidence that two raw keys name the same
+// thing. Deliberately short and reviewable, the same spirit as
+// discover-cast.js excluding a shared honorific: this is a fact about
+// community-plan document vocabulary, asserted here by name, not derived.
+const GENERIC_TERM_WORDS = new Set([
+  "units", "unit", "rate", "rates", "percent", "percentage", "pct",
+  "count", "counts", "number", "numbers", "level", "levels", "index",
+  "total", "totals", "amount", "amounts", "score", "scores", "share",
+  "ratio", "target", "targets", "goal", "goals", "value", "values",
+  "metric", "metrics", "current", "baseline", "status", "result", "results",
+]);
+
+function significantTokens(s) {
+  const out = new Set();
+  for (const t of tokenSet(s)) if (!GENERIC_TERM_WORDS.has(t)) out.add(t);
+  return out;
+}
+
+/**
+ * The engine-tier structural test: do these two label strings name the same
+ * standard key by containment — one's significant token set is a subset of
+ * the other's — requiring at least one shared token that ISN'T generic
+ * measurement vocabulary. "Affordable Housing Units" contains "Housing
+ * Units" — but "Housing Units" and "Broadband Units" do not corefer, because
+ * their only shared token ("units") is generic. Mechanical, deterministic,
+ * safe to apply without asking — the ONLY thing that produces an "auto" match.
+ */
+export function keysStructurallyCorefer(a, b) {
+  const sa = significantTokens(a), sb = significantTokens(b);
+  if (!sa.size || !sb.size) return false;
+  let shared = 0;
+  for (const t of sa) if (sb.has(t)) shared++;
+  if (shared === 0) return false;
+  const subset = [...sa].every((t) => sb.has(t)) || [...sb].every((t) => sa.has(t));
+  return subset;
+}
+
 // Below this, a raw key is treated as having no plausible relationship to an
 // existing canonical key at all — offering it as a "candidate" would be
-// noise, not help.
+// noise, not help. Never a merge trigger by itself — see the tier note above.
 export const CANDIDATE_THRESHOLD = 0.34;
-// At or above this, two labels are close enough that requiring a human to
-// confirm the merge would be friction without value — "Aff. Housing Units"
-// vs "affordable housing units" territory.
-export const AUTO_MERGE_THRESHOLD = 0.72;
 export const MAX_CANDIDATES = 4;
 
 /**
  * Compare a raw key string against a registry's canonical keys (each
  * `{ key, label, aliases }`). Returns:
  *   { status: 'exact',      key, score: 1 }
- *   { status: 'auto',       key, score }        — confident fuzzy match
- *   { status: 'candidates', candidates: [...] } — plausible but unconfirmed
+ *   { status: 'auto',       key, score: 1, reason: 'structural' } — mechanical containment match, safe to apply without asking
+ *   { status: 'candidates', candidates: [...] } — plausible but unconfirmed (fuzzy score, OR a structural match against more than one key — ambiguous, never guessed)
  *   { status: 'unclear',    candidates: [] }    — nothing plausible found
  */
 export function matchKey(rawKey, registryKeys) {
@@ -117,6 +190,13 @@ export function matchKey(rawKey, registryKeys) {
     }
   }
 
+  const structural = registryKeys.filter((k) =>
+    keysStructurallyCorefer(rawKey, k.label) || (k.aliases || []).some((a) => keysStructurallyCorefer(rawKey, a))
+  );
+  if (structural.length === 1) {
+    return { status: "auto", key: structural[0].key, score: 1, reason: "structural" };
+  }
+
   const scored = registryKeys.map((k) => {
     const names = [k.label, ...(k.aliases || [])];
     let score = 0;
@@ -125,10 +205,16 @@ export function matchKey(rawKey, registryKeys) {
   }).filter((s) => s.score >= CANDIDATE_THRESHOLD)
     .sort((a, b) => b.score - a.score);
 
-  if (!scored.length) return { status: "unclear", candidates: [] };
-  if (scored[0].score >= AUTO_MERGE_THRESHOLD) {
-    return { status: "auto", key: scored[0].key, score: scored[0].score };
+  if (structural.length > 1) {
+    // Ambiguous structural match — "Prince" matching several princes.
+    // Surfaced as candidates (structural ones ranked first, score 1) rather
+    // than guessed into whichever sorted first.
+    const structuralCandidates = structural.map((k) => ({ key: k.key, label: k.label, score: 1 }));
+    const rest = scored.filter((s) => !structural.some((k) => k.key === s.key));
+    return { status: "candidates", candidates: [...structuralCandidates, ...rest].slice(0, MAX_CANDIDATES) };
   }
+
+  if (!scored.length) return { status: "unclear", candidates: [] };
   return { status: "candidates", candidates: scored.slice(0, MAX_CANDIDATES) };
 }
 
@@ -205,23 +291,94 @@ function asOfSortKey(asOf) {
   return s;
 }
 
-// ── Section-kind / date-prefix detection for extraction ─────────────────────
+// ── Kind classification — STRONG/WEAK evidence amplitudes ───────────────────
+//
+// Ported from eoreader5's cube/index.js terrain classifier (see its own
+// header): score every candidate kind against a STRONG vocabulary (terms
+// that specifically denote it) and a WEAK one (terms that co-occur with it
+// but are common in running prose), damp repeated hits with log1p so a word
+// used many times doesn't linearly dominate, and take amplitudes across ALL
+// kinds at once rather than a first-match cascade. The prior version of this
+// module was exactly the cascade cube's own header documents as the failure
+// it replaced: a first-pattern-wins scan over section headers only, with no
+// signal at all once a line has no header above it. Notably, cube/index.js's
+// own "Kind" terrain vocabulary (type|kind|category|class|definition|
+// species) and its "DEF" operator (define|declare|specify|stipulate) are,
+// almost verbatim, this module's "definition" kind — real evidence this
+// tier-of-evidence approach generalizes past the terrain/stance/operator
+// dimensions cube was built for, to a fourth: what KIND OF CLAIM a sentence
+// in a plan document is making.
+//
+// cube/index.js's own header calls its outputs advisory: "may inform
+// display, ordering, or a prior weight. They may NEVER gate, veto, route, or
+// address." Applied identically here — see classifyFactKind's `confident`
+// field and its caller in extractCandidateFacts, which records a fact's kind
+// as `kindStatus: 'unclear'` rather than trusting a coin-flip margin whenever
+// no header/table/date-prefix structural signal set it directly.
 
-const KIND_SIGNALS = {
-  goal: [/\bgoals?\b/i, /\btargets?\b/i, /\bobjectives?\b/i, /\bplan(ned)?\b/i, /\baims?\b/i, /\bby 20\d\d\b/i],
-  current_state: [/\bcurrent(ly)?\b/i, /\bbaseline\b/i, /\bas[- ]of\b/i, /\bstatus\b/i, /\btoday\b/i, /\bexisting\b/i, /\bpresent state\b/i],
-  intervention_metric: [/\bintervention/i, /\bmetrics?\b/i, /\bprogram(me)?s?\b/i, /\boutcomes?\b/i, /\bkpis?\b/i, /\bindicators?\b/i],
-  definition: [/\bdefinitions?\b/i, /\bdefined as\b/i, /\bglossary\b/i, /\bterms?\b/i],
+const WEAK_KIND_WEIGHT = 0.15;
+
+const KIND_TERMS = {
+  goal: {
+    strong: /\b(goals?|targets?|objectives?|aims?|aspires?|committed?\s+to|by\s+20\d\d)\b/gi,
+    weak: /\b(plan(ned)?|will|shall|intends?|hopes?\s+to|seeks?\s+to)\b/gi,
+  },
+  current_state: {
+    strong: /\b(current(ly)?|baseline|as[- ]of|status\s+quo|present\s+state|today)\b/gi,
+    weak: /\b(now|existing|reported|observed|measured)\b/gi,
+  },
+  intervention_metric: {
+    strong: /\b(interventions?|kpis?|indicators?|program(me)?s?|initiatives?)\b/gi,
+    weak: /\b(outcomes?|metrics?|effort|activit(?:y|ies)|service)\b/gi,
+  },
+  definition: {
+    strong: /\b(definitions?|defined\s+as|glossary|means?\s+(?:the|a|an)\b|refers?\s+to|is\s+defined)\b/gi,
+    weak: /\b(terms?|denotes?|constitutes?)\b/gi,
+  },
 };
+
+const hits = (t, re) => (t.match(re) ?? []).length;
+
+function kindEvidence(t, { strong, weak }) {
+  return Math.log1p(hits(t, strong)) + WEAK_KIND_WEIGHT * Math.log1p(hits(t, weak));
+}
+
+/**
+ * classifyFactKind(text) -> { kind, confident, amplitudes }
+ *
+ * `kind` is the argmax kind, or null when there is no evidence at all for
+ * any kind — never a silent default. `amplitudes` is every kind's share of
+ * the total evidence, strongest first, for a caller that wants to show its
+ * reasoning rather than just the winner. `confident` requires the winner to
+ * hold both a real plurality (>=0.4) AND a real margin over the runner-up
+ * (>=0.15) — a winner at 0.26 against three others at ~0.24 each is
+ * "ahead" but not decisive, and is treated as no signal, not as this kind.
+ */
+export function classifyFactKind(text) {
+  const t = String(text ?? "");
+  const scored = Object.entries(KIND_TERMS).map(([kind, terms]) => ({ kind, score: kindEvidence(t, terms) }));
+  const total = scored.reduce((s, r) => s + r.score, 0);
+  const amplitudes = scored
+    .map((r) => ({ kind: r.kind, amplitude: total > 0 ? r.score / total : 0 }))
+    .sort((a, b) => b.amplitude - a.amplitude);
+
+  if (total === 0) return { kind: null, confident: false, amplitudes };
+  const top = amplitudes[0], second = amplitudes[1];
+  const confident = top.amplitude >= 0.4 && (top.amplitude - (second?.amplitude ?? 0)) >= 0.15;
+  return { kind: top.kind, confident, amplitudes };
+}
+
+// ── Section-kind / date-prefix detection for extraction ─────────────────────
 
 function detectSectionKind(line) {
   const isHeader = /^#{1,6}\s+/.test(line)
     || (line === line.toUpperCase() && /[A-Z]/.test(line) && line.trim().length > 2 && line.trim().length < 80 && !/[.!?]$/.test(line.trim()));
   if (!isHeader) return null;
-  for (const [kind, patterns] of Object.entries(KIND_SIGNALS)) {
-    if (patterns.some((p) => p.test(line))) return kind;
-  }
-  return null;
+  // A header is short, high-signal, DELIBERATE text — treated as a
+  // structural override the same way a table column header is: its
+  // classification is trusted at whatever margin it has, not held to the
+  // 0.4/0.15 bar a bare sentence needs (see classifyFactKind).
+  return classifyFactKind(line).kind;
 }
 
 // Strips a leading "By 2030", "As of 2024", "(2026)" clause and reports the
@@ -282,7 +439,23 @@ export function extractCandidateFacts(text, { defaultKind = null } = {}) {
     const value = String(rawValue || "").trim();
     if (!key || !value) return;
     if (key.length > 100 || value.length > 200) return;
-    facts.push({ rawKey: key, rawValue: value, kind: kind || null, quote, line: lineNo, asOfYear });
+
+    // `kind` here is already a structural decision (a header, a table
+    // column, a "By <year>" prefix, or the document-level default the
+    // caller chose) — trusted as-is, same as detectSectionKind's header
+    // handling. Only when NONE of those set anything does this fall back to
+    // classifyFactKind's sentence-level evidence, and that fallback is the
+    // one case tagged with its own confidence for ingestDocument to act on.
+    let finalKind = kind || null;
+    let kindConfident = !!kind;
+    let kindAmplitudes = null;
+    if (!finalKind) {
+      const classified = classifyFactKind(quote);
+      finalKind = classified.kind;
+      kindConfident = classified.confident;
+      kindAmplitudes = classified.amplitudes;
+    }
+    facts.push({ rawKey: key, rawValue: value, kind: finalKind, kindConfident, kindAmplitudes, quote, line: lineNo, asOfYear });
   };
 
   lines.forEach((raw, i) => {
@@ -332,6 +505,143 @@ export function extractCandidateFacts(text, { defaultKind = null } = {}) {
   });
 
   return facts;
+}
+
+// ── Model-assisted extraction ───────────────────────────────────────────────
+//
+// The heuristic pass above is precise but narrow: real community plans are
+// mostly prose ("the city aims to increase affordable housing stock by 40%
+// by 2030 through zoning reform"), and a sentence like that has no colon, no
+// table, no header naming it — extractCandidateFacts finds nothing there.
+// This is a second, optional pass that asks a model to find what the
+// heuristics missed, but it is bound by the same discipline LAWS.md L8
+// requires of the chat pipeline's own tool loop: the model may propose, it
+// may never be the mechanical merge step (L8a/L8b — every proposed fact's
+// key still resolves through the exact same matchKey() every heuristic fact
+// does), and every apparent quotation it produces is verified against the
+// real source bytes before being trusted at all (L8c) — a candidate whose
+// quote cannot be found verbatim in the source is rejected outright and
+// reported as rejected, never silently dropped or silently kept.
+//
+// `callModel(prompt) -> Promise<string>` is injected by the caller (see
+// server/proxy.js's insights/ingest route) exactly the way turn-generation.js
+// and conversation-summary.js already take their model call as a parameter
+// rather than reaching for a provider themselves — this module stays
+// testable with a stub and provider-agnostic.
+
+const MODEL_EXTRACT_MAX_CHARS = 6000;
+const MODEL_EXTRACT_VALID_KINDS = new Set(["goal", "current_state", "intervention_metric", "definition"]);
+
+function buildModelExtractPrompt(text, heuristicFacts, sourceLabel) {
+  const already = heuristicFacts.slice(0, 30).map((f) => `- ${f.rawKey}: ${f.rawValue}`).join("\n") || "(none found yet)";
+  return [
+    `You are extracting structured facts from a community/organizational plan document${sourceLabel ? ` ("${sourceLabel}")` : ""}.`,
+    `A mechanical first pass already found these facts from clearly-labeled lines/tables — do NOT repeat any of them:`,
+    already,
+    ``,
+    `Read the document text below and find ADDITIONAL facts stated in ordinary prose (sentences, not tables) about:`,
+    `- goal: a target the plan sets ("aims to increase X by 40% by 2030")`,
+    `- current_state: a present/baseline fact ("as of 2024, X stands at Y")`,
+    `- intervention_metric: a program/initiative's measured effect`,
+    `- definition: what a term means in this document`,
+    ``,
+    `Respond with ONLY a JSON array, no prose, no markdown fences. Each item:`,
+    `{"rawKey": "short label for the fact", "value": "the number/percent/text value", "kind": "goal|current_state|intervention_metric|definition", "quote": "the EXACT sentence or clause from the text below that states this, copied verbatim, word for word"}`,
+    `The "quote" field is checked against the source text — if it is not an exact substring, the fact is discarded. Do not paraphrase the quote.`,
+    `If you find nothing beyond what was already listed, respond with [].`,
+    ``,
+    `DOCUMENT TEXT:`,
+    text,
+  ].join("\n");
+}
+
+function parseModelExtractJson(raw) {
+  const text = String(raw ?? "").trim();
+  const arrayMatch = text.match(/\[[\s\S]*\]/);
+  if (!arrayMatch) return null;
+  try {
+    const parsed = JSON.parse(arrayMatch[0]);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * proposeFactsWithModel(text, opts) -> { proposed, rejected, truncated, truncatedChars }
+ *
+ * `opts.callModel` is required. `opts.heuristicFacts` (from
+ * extractCandidateFacts) is shown to the model so it looks for what that
+ * pass missed rather than re-finding the same lines. Every accepted fact in
+ * `proposed` carries `extractionMethod: 'model'` and has already had its
+ * quote verified against `text` — nothing in `proposed` is unverified.
+ * `rejected` lists every candidate the model returned that did NOT verify,
+ * each with why, so a caller can disclose rather than silently drop them.
+ */
+export async function proposeFactsWithModel(text, { callModel, heuristicFacts = [], sourceLabel = null, maxChars = MODEL_EXTRACT_MAX_CHARS } = {}) {
+  if (typeof callModel !== "function") throw new TypeError("proposeFactsWithModel requires a callModel(prompt) function");
+
+  const fullText = String(text || "");
+  const truncated = fullText.length > maxChars;
+  const sent = truncated ? fullText.slice(0, maxChars) : fullText;
+  const sourceForVerification = normalizeForFidelity(fullText);
+
+  const prompt = buildModelExtractPrompt(sent, heuristicFacts, sourceLabel);
+  const raw = await callModel(prompt);
+  const candidates = parseModelExtractJson(raw);
+
+  if (candidates === null) {
+    return { proposed: [], rejected: [{ reason: "model response was not a parseable JSON array", raw: String(raw ?? "").slice(0, 500) }], truncated, truncatedChars: truncated ? fullText.length - maxChars : 0 };
+  }
+
+  const proposed = [];
+  const rejected = [];
+  for (const c of candidates) {
+    const rawKey = String(c?.rawKey ?? "").trim();
+    const value = String(c?.value ?? "").trim();
+    const quote = String(c?.quote ?? "").trim();
+    let kind = String(c?.kind ?? "").trim();
+
+    if (!rawKey || !value || !quote) {
+      rejected.push({ reason: "missing rawKey/value/quote", candidate: c });
+      continue;
+    }
+    if (!MODEL_EXTRACT_VALID_KINDS.has(kind)) kind = null;
+
+    // The non-negotiable check (LAWS.md L2f/L8c): the quote must be a real,
+    // literal substring of the source text. quoteOccursIn tolerates only a
+    // leading-character case flip (house-style capitalization), never a
+    // deeper mismatch — the same tolerance verifyQuotedFidelity gives a
+    // chat answer's citations, no looser.
+    const quoteNorm = normalizeForFidelity(quote);
+    if (!quoteNorm || !quoteOccursIn(sourceForVerification, quoteNorm)) {
+      rejected.push({ reason: "quote not found verbatim in the source document — likely fabricated", candidate: c });
+      continue;
+    }
+
+    // The model's claimed kind is cross-checked against the SAME mechanical
+    // classifier a heuristic-only fact would get, using the quote itself
+    // (real source text, not the model's paraphrase of it). Agreement, or a
+    // mechanical signal that itself isn't confident, trusts the model's
+    // kind. A CONFIDENT mechanical disagreement is real counter-evidence and
+    // downgrades the fact to kindStatus 'unclear' rather than picking a side.
+    const mechanical = classifyFactKind(quote);
+    let kindConfident = true;
+    if (kind && mechanical.confident && mechanical.kind !== kind) kindConfident = false;
+    if (!kind) { kind = mechanical.kind; kindConfident = mechanical.confident; }
+    if (!kind) {
+      rejected.push({ reason: "no kind could be determined (model gave none and the quote has no mechanical kind signal)", candidate: c });
+      continue;
+    }
+
+    proposed.push({
+      rawKey, rawValue: value, kind, kindConfident,
+      kindAmplitudes: mechanical.amplitudes, modelKind: c?.kind ?? null, mechanicalKind: mechanical.kind,
+      quote, line: null, asOfYear: null, extractionMethod: "model",
+    });
+  }
+
+  return { proposed, rejected, truncated, truncatedChars: truncated ? fullText.length - maxChars : 0 };
 }
 
 // ── InsightStore ─────────────────────────────────────────────────────────
@@ -433,15 +743,46 @@ export class InsightStore {
    * still override it per-fact. Returns a summary plus every observation
    * created, so a caller can show exactly what was recorded and what needs
    * attention (LAWS.md-style: nothing here should surprise the reader later).
+   *
+   * `useModel`/`callModel`: when set, runs proposeFactsWithModel() after the
+   * heuristic pass to catch prose the heuristics can't parse (see that
+   * function's header). The two passes are ALWAYS reported separately in the
+   * returned `heuristic`/`model` summaries — never blended into one
+   * undifferentiated count (LAWS.md L7: disclose scope, don't blend
+   * silently). If `useModel` is requested but `callModel` fails or is
+   * missing, ingestion still completes with the heuristic results and
+   * `model.ran === false` names why, rather than silently returning fewer
+   * facts than a caller who asked for the model pass would expect.
    */
-  async ingestDocument(projectId, { text, kind = null, asOf = null, sourceId = null, sourceName = null } = {}) {
+  async ingestDocument(projectId, { text, kind = null, asOf = null, sourceId = null, sourceName = null, useModel = false, callModel = null } = {}) {
     return this.#withLock(projectId, async () => {
       const registry = await this.#readRegistry(projectId);
       const obsStore = await this.#readObservations(projectId);
-      const facts = extractCandidateFacts(text, { defaultKind: kind });
+      const heuristicFacts = extractCandidateFacts(text, { defaultKind: kind });
 
+      let modelFacts = [];
+      let modelSummary = null;
+      if (useModel) {
+        if (typeof callModel !== "function") {
+          modelSummary = { ran: false, error: "model-assisted extraction was requested but no model call is configured" };
+        } else {
+          try {
+            const result = await proposeFactsWithModel(text, { callModel, heuristicFacts, sourceLabel: sourceName });
+            modelFacts = result.proposed;
+            modelSummary = {
+              ran: true, proposed: result.proposed.length, rejected: result.rejected.length,
+              rejectedReasons: result.rejected.map((r) => r.reason),
+              truncated: result.truncated, truncatedChars: result.truncatedChars,
+            };
+          } catch (err) {
+            modelSummary = { ran: false, error: err.message };
+          }
+        }
+      }
+
+      const allFacts = [...heuristicFacts, ...modelFacts];
       const created = [];
-      for (const fact of facts) {
+      for (const fact of allFacts) {
         const match = matchKey(fact.rawKey, registry.keys);
         const now = new Date().toISOString();
         let obsKey = null, keyStatus, candidates = [];
@@ -468,6 +809,14 @@ export class InsightStore {
           id: newId(),
           projectId,
           kind: fact.kind || kind || "current_state",
+          // A fact whose kind came from a structural signal (header, table
+          // column, date-prefix, or the model — cross-checked above) is
+          // 'resolved'; one that fell back to classifyFactKind's sentence-
+          // level guess without clearing its confidence bar is 'unclear' —
+          // symmetric with keyStatus, and just as visible to a reviewer.
+          kindStatus: fact.kindConfident === false ? "unclear" : "resolved",
+          kindAmplitudes: fact.kindAmplitudes || null,
+          extractionMethod: fact.extractionMethod || "heuristic",
           rawKey: fact.rawKey,
           key: obsKey,
           keyStatus,
@@ -495,6 +844,9 @@ export class InsightStore {
         added: created.length,
         unclear: created.filter((o) => o.keyStatus === "unclear").length,
         resolved: created.filter((o) => o.keyStatus === "resolved").length,
+        kindUnclear: created.filter((o) => o.kindStatus === "unclear").length,
+        heuristic: { added: heuristicFacts.length },
+        model: modelSummary,
         observations: created,
       };
     });
@@ -518,7 +870,13 @@ export class InsightStore {
 
       const parsed = parseValue(value);
       const observation = {
-        id: newId(), projectId, kind, rawKey: rawKey || (registry.keys.find((k) => k.key === obsKey)?.label) || obsKey,
+        id: newId(), projectId, kind,
+        // A human typing this in has already decided what kind it is —
+        // always 'resolved', the same way a manual key mapping never goes
+        // through the fuzzy/structural tiers matchKey applies to extracted
+        // text.
+        kindStatus: "resolved", kindAmplitudes: null, extractionMethod: "manual",
+        rawKey: rawKey || (registry.keys.find((k) => k.key === obsKey)?.label) || obsKey,
         key: obsKey, keyStatus, candidates, value, parsed, asOf,
         sourceId, sourceName, quote: quote || null, line: null,
         manual: true, createdAt: now, updatedAt: now,
@@ -551,14 +909,16 @@ export class InsightStore {
 
   /**
    * Raw keys still awaiting a human decision. First grouped by EXACT
-   * normalized text (precise), then those groups are greedily clustered when
-   * two distinct spellings are mutually similar enough that AUTO_MERGE_THRESHOLD
-   * would have merged them automatically had a canonical key already existed
-   * — e.g. "Affordable Housing Units" and "Aff Housing Units" appearing in
-   * the same document. This never groups two keys a confident auto-merge
-   * wouldn't have merged on its own; it only saves a reader from resolving
-   * the same concept twice in one sitting. Each row's `rawKeys` lists every
-   * distinct spelling folded in, so resolveKey() can clear all of them at once.
+   * normalized text (precise), then those groups are clustered when two
+   * distinct spellings structurally corefer (keysStructurallyCorefer — the
+   * same engine-tier containment test matchKey() uses to auto-merge against
+   * an EXISTING canonical key) — e.g. "Affordable Housing Units" and "Aff
+   * Housing Units Total" appearing in the same document. This is the display
+   * grouping counterpart of matchKey's auto tier: mechanical, never a fuzzy
+   * score, so a row is only ever pre-merged here on the same structural
+   * evidence that would have auto-merged it against a real canonical key.
+   * Each row's `rawKeys` lists every distinct spelling folded in, so
+   * resolveKey() can clear all of them at once.
    */
   async unclearKeys(projectId) {
     const obsStore = await this.#readObservations(projectId);
@@ -576,7 +936,7 @@ export class InsightStore {
     const clusters = [];
     for (const entry of byNorm.values()) {
       const home = clusters.find((cluster) =>
-        cluster.members.some((m) => jaccardSimilarity(m.rawKey, entry.rawKey) >= AUTO_MERGE_THRESHOLD)
+        cluster.members.some((m) => keysStructurallyCorefer(m.rawKey, entry.rawKey))
       );
       if (home) home.members.push(entry);
       else clusters.push({ members: [entry] });
