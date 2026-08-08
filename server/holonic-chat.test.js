@@ -50,6 +50,16 @@ test("planner falls back to heuristic when the model reply is not JSON", () => {
   assert.equal(p.depth, "essay");
 });
 
+test("planner salvages a genuine riff depth field even when the rest of the JSON is corrupted", () => {
+  // Reproduces a small local model (llama3.2:1b) answering "hello there":
+  // it got the depth field right, then broke the JSON by echoing the
+  // prompt's own `"riff"|"essay"` type union literally into the reply —
+  // which used to make the whole-text keyword heuristic see "essay" and
+  // route a plain greeting into the multi-section essay pipeline.
+  const p = parsePlannerReply('{"depth":"riff",""|"essay","sections":[{"title":"Unrelated","topic":"Unrelated"}]}');
+  assert.equal(p.depth, "riff");
+});
+
 test("planner tolerates prose wrapped around the JSON", () => {
   const p = parsePlannerReply(
     'I would be happy to help! Here is my plan: {"depth":"essay","reason":"explicit essay ask","sections":[{"title":"Evolution","topic":"dolphin evolution"},{"title":"Communication","topic":"dolphin communication"}]} Let me know if you want changes!'
