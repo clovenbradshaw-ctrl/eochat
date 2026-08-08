@@ -2,6 +2,26 @@
 
 Each run replays the same scripted multi-turn conversations through two REAL context-assembly pipelines from server/turn-controller.js and server/conversation-memory.js — a windowed-only baseline (what a plain chat completion passthrough gives you) and the holonic pipeline (windowing + the desk). Newest runs first.
 
+## 2026-08-08T14-49-44-632Z__scripted
+
+4/4 scenarios passed (scripted, deterministic context-only run — see README.md for what this does and does not prove).
+
+- **long-thread-recall** — PASS (4/4 checks)
+- **multi-fact-recall** — PASS (6/6 checks)
+- **recall-denial-resistance** — PASS (2/2 checks)
+- **silent-truncation-disclosure** — PASS (5/5 checks)
+
+
+## 2026-08-08T14-40-47-616Z__scripted
+
+4/4 scenarios passed (scripted, deterministic context-only run — see README.md for what this does and does not prove).
+
+- **long-thread-recall** — PASS (4/4 checks)
+- **multi-fact-recall** — PASS (6/6 checks)
+- **recall-denial-resistance** — PASS (2/2 checks)
+- **silent-truncation-disclosure** — PASS (5/5 checks)
+
+
 ## 2026-08-08T14-24-15-401Z__scripted
 
 4/4 scenarios passed (scripted, deterministic context-only run — see README.md for what this does and does not prove).

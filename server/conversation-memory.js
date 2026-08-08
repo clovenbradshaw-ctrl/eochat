@@ -310,11 +310,35 @@ export function buildMemoryMessage({ hot = [], facts = [] } = {}) {
 // provided, the conversation…) is checked against the desk. If the reader's
 // question shares ≥2 content terms with a recorded fact — or shares a
 // code-like token — the denial is a false denial of a recorded fact.
-const DENIAL_VERB = /\b(?:didn'?t|did not|wasn'?t|was not|weren'?t|were not|haven'?t|have not|hasn'?t|has not|hadn'?t|never|can'?t|cannot|can not|couldn'?t|could not|isn'?t|is not|aren'?t|are not|n'?t|not)\b/i;
-const DENIAL_SUBJECT = /\b(?:information|record|records|mention|mentions|knowledge|recall|remember|codes?|facts?|details?|data|conversation|material|discussed|discussion|stated|provided|given|received|shared|mentioned|recorded|sources?|passages?)\b/i;
+const DENIAL_VERB = /\b(?:didn'?t|did not|wasn'?t|was not|weren'?t|were not|haven'?t|have not|hasn'?t|has not|hadn'?t|never|can'?t|cannot|can not|couldn'?t|could not|isn'?t|is not|aren'?t|are not|n'?t|not)\b/gi;
+const DENIAL_SUBJECT = /\b(?:information|record|records|mention|mentions|knowledge|recall|remember|codes?|facts?|details?|data|conversation|material|discussed|discussion|stated|provided|given|received|shared|mentioned|recorded|sources?|passages?)\b/gi;
+
+// Several of the DENIAL_SUBJECT words ("stated", "mentioned", "provided",
+// "given") are exactly what a CORRECT recall answer uses affirmatively
+// ("You stated that X was Y", "as you mentioned"). A real denial keeps the
+// negation and the subject close together ("never provided", "no record",
+// "not discussed") — requiring them within a short distance, rather than
+// matching anywhere in the whole sentence, is what tells "You stated X, so
+// it's not overdue" (an affirmation with an unrelated negation later in the
+// sentence) apart from "that information was never provided" (a real
+// denial). Found empirically: two independent real model answers correctly
+// cited a recorded fact and were still flagged as denials under the old
+// whole-sentence check, purely because an unrelated "not" appeared later in
+// the same sentence.
+const DENIAL_PROXIMITY_CHARS = 30;
 
 export function isDenialSentence(sentence) {
-  return DENIAL_VERB.test(sentence) && DENIAL_SUBJECT.test(sentence);
+  const text = String(sentence || "");
+  const verbMatches = [...text.matchAll(DENIAL_VERB)];
+  if (!verbMatches.length) return false;
+  const subjectMatches = [...text.matchAll(DENIAL_SUBJECT)];
+  if (!subjectMatches.length) return false;
+  for (const v of verbMatches) {
+    for (const s of subjectMatches) {
+      if (Math.abs(v.index - s.index) <= DENIAL_PROXIMITY_CHARS) return true;
+    }
+  }
+  return false;
 }
 
 /**

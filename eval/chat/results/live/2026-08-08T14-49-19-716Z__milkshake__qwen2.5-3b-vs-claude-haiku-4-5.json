@@ -1,0 +1,149 @@
+{
+  "runId": "2026-08-08T14-49-19-716Z__milkshake__qwen2.5-3b-vs-claude-haiku-4-5",
+  "claudeModel": "claude-haiku-4-5",
+  "localModel": "qwen2.5:3b",
+  "promptChars": {
+    "growing": 27401,
+    "localBaseline": 6470,
+    "holonic": 7417
+  },
+  "accuracy": {
+    "growing": 0.8,
+    "localBaseline": 0,
+    "holonic": 1,
+    "foldHosted": 1
+  },
+  "calibratedTokPerSec": 11.754042456298674,
+  "factResults": [
+    {
+      "topic": "machine serial number",
+      "code": "4819273",
+      "growing": {
+        "text": "Your serial number is **4819273** — the one you gave me at the start when you mentioned the BEATER OVERLOAD error that's been running since Tuesday.\n\nSince we've covered a lot of ground in this troubleshooting session, here's where I'd suggest focusing next based on what you've already ruled out:\n\n1. **Inspect scraper blades** — wear here is a very common cause of the exact symptom you're seeing, and you haven't mentioned checking those yet.\n2. **Check the drive coupling** for rounding/wear and gearbox alignment — this was the field fix that resolved a similar overload on another Taylor model.\n3. **Visual condenser inspection** — dust/grease buildup there could be contributing even if it hasn't triggered HPCO yet.\n4. **Confirm the o-ring replacement from March 3rd** is still seated properly and lubricated",
+        "recalled": false,
+        "inputTokens": 6719,
+        "wallMs": 3503
+      },
+      "localBaseline": {
+        "text": "I'm sorry, but I don't have access to your specific machine's serial number. My training data only includes general information about Taylor machines and their maintenance schedules, not individual units.\n\nTo find your machine's serial number:\n1. **Check the User Manual:** The manual should include instructions on how to locate the serial number.\n2. **Contact Customer Support:** Reach out to Taylor customer support with details of your machine model and any other relevant information they might need to help you find it.\n3. **Machine Label or Tag:** Sometimes, a sticker or tag attached to the unit will have the serial number written on it.\n\nOnce you have the serial number, you can use it for specific troubleshooting steps or maintenance schedules that are tailored to your particular machine model. If you provide more details about your machine's model and any other relevant information, I might be able to offer more targeted assistance!",
+        "recalled": false,
+        "wallMs": 17422
+      },
+      "holonic": {
+        "text": "The serial number of your Taylor C708 soft-serve freezer is 4819273. This information was provided earlier in our conversation.",
+        "recalled": true,
+        "wallMs": 21105
+      },
+      "foldHosted": {
+        "text": "Your Taylor C708 soft-serve freezer serial number is **4819273**.",
+        "recalled": true,
+        "inputTokens": 1879,
+        "wallMs": 837
+      }
+    },
+    {
+      "topic": "beater door o-ring replacement date",
+      "code": "March 3",
+      "growing": {
+        "text": "You said you replaced it on **March 3rd**.\n\nThat's useful context — if the BEATER OVERLOAD started on Tuesday (and today is presumably sometime after that), the o-ring replacement happened several weeks ago at minimum. That means:\n\n1. **The o-ring itself is unlikely the culprit** for a *new* overload trip, unless something else damaged or dislodged it in those intervening weeks.\n\n2. **But it does tell us something useful:** The machine was running fine with that o-ring in place until Tuesday, which narrows the cause to something that *changed* between March 3rd and Tuesday — not a gradual degradation that's been building for weeks.\n\nThis actually points more directly toward:\n- **Hardened product buildup** (happens during operation, not from age)\n- **Worn scraper blades** (accumulated wear since March, but hitting a critical",
+        "recalled": true,
+        "inputTokens": 6723,
+        "wallMs": 3609
+      },
+      "localBaseline": {
+        "text": "It seems like we're discussing your specific situation regarding when you last checked or replaced the beater door o-ring. If you want to ensure that it's been properly maintained, here are some steps and considerations:\n\n1. **Replacement Frequency:** The beater door o-rings on Taylor machines typically need replacement every 6-12 months depending on usage frequency and conditions.\n\n2. **Visual Inspection:** Before replacing the o-ring, a visual inspection is often sufficient to determine if it needs replacement:\n   - Check for any signs of wear such as flattening or cracking.\n   - Look for any damage like nicks, chips, or gouges that could have caused premature failure.\n   - Inspect for any leakage residue around the door opening.\n\n3. **Replacement Process:** If you've replaced the o-ring recently and it hasn't been a problem since then, there's no immediate cause for concern based on your recent replacement date.\n\n4. **Other Maintenance Checks:**\n   - Ensure that",
+        "recalled": false,
+        "wallMs": 25444
+      },
+      "holonic": {
+        "text": "You stated that you already replaced the beater door o-ring on March 3rd. Let me know if there's anything else I can assist with regarding this information or your troubleshooting steps for the C708 Taylor soft-serve freezer.",
+        "recalled": true,
+        "wallMs": 5296
+      },
+      "foldHosted": {
+        "text": "You replaced the beater door o-ring on **March 3rd**.",
+        "recalled": true,
+        "inputTokens": 1883,
+        "wallMs": 670
+      }
+    },
+    {
+      "topic": "beater motor idle amp reading",
+      "code": "4.2 amps",
+      "growing": {
+        "text": "You measured **4.2 amps at idle** with your clamp meter.\n\nYou had a good instinct that it felt high, which is why we've been working through the troubleshooting sequence — but without Taylor's published \"normal idle\" spec for the C708 beater motor (which they don't standardize across configurations), we'd need to cross-reference that against:\n\n1. **The motor's own nameplate FLA rating** (which would tell us how much headroom exists between 4.2A idle and full load)\n2. **Your machine's electrical data plate** to see the beater circuit specs\n3. **The wiring diagram** inside your service panel\n\nThat 4.2A number itself is the real data point — it's what's actually happening in *your* machine *right now*. Whether it's \"high\" depends on what the baseline should be for that specific motor, which we",
+        "recalled": true,
+        "inputTokens": 6722,
+        "wallMs": 3499
+      },
+      "localBaseline": {
+        "text": "I apologize for any confusion, but as Qwen, I don't have direct access to your specific equipment's data. Measuring the amp draw of the beater motor is typically something you would do using a multimeter or an ammeter that can measure current in real-time.\n\nHere’s how you can measure it:\n\n1. **Ensure the machine is powered off and cooled down:** Make sure the compressor has been running for at least 5 minutes to allow any residual heat to dissipate, as HPCO trips are often related to overheating issues.\n\n2. **Use a multimeter or an ammeter:**\n   - If you have a multimeter that can measure current (dual-trace oscilloscopes and some digital multimeters do not), set it to the AC current setting.\n   - Place the probes on either side of the beater motor's power supply, which is usually connected directly to the main circuit breaker or fuse box. The exact location depends on your machine",
+        "recalled": false,
+        "wallMs": 40526
+      },
+      "holonic": {
+        "text": "You mentioned measuring an amp draw of 4.2 amps at idle when clamping-metering the beater motor. This is quite high for a typical beater motor, and it's important to note that this reading can vary based on several factors including the specific model and its design.\n\nFor context:\n- A standard beater motor typically draws around **1 to 2 amps** at idle.\n- The higher amp draw you measured could indicate issues such as worn components or improper assembly.\n\nGiven your measurement of 4.2 amps, it's worth noting that this is significantly above the typical range and suggests there might be a problem with the coupling, drive belt, motor itself, or another component in the system. \n\nIf you're still unsure about what to do next, I would recommend:\n- **Checking for wear on the coupling:** As we discussed, worn couplings can cause increased torque requirements.\n- **Inspecting the scraper blade and beater door o-ring:** These are often",
+        "recalled": true,
+        "wallMs": 20573
+      },
+      "foldHosted": {
+        "text": "**4.2 amps at idle** — that's what you got when you clamp-metered the beater motor, and you flagged it as feeling high to you.\n\nThat's a solid data point for your next troubleshooting step. Once you've ruled out the capacitor (your next move), that 4.2 amps at idle becomes your baseline to compare against — if it's still elevated after the capacitor swap, that pushes you toward the coupling/gearbox alignment or a motor bearing issue rather than an electrical fault.",
+        "recalled": true,
+        "inputTokens": 1882,
+        "wallMs": 2173
+      }
+    },
+    {
+      "topic": "product mix ratio in use",
+      "code": "4:1",
+      "growing": {
+        "text": "You said you're running a **4:1 water-to-mix ratio on the shake side**.\n\nI flagged that earlier as a potential concern for added beater strain (since higher water content = thinner mix = potentially different freezing/consistency dynamics), but we pivoted to other suspects. Given everything else we've discussed — worn blades, hardened product buildup, gearbox coupling wear — I'd still treat that ratio as secondary to the mechanical issues, but it's worth confirming with Taylor's spec sheet for the C708's shake-side recommended dilution if you haven't already.",
+        "recalled": true,
+        "inputTokens": 6719,
+        "wallMs": 2539
+      },
+      "localBaseline": {
+        "text": "I apologize, but as Qwen, I don't have access to your previous conversations or settings. The mix ratio you were using would typically be something discussed during setup or maintenance with the equipment manufacturer or a technician.\n\nTo find out what mix ratio you were using:\n\n1. **Check Your Equipment Documentation:** If you have any documentation from when you set up or last serviced the machine, it might include details about the mix ratios used.\n2. **Consult Maintenance Records:** If there are any records of maintenance performed on your equipment, they may note the mix ratios that were in use at the time.\n3. **Contact Your Equipment Manufacturer:** Reach out to Taylor (or whoever manufactures your specific combo machine) for assistance. They should be able to provide you with information about typical mix ratios and how to determine what you've been using.\n\nIf you can provide more context or details, I might be better equipped to help you find the answer within my existing knowledge base.",
+        "recalled": false,
+        "wallMs": 20899
+      },
+      "holonic": {
+        "text": "You mentioned that you were running a 4:1 water-to-mix ratio on the shake side.",
+        "recalled": true,
+        "wallMs": 23559
+      },
+      "foldHosted": {
+        "text": "You stated you're running a **4:1 water-to-mix ratio on the shake side**.",
+        "recalled": true,
+        "inputTokens": 1879,
+        "wallMs": 829
+      }
+    },
+    {
+      "topic": "last daily cleaning date",
+      "code": "Sunday night",
+      "growing": {
+        "text": "You said the **last full cleaning and sanitizing cycle was Sunday night** — and you asked whether that was overdue on that front.\n\nGiven that conversation happened during your troubleshooting (and you mentioned the BEATER OVERLOAD started on Tuesday), that's roughly 2 days before the fault appeared, so the cleaning schedule itself isn't the issue here.\n\nThat said — since we've discussed how hardened product can build up *during operation* even on a freshly cleaned machine (independent of the cleaning schedule), the Sunday cleaning doesn't rule out product buildup as a contributing factor to your current overload. The buildup would have accumulated during Monday and Tuesday's runs, not from residue left over from the cleaning cycle itself.",
+        "recalled": true,
+        "inputTokens": 6719,
+        "wallMs": 3394
+      },
+      "localBaseline": {
+        "text": "It seems like there might be some confusion. Let's clarify and go over the key points again to ensure we have everything in order.\n\n**Daily Checklist for Catching Issues Early**\n\n1. **Visual Condenser Check:**\n   - Inspect the condenser fins for any buildup, especially if near a fryer or grill.\n   - This can trigger an HPCO trip if not cleaned regularly.\n\n2. **Air Intake/Discharge Clearance:**\n   - Ensure there is enough airspace around the unit (6 inches minimum) to prevent airflow obstruction.\n   - Check for any items stacked against the machine, which can also cause airflow issues.\n\n3. **O-Ring and Door Seal Visual Check:**\n   - Look at the beater door o-ring for signs of flattening, cracking, or leakage residue from the previous day.\n   - This is more about leak prevention than overload detection.\n\n4. **Scraper Blade Visual/Feel Check:**\n   - Inspect the scraper",
+        "recalled": false,
+        "wallMs": 22059
+      },
+      "holonic": {
+        "text": "You stated that \"Last full cleaning and sanitizing cycle was Sunday night.\"",
+        "recalled": true,
+        "wallMs": 2230
+      },
+      "foldHosted": {
+        "text": "Last full cleaning and sanitizing cycle was **Sunday night** — so it's not overdue on that front.",
+        "recalled": true,
+        "inputTokens": 1879,
+        "wallMs": 1029
+      }
+    }
+  ]
+}
