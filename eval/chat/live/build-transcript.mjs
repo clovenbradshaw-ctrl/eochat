@@ -28,7 +28,13 @@ const PROGRESS_PATH = join(TRANSCRIPTS_DIR, "milkshake.progress.jsonl");
 const FINAL_PATH = join(TRANSCRIPTS_DIR, "milkshake.transcript.json");
 
 function parseArgs(argv) {
-  const args = { model: "claude-sonnet-5", maxTokens: 500 };
+  // Claude Sonnet 5 runs adaptive thinking on by default, and max_tokens is a
+  // hard cap on thinking + visible text COMBINED — a tight budget here can
+  // (and did, in an earlier run of this script: 3/28 turns came back with
+  // thinking_tokens == output_tokens and an EMPTY visible answer) starve the
+  // actual response entirely while thinking eats the whole budget. 2000
+  // leaves real headroom for both.
+  const args = { model: "claude-sonnet-5", maxTokens: 2000 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--model") args.model = argv[++i];
