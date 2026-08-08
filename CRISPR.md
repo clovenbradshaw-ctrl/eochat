@@ -180,10 +180,34 @@ unfalsifiable citation as the more serious failure than a missing one.
    If there's a real, maintained hit, the pipeline ends here: install a
    dependency, don't write or splice anything. This is Krueger's already-
    solved layer and should absorb most tasks before anything below runs.
-5. **Corpus search** (only if 3–4 miss). GitHub code search (the GitHub MCP
-   tools already available to this agent — `search_code`, `search_repositories`)
-   and/or Software Heritage, clustered Aroma-style rather than taking the
-   first hit.
+5. **Corpus search** (only if 3–4 miss) — but not one search, two, at two
+   different grains, a distinction the first buildable increment did not
+   originally draw and real testing surfaced. GitHub code search (the GitHub
+   MCP tools already available to this agent — `search_code`,
+   `search_repositories`) and/or Software Heritage, clustered Aroma-style
+   rather than taking the first hit, answers "is there a reusable
+   *component* for this" — still roughly package-grain. A separate question,
+   one grain coarser, is "is the *whole task* a known archetype" — "build a
+   website that looks like Reddit" should find a real, working
+   implementation to adapt, not get assembled function-by-function from
+   npm packages, which structurally cannot answer that question (they index
+   libraries, not applications). Validated with real queries before being
+   built (`eval/agent/crispr-search.mjs`'s `searchAppArchetype`): GitHub
+   repository search for "reddit clone" (+`stars:>100`) returns 16 real
+   implementations (`breadit`, 1,114 stars, Next.js/TypeScript down through
+   Java/Spring, Python/Flask, plain JS); "trello kanban board"
+   (+`stars:>50`) returns 12, including `react-trello` (2,258 stars,
+   literally "pluggable kanban board component"). More useful than either
+   hit alone: two negative controls — a nonsense query and a real but
+   non-archetype technical task — both returned a clean 0, which searchNpm's
+   own nonsense-query test did *not* (5 loosely-related hits; npm's
+   full-text search is generous even on garbage input). The star-count
+   floor is doing real work here, not just cosmetic noise reduction — it is
+   what makes this altitude's hit/miss signal trustworthy where npm's isn't.
+   Kept as a standalone function, not wired to a live tool yet: a match here
+   implies cloning and adapting a whole third-party application, a much
+   bigger license/provenance decision (§3) than snipping one function, and
+   whether/how to expose it to a live agent is an open decision on its own.
 6. **Specificity gate (the PAM check).** Confirm the candidate occupies the
    same cube address as the task — mechanical, not similarity-by-vibes. This
    is `LAWS.md` L8 ("selection over a navigation index is mechanical, never
@@ -198,12 +222,63 @@ unfalsifiable citation as the more serious failure than a missing one.
    the same "must make sense for a nameless leitmotif" bar applies here: a
    snippet that only works framed as this one task's hack does not become an
    organ, it stays a one-off.
-10. **Retain.** Write source, revision/SWHID, license, induced kind, cube
-    address, and verification result to the semantic ledger. The next task
-    at the same address finds this instead of re-searching — and if steps
-    3–7 all missed and eoCode genuinely had to hand-code something new, step
-    10 still fires on that result, so the same kind is never solved twice
-    even the first time it's real.
+10. **Coherence gate — built and validated, not just proposed
+    (`eval/agent/coherence-check.mjs`).** Verification (stage 8) proves each
+    spliced piece works in isolation; it says nothing about whether multiple
+    snipped pieces actually relate to each other the way the source
+    implementation did, or just sit next to each other because they
+    compiled. This is the check none of §6's market/research prior art has:
+    not "does it pass tests," but "do these pieces form a real holon, or an
+    incoherent pile." Built on `server/task-log.js`'s `deriveLevels()`,
+    which mechanically determines whether one thing is genuinely *above*
+    another — a real existence-dependency relation — or merely a *peer*,
+    with peer reported as an honest, first-class result rather than a forced
+    hierarchy. `checkCoherence(dir)` builds a REAL import/require graph over
+    a snipped set of files and runs it through that same test, flagging any
+    file with zero earned relation to the rest as `isolated`.
+
+    Validated against real, freshly-cloned material, not fixtures — the
+    same real-repo discipline `ORGAN-STACK-REAL-DEPLOYMENT.md` insists on:
+    cloned `d11z/asperitas` (a real Reddit clone from §6) and ran three
+    snips through it. `controllers/posts.js` + its two real model imports
+    (`models/post.js`, `models/user.js`) correctly reports `coherent: true`
+    — a clean core with every file earning a real edge. Adding
+    `controllers/comments.js` to that same snip correctly flags it
+    `isolated`: it has zero *import* edges to anything else, even though
+    it's functionally coupled to posts at runtime through Express
+    middleware (`req.post.comments`) — a real, honest limitation surfaced
+    by real material, not a hypothetical one: static import analysis alone
+    misses coupling that only exists through the framework's own request
+    lifecycle. A third, adversarial test mixed real asperitas files with
+    two files from an entirely unrelated codebase (this repo's own
+    `eo-cube.js`, `web-search.js`) in the same directory; the checker
+    correctly isolated exactly the two unrelated files while still finding
+    the real relations among the actually-related ones in the same run —
+    proof this discriminates rather than defaulting to "coherent."
+
+    Wired as a live tool (`check_coherence`, `addCoherenceCheckTool` in
+    `server/eocode-agent.js`) so eoCode itself can run it on anything it
+    just copied in, before calling `finish`.
+
+    **Real, current gap, not a detail to gloss over:** the theory
+    `deriveLevels()` cites (`docs/holon-level.md`, referenced in
+    `task-log.js` and `holonic-task.js`) names *two* tests —
+    existence-dependency and possibility-constraint ("A constrains what B
+    may be") — but only existence-dependency is implemented, here and
+    everywhere else in this codebase. `possibility-constraint` is named in
+    three places and built in none of them. Until it exists, this gate can
+    confirm two pieces are unrelated, or related by a real import edge; it
+    cannot yet confirm the fuller claim that a real edge is wired
+    *correctly*, or catch coupling that exists at runtime but not in the
+    import graph (as `comments.js` showed) — it inherits the same honesty
+    this document already insists on elsewhere: report what's actually
+    checked, not what the theory eventually promises.
+11. **Retain.** Write source, revision/SWHID, license, induced kind, cube
+    address, verification result, and coherence-gate result to the semantic
+    ledger. The next task at the same address finds this instead of
+    re-searching — and if steps 3–7 all missed and eoCode genuinely had to
+    hand-code something new, step 11 still fires on that result, so the
+    same kind is never solved twice even the first time it's real.
 
 **A constraint that binds every stage above, carried over from day one:
 never inflate the local model's prompt window.** eoCode drives a small
@@ -245,7 +320,84 @@ expensive way once the corpus-search stage is real.
   only ever a *discovery* surface and Software Heritage is the thing actually
   cited in the ledger.
 
-## 6. Recommended first step
+## 6. Where this sits against the market — not just the research literature
+
+§2 checked this against research: CBR, Krueger, clone detection, Aroma,
+Software Heritage, Voyager, ADAS. That is the right prior art for the
+*mechanism*. It says nothing about whether the mechanism is what the market
+already does when the exact same problem — "the user described a whole app,
+don't hand-code it from zero" — is a live commercial category today. Checked
+directly, the answer sharpens the recommendation rather than confirming it.
+
+- **v0.app, Bolt.new, and Lovable — the current "describe an app, get an
+  app" market leaders — do not search a live code corpus and adapt what
+  they find.** They generate fresh code in a curated, consistent idiom
+  (v0.app specifically: shadcn/ui + Tailwind + Next.js) plus a small number
+  of hand-authored starter templates (Bolt ships curated templates for
+  landing pages, SaaS, dashboards). None of the public descriptions of any
+  of them mention retrieving and adapting an arbitrary GitHub repository at
+  generation time. That omission from three well-funded, heavily-used
+  products is itself evidence: a curated in-house library is the model the
+  market converged on, not live web-scale retrieval — most plausibly
+  because it sidesteps exactly the license/attribution exposure §3 already
+  treats as a hard gate, and gives consistent quality a scavenged clone
+  repo can't promise.
+- **Wix ADI is the closest real precedent for archetype-level "recognize
+  the kind, pick the template"** — ask a few questions about the business,
+  select a matching template, customize it. Worth noting plainly: it has
+  already been discontinued, folded into "Wix AI Website Builder." Even the
+  product that pioneered pure template-selection judged it insufficient on
+  its own and moved toward more generative methods.
+- **Retrieval-augmented code generation is real, validated research ground
+  — at a narrower grain than a whole app.** RepoCoder and the broader RACG
+  survey retrieve similar code from *within the same repository* to
+  complete the current file; this supports §4's component/utility-grain
+  stages (3–4), not `searchAppArchetype`'s whole-app grain, which sits
+  outside what this literature actually tests.
+- **Screenshot-to-code is a different, competing paradigm for "make it
+  look like Reddit," not a variant of this one.** Instead of inducing a
+  kind from a text description and searching for matching source, it
+  perceives the target's actual appearance (a screenshot or a URL) and
+  generates matching code via a vision model — no kind induction, no
+  search, no provenance question at all, because nothing is reused, only
+  observed. If "looks like Reddit" is meant visually rather than
+  functionally, this sidesteps CRISPR's whole mechanism and may simply be
+  the more direct tool for that framing. eoreader already has perceiver
+  architecture for text, audio, and video (`perceiver/text`,
+  `perceiver/audio`, `perceiver/video`, per `content-index.js`'s
+  `ENTITY_NAMES`); a live-webpage/screenshot perceiver would be a new, real,
+  currently-missing organ — arguably a more honest unlock for the literal
+  "looks like X" framing than an archetype text-search is.
+- **Yeoman and Cookiecutter confirm "organs as generators" is not a new
+  idea — it is a roughly 15-year-old, now-declining product category.** A
+  Yeoman generator already is a named, reusable unit that produces a
+  standardized thing, hand-authored and hand-registered exactly the way
+  `content-index.js`'s `ENTITY_NAMES` is today. The ecosystem's own
+  retrospective is blunt about where that leads unmaintained: "Yeoman and
+  Cookiecutter are dead; long live Copier." A kind registry that goes stale
+  without upkeep is not a hypothetical risk unique to this proposal — it is
+  the documented fate of the last two serious attempts at exactly this
+  idea.
+
+**The honest verdict:** almost every individual mechanism this document
+proposes already exists somewhere, and where it competes directly with a
+mature product (app generation) or a mature research area (repo-level
+retrieval), that prior art mostly argues *against* the piece of CRISPR built
+most recently — live external search as the primary mechanism — and
+*toward* the piece designed first and tested least: an internal, growing,
+license-clean organ registry (the Retain step, §4 stage 11 — the same
+shape as Voyager's skill library and Yeoman's generator ecosystem, minus
+their staleness problem, if kind induction keeps it self-maintaining
+instead of hand-curated). What genuinely does not already exist elsewhere,
+checked against all of the above: automatic kind induction (no product
+surveyed here asks a *model* to recognize the archetype — Wix ADI asks the
+*user*), a checked coordinate space for what got matched (the cube), and
+mandatory per-reuse provenance enforced as a law rather than left to each
+generator author's discretion. That is the actual, narrower claim this
+proposal can make — not "search GitHub before you code," which the market
+has already quietly tried adjacent versions of and moved past.
+
+## 7. Recommended first step
 
 Don't build the cube/kind/ledger machinery first. Wire steps 3–4 only (local
 registry, then package registry) in front of eoCode's existing hand-coding
@@ -254,6 +406,17 @@ sessions — how often "search first" would have skipped hand-coding entirely.
 That's the same real-material-before-theory discipline
 `ORGAN-STACK-REAL-DEPLOYMENT.md` already insists on for the engine; there's
 no reason CRISPR should get a pass on it just because it's new.
+
+**Revised after §6.** The step above was built and validated
+(`eval/agent/crispr-search.mjs`, tested live against `qwen2.5-coder:1.5b` on
+a real task) before §6 was written. Given what §6 found, the next
+investment should not be expanding external search further (more corpus
+stages, more registries) — it should be strengthening stage 11, Retain:
+turning every verified splice and every genuine hand-coded solution into a
+permanent, license-clean entry in eoCode's own organ registry, so external
+search stays a cold-start fallback for a kind eoCode has never seen, not
+the steady-state mechanism. That is the shape every product and research
+precedent in §6 that actually works at scale converged on independently.
 
 ## Sources
 
@@ -265,3 +428,9 @@ no reason CRISPR should get a pass on it just because it's new.
 - [Doe v. GitHub, Microsoft, and OpenAI — Wikipedia](https://en.wikipedia.org/wiki/Doe_v._GitHub,_Microsoft,_and_OpenAI)
 - [GitHub Copilot litigation case updates — Joseph Saveri Law Firm](https://githubcopilotlitigation.com/case-updates.html)
 - [SoftWare Heritage persistent IDentifiers (SWHID)](https://docs.softwareheritage.org/devel/swh-model/persistent-identifiers.html)
+- [Lovable vs Bolt vs v0: AI app builder comparison, 2026](https://particula.tech/blog/lovable-vs-bolt-vs-v0-ai-app-builders)
+- [The evolution from Wix ADI to Wix Harmony](https://www.wix.com/blog/wix-artificial-design-intelligence)
+- [Retrieval-Augmented Code Generation: A Survey with Focus on Repository-Level Approaches (arXiv:2510.04905)](https://arxiv.org/abs/2510.04905)
+- [RepoCoder: Repository-Level Code Completion Through Iterative Retrieval and Generation](https://openreview.net/forum?id=q09vTY1Cqh)
+- [screenshot-to-code (open source)](https://github.com/abi/screenshot-to-code)
+- [Yeoman and Cookiecutter are dead; long live Copier!](https://recallstack.gitlab.io/en/2020/04/18/yeoman-and-cookiecutter-are-dead-long-live-copier/)

@@ -17,7 +17,37 @@ import { REPO_ROOT } from "./paths.js";
 import { createTools } from "../eval/agent/tools.mjs";
 import { runReactLoop, createSession, promptViewFor, applyResponse } from "../eval/agent/react-loop.mjs";
 import { createOllamaAdapter } from "../eval/adapters/ollama-adapter.mjs";
-import { addPriorArtSearchTool } from "../eval/agent/crispr-search.mjs";
+import { addPriorArtSearchTool, addArchetypeSearchTool } from "../eval/agent/crispr-search.mjs";
+import { addCoherenceCheckTool } from "../eval/agent/coherence-check.mjs";
+import { addFetchRepoFilesTool } from "../eval/agent/repo-fetch.mjs";
+import { addReplaceInFileTool } from "../eval/agent/splice-tools.mjs";
+
+/**
+ * eoCode's own finish policy, not a general react-loop rule: if this
+ * session ever copied code in with fetch_repo_files, it must show a LATER
+ * check_coherence call reporting coherent: true before finish is honored.
+ * Real, measured need — a live run copied in real cloned code, edited it,
+ * and called finish without ever running check_coherence, silently
+ * declaring a half-verified splice complete. Mechanical, not a prompt
+ * rule the model has to remember: refused exactly like a failed tool call
+ * (react-loop.mjs's validateFinish hook), including feeding the same
+ * stuck-loop detector if the model just keeps calling finish unchanged.
+ */
+function coherenceGatedValidateFinish(session) {
+  const usedFetch = session.transcript.some(
+    (e) => e.tool === "fetch_repo_files" && e.result && Array.isArray(e.result.copied) && e.result.copied.length > 0,
+  );
+  if (!usedFetch) return { ok: true };
+
+  const lastCoherenceCheck = [...session.transcript].reverse().find((e) => e.tool === "check_coherence");
+  if (lastCoherenceCheck && lastCoherenceCheck.result && lastCoherenceCheck.result.coherent === true) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    reason: "you copied in code with fetch_repo_files but have not shown check_coherence reporting coherent: true afterward — call check_coherence before finish",
+  };
+}
 
 /** Every eoCode workspace lives under here — never anywhere else on disk. */
 export const WORKSPACE_ROOT = resolve(REPO_ROOT, "eocode-workspace");
@@ -82,18 +112,7 @@ export function listWorkspaceFiles(name) {
  * @param {Function} [opts.onEvent]  (type: string, payload: object) => void
  */
 export async function runEoCodeTask({
-  // 400 had no write_file call in mind: Ollama's format:"json" grammar-
-  // constrains SYNTAX, not length, so a content-heavy write_file (a whole
-  // styled HTML/CSS/JS file as one JSON string field) gets cut off mid-
-  // string at the token cap before its braces/quotes ever close — invalid
-  // JSON every time, indistinguishable from the model actually failing.
-  // Measured: a Pomodoro-timer-app prompt against qwen2.5-coder:7b produced
-  // an identical ~1195-char (~400-token) truncated response on 3 straight
-  // steps and tripped the stuck-loop abort — not a model failure, a token
-  // budget too small for the tool call it was asked to make. 1600 gives a
-  // single write_file room for a modest single-file app without letting one
-  // step run unbounded on local hardware.
-  workspace, prompt, model = "qwen2.5-coder:1.5b", maxSteps = 20, maxTokensPerStep = 1600, seed = 0, onEvent = null,
+  workspace, prompt, model = "qwen2.5-coder:1.5b", maxSteps = 20, maxTokensPerStep = 400, seed = 0, onEvent = null,
 }) {
   const emit = onEvent || (() => {});
   if (!prompt || !String(prompt).trim()) throw new Error("prompt is required");
@@ -103,6 +122,10 @@ export async function runEoCodeTask({
 
   const toolset = createTools(dir);
   addPriorArtSearchTool(toolset);
+  addArchetypeSearchTool(toolset);
+  addCoherenceCheckTool(toolset, dir);
+  addFetchRepoFilesTool(toolset, dir);
+  addReplaceInFileTool(toolset, dir);
   const adapter = createOllamaAdapter({ model });
 
   emit("start", { workspace: relative(WORKSPACE_ROOT, dir) || "default", dir, model, prompt, maxSteps });
@@ -115,6 +138,7 @@ export async function runEoCodeTask({
     maxTokensPerStep,
     seed,
     onStep: (entry) => emit("step", entry),
+    validateFinish: coherenceGatedValidateFinish,
   });
 
   emit("end", {
@@ -171,7 +195,11 @@ export function startEoCodeSession({ workspace, prompt, foldK, maxSteps = 20 }) 
 
   const toolset = createTools(dir);
   addPriorArtSearchTool(toolset);
-  const session = createSession({ taskPrompt: prompt, toolset, foldK });
+  addArchetypeSearchTool(toolset);
+  addCoherenceCheckTool(toolset, dir);
+  addFetchRepoFilesTool(toolset, dir);
+  addReplaceInFileTool(toolset, dir);
+  const session = createSession({ taskPrompt: prompt, toolset, foldK, validateFinish: coherenceGatedValidateFinish });
   const sessionId = randomBytes(16).toString("hex");
   const now = Date.now();
   SESSIONS.set(sessionId, { session, dir, workspace: wsName, maxSteps, createdAt: now, lastActiveAt: now });

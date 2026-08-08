@@ -778,6 +778,51 @@ writing the check first; a law without one is a slogan.
   and now partially enforced here: L2e's check requires a no-match search to
   report *which* silence it was, so an empty corpus and a silent one can no
   longer render identically.
+- **Mechanize a measured free-form failure, don't just explain it better.** An
+  agent's tool surface replaces a multi-step free-form action with one
+  deterministic tool the moment a real run shows a model constructing that
+  sequence wrong — not a clearer prompt. A real eoCode run asked a model to
+  clone and edit code; it invented tool names ("mkdir", "cp") that do not
+  exist and cycled through the same four failing calls for 36 of 40 steps.
+  `fetch_repo_files` (`eval/agent/repo-fetch.mjs`) removed the free-form step
+  entirely rather than explain `run_shell` more clearly. See also
+  `replace_in_file` (`eval/agent/splice-tools.mjs`), fixed the same way after
+  a model failed three consecutive uniqueness-checked edits trying to rename
+  a field appearing 8 times in one file.
+- **A seeding action never silently overwrites state it didn't just create.**
+  An action whose job is "put X here if it isn't already" refuses to
+  overwrite X once present and says so — it does not treat re-invocation as a
+  reset. `fetch_repo_files` originally re-copied on every call; a real run
+  "fixed" a coherence failure by re-fetching over its own already-edited
+  files, silently destroying the edits, and never recovered. Fixed in
+  `eval/agent/repo-fetch.mjs` — re-fetching an existing file is now reported
+  `skipped`, never overwritten.
+- **Non-progress detection catches any repeating pattern, not only immediate
+  repetition.** A loop-detector scoped to "the same call twice in a row"
+  misses periodic cycles of different calls and cycles that alternate
+  malformed/valid responses — a real eoCode run hit both independently, once
+  looping on an identical successful call and once on a 4-call cycle where no
+  two consecutive calls were ever the same. `eval/agent/react-loop.mjs`'s
+  `detectCycle` generalizes to any period up to 6, verified against a
+  synthetic replay of the exact real cycle aborting well inside the step
+  budget, and against a varying-progress run producing no false abort.
+- **A completion claim is refused until its required verification has
+  actually run.** A prompt instruction ("call check_coherence before
+  finish") is not an enforcement mechanism — a real run ignored it across
+  four separate attempts. `server/eocode-agent.js`'s
+  `coherenceGatedValidateFinish`, via `react-loop.mjs`'s new `validateFinish`
+  hook, refuses "finish" exactly like a failed tool call until the real
+  transcript shows the dependent check passed — and feeds the same
+  non-progress detector above, so a model that just keeps calling finish
+  unchanged still aborts rather than exhausting the step budget.
+- **A diagnostic excludes its own scaffolding from what it diagnoses.** A
+  tool that both creates scratch state and scans a directory containing that
+  state excludes its own scratch path by construction, not by relying on the
+  caller passing a precisely scoped directory. `check_coherence` pointed at a
+  whole workspace always failed on a file inside `fetch_repo_files`'s own
+  clone cache that no real snip had touched — a true but unintended answer.
+  Fixed by excluding `.crispr-fetch` the same way `node_modules`/`.git`
+  already were, not by asking the caller (or the model) to route around it.
 ### Promoted, after a genuine disagreement worth recording
 
 L6 ("no implied completeness") and L7 ("no silent degradation across

@@ -24,8 +24,44 @@
 
 import { parseAction } from "./lib/parse-action.mjs";
 
-const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd identical failing call gets an explicit "you are repeating yourself" notice
-const STUCK_LOOP_ABORT_AT = 4;   // the 4th identical failing call ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
+const STUCK_LOOP_NUDGE_AT = 2;   // the 2nd time a pattern repeats gets an explicit "you are repeating yourself" notice
+const STUCK_LOOP_ABORT_AT = 4;   // the 4th repeat ends the attempt rather than exhausting the step budget on a loop that has already shown it will not resolve itself
+const STUCK_LOOP_MAX_PERIOD = 6; // longest repeating sequence length checked for — see detectCycle
+const STUCK_LOOP_HISTORY_LEN = STUCK_LOOP_MAX_PERIOD * (STUCK_LOOP_ABORT_AT + 1); // enough history to see ABORT_AT repeats of the longest period checked
+
+/**
+ * Repetition itself is the stuck-loop signal, not "the same call failing" —
+ * a real run (search_prior_art, called 25 times with identical args) showed
+ * a model can loop on a call that SUCCEEDS every time and still make zero
+ * progress. A second real run went further: asked to clone outside the
+ * sandbox then edit_file the unreachable path, the model cycled through
+ * FOUR different calls (two malformed tool names, a sandboxed edit_file
+ * failure, a wrong-path run_shell failure) for 36 straight steps — a
+ * period-4 loop the old period-1-only check could never see, because no
+ * two CONSECUTIVE calls were ever identical.
+ *
+ * `history` is a flat list of per-step signatures (malformed or real tool
+ * calls alike, so an alternating malformed/valid cycle is caught too, not
+ * just same-type repeats). Checks the smallest period first: a true
+ * period-1 loop (AAAA) is still reported as period 1, matching the
+ * original mechanism exactly; only genuinely periodic-but-not-identical
+ * loops fall through to a larger period.
+ */
+function detectCycle(history, maxPeriod = STUCK_LOOP_MAX_PERIOD) {
+  const n = history.length;
+  for (let period = 1; period <= maxPeriod; period++) {
+    if (n < period * 2) continue;
+    const block = history.slice(n - period);
+    let repeats = 1;
+    let idx = n - period;
+    while (idx - period >= 0 && block.every((v, i) => v === history[idx - period + i])) {
+      repeats++;
+      idx -= period;
+    }
+    if (repeats >= 2) return { period, repeats, pattern: block };
+  }
+  return null;
+}
 
 // SURF AND FOLD, applied to the running conversation. Ollama's /api/chat is
 // stateless per request, so every turn resends the WHOLE prompt — left
@@ -121,8 +157,18 @@ function formatObservation(toolName, result) {
  * @param {string} [opts.groundingBlock]
  * @param {{tools: object, toolCalls: array}} opts.toolset
  * @param {number} [opts.foldK] see buildPromptView above. Default 6.
+ * @param {(session: object) => {ok: boolean, reason?: string}} [opts.validateFinish]
+ *   Optional gate checked before "finish" is honored. Not for general use —
+ *   this loop stays free of any particular notion of "actually done," same
+ *   discipline task-log.js's produce() keeps around "coheres"/"bears on."
+ *   A caller with real domain policy (e.g. eoCode requiring check_coherence
+ *   after fetch_repo_files — a real, measured need: a live run finished
+ *   having copied in code it never verified was wired together) supplies
+ *   this instead of hoping the model remembers a rule stated in its prompt.
+ *   Returning {ok:false, reason} refuses the finish as an observation, the
+ *   same shape a failed tool call gets, rather than a special-cased error.
  */
-export function createSession({ taskPrompt, groundingBlock = null, toolset, foldK = DEFAULT_FOLD_K }) {
+export function createSession({ taskPrompt, groundingBlock = null, toolset, foldK = DEFAULT_FOLD_K, validateFinish = null }) {
   const { tools, toolCalls } = toolset;
   const toolNames = Object.keys(tools);
   const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description), toolNames) };
@@ -133,7 +179,7 @@ export function createSession({ taskPrompt, groundingBlock = null, toolset, fold
   const intro = { role: "user", content: userIntro };
 
   return {
-    tools, toolNames, toolCalls, system, intro, foldK,
+    tools, toolNames, toolCalls, system, intro, foldK, validateFinish,
     // The full, honest, append-only record of everything said — never
     // truncated. What's actually SENT to the model each turn is the
     // separate, bounded `foldedTurns` view (see promptViewFor below).
@@ -143,9 +189,10 @@ export function createSession({ taskPrompt, groundingBlock = null, toolset, fold
     finished: false,
     summary: null,
     step: 0,
-    malformedStreak: 0,
-    repeatCallStreak: 0,
-    lastCallKey: null,
+    // One shared history of per-step signatures — malformed responses and
+    // real tool calls alike — so detectCycle can see a loop that mixes
+    // both kinds, not just runs of the same type. See detectCycle's header.
+    callHistory: [],
     stuckLoopAbort: false,
     // Set once no further applyResponse call should happen: finished,
     // stuckLoopAbort, or the malformed-response abort threshold.
@@ -182,25 +229,64 @@ export function applyResponse(session, raw) {
 
   const parsed = parseAction(raw, session.toolNames);
   if (!parsed.ok) {
-    session.malformedStreak += 1;
-    const entry = { step, raw, malformed: true, reason: parsed.reason };
+    session.callHistory.push(`malformed:${parsed.reason}`);
+    if (session.callHistory.length > STUCK_LOOP_HISTORY_LEN) session.callHistory.shift();
+    const cycle = detectCycle(session.callHistory);
+
+    const entry = { step, raw, malformed: true, reason: parsed.reason, repeatCallStreak: cycle && cycle.repeats > 1 ? cycle.repeats : undefined };
     session.transcript.push(entry);
     events.push({ ...entry, phase: "malformed" });
-    const nudge = `Your last response could not be parsed: ${parsed.reason}. Respond with exactly one JSON object: {"tool": "<name>", "args": {...}}.`;
+    let nudge = `Your last response could not be parsed: ${parsed.reason}. Respond with exactly one JSON object: {"tool": "<name>", "args": {...}}.`;
+    if (cycle && cycle.repeats >= STUCK_LOOP_NUDGE_AT) {
+      nudge += ` STUCK LOOP: you have repeated this same ${cycle.period > 1 ? `${cycle.period}-step ` : ""}mistake ${cycle.repeats} times in a row. Stop guessing tool names — you only have: ${session.toolNames.join(", ")}. Anything else (mkdir, cp, ls, git) must go through run_shell as a shell command string, e.g. {"tool": "run_shell", "args": {"command": "mkdir -p some/dir"}}.`;
+    }
     const nudgeMsg = { role: "user", content: nudge };
     session.messages.push(nudgeMsg);
     session.foldedTurns.push({ entry, msgs: [assistantMsg, nudgeMsg] });
-    if (session.malformedStreak >= 3) {
-      const abortEntry = { step, note: "aborted after 3 consecutive malformed responses" };
+    if (cycle && cycle.repeats >= STUCK_LOOP_ABORT_AT) {
+      session.stuckLoopAbort = true;
+      const abortEntry = { step, note: `aborted after ${cycle.repeats} repeats of the same ${cycle.period > 1 ? `${cycle.period}-step cycle` : "malformed response"} (stuck loop, not a step-budget exhaustion)` };
       session.transcript.push(abortEntry);
       events.push({ ...abortEntry, phase: "aborted" });
       session.done = true;
     }
     return { events, done: session.done };
   }
-  session.malformedStreak = 0;
 
   if (parsed.tool === "finish") {
+    const verdict = session.validateFinish ? session.validateFinish(session) : { ok: true };
+    if (!verdict.ok) {
+      // Refused exactly like a failed tool call, including feeding the SAME
+      // cycle detector — a model that ignores the refusal and just calls
+      // finish again unchanged is the same stuck-loop shape as any other
+      // repeated failing call, not a new failure mode needing new handling.
+      const callKey = `finish:refused:${verdict.reason}`;
+      session.callHistory.push(callKey);
+      if (session.callHistory.length > STUCK_LOOP_HISTORY_LEN) session.callHistory.shift();
+      const cycle = detectCycle(session.callHistory);
+
+      const entry = { step, tool: "finish", args: parsed.args, result: { error: verdict.reason }, repeatCallStreak: cycle && cycle.repeats > 1 ? cycle.repeats : undefined };
+      session.transcript.push(entry);
+      events.push({ ...entry, phase: "tool_result" });
+
+      let observation = `OBSERVATION (finish): refused — ${verdict.reason}`;
+      if (cycle && cycle.repeats >= STUCK_LOOP_NUDGE_AT) {
+        observation += `\n\nSTUCK LOOP: you have tried to finish for the same unmet reason ${cycle.repeats} times in a row. Do the thing the reason names, then finish.`;
+      }
+      const observationMsg = { role: "user", content: observation };
+      session.messages.push(observationMsg);
+      session.foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
+
+      if (cycle && cycle.repeats >= STUCK_LOOP_ABORT_AT) {
+        session.stuckLoopAbort = true;
+        const abortEntry = { step, note: `aborted after ${cycle.repeats} refused finish attempts for the same unmet reason (stuck loop, not a step-budget exhaustion)` };
+        session.transcript.push(abortEntry);
+        events.push({ ...abortEntry, phase: "aborted" });
+        session.done = true;
+      }
+      return { events, done: session.done };
+    }
+
     session.finished = true;
     session.summary = typeof parsed.args.summary === "string" ? parsed.args.summary : "(no summary given)";
     const entry = { step, tool: "finish", args: parsed.args };
@@ -214,36 +300,40 @@ export function applyResponse(session, raw) {
   const result = session.tools[parsed.tool].run(parsed.args);
   const callKey = `${parsed.tool}:${JSON.stringify(parsed.args)}`;
   const isFailure = result && typeof result === "object" && "error" in result;
-  // Repetition itself is the stuck-loop signal, not failure specifically — a
-  // real run (search_prior_art, called 25 times with identical args) showed
-  // a model can loop on a tool that SUCCEEDS every time and still make zero
-  // progress, which the old isFailure-gated streak could never catch: a
-  // repeated success always reset it to 0. Any tool whose result can be
-  // identical across calls (read_file, list_files, this one) shares the
-  // same exposure; failure was never the actual invariant.
-  session.repeatCallStreak = callKey === session.lastCallKey ? session.repeatCallStreak + 1 : 1;
-  session.lastCallKey = callKey;
 
-  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatCallStreak: session.repeatCallStreak > 1 ? session.repeatCallStreak : undefined };
+  session.callHistory.push(callKey);
+  if (session.callHistory.length > STUCK_LOOP_HISTORY_LEN) session.callHistory.shift();
+  const cycle = detectCycle(session.callHistory);
+
+  const entry = { step, tool: parsed.tool, args: parsed.args, result, repeatCallStreak: cycle && cycle.repeats > 1 ? cycle.repeats : undefined };
   session.transcript.push(entry);
   events.push({ ...entry, phase: "tool_result" });
 
   let observation = formatObservation(parsed.tool, result);
-  if (session.repeatCallStreak >= STUCK_LOOP_NUDGE_AT) {
-    const ordinal = session.repeatCallStreak === 2 ? "nd" : session.repeatCallStreak === 3 ? "rd" : "th";
-    const outcome = isFailure ? "failed the SAME way" : "returned the SAME result";
-    const fix = isFailure
-      ? "re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say"
-      : "you already have this result — act on it (e.g. write_file) instead of asking again";
-    observation += `\n\nSTUCK LOOP: this is the ${session.repeatCallStreak}${ordinal} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has ${outcome} every time. Repeating it again will not help. Stop: ${fix}.`;
+  if (cycle && cycle.repeats >= STUCK_LOOP_NUDGE_AT) {
+    if (cycle.period === 1) {
+      const outcome = isFailure ? "failed the SAME way" : "returned the SAME result";
+      const fix = isFailure
+        ? "re-read the OBSERVATION above (or call read_file again) and base your next argument on what it actually says, not on what you expect it to say"
+        : "you already have this result — act on it (e.g. write_file) instead of asking again";
+      observation += `\n\nSTUCK LOOP: this is the ${cycle.repeats}${cycle.repeats === 2 ? "nd" : cycle.repeats === 3 ? "rd" : "th"} time in a row you have called ${parsed.tool} with the EXACT SAME arguments, and it has ${outcome} every time. Repeating it again will not help. Stop: ${fix}.`;
+    } else {
+      const steps = cycle.pattern.map((k) => k.split(":")[0]).join(" → ");
+      observation += `\n\nSTUCK LOOP: you have repeated this SAME ${cycle.period}-step sequence ${cycle.repeats} times in a row: ${steps}. None of it is making progress. Stop repeating the cycle — re-read every OBSERVATION above (not just the last one) and try something genuinely different, or call finish and report what actually blocked you.`;
+    }
   }
   const observationMsg = { role: "user", content: observation };
   session.messages.push(observationMsg);
   session.foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
 
-  if (session.repeatCallStreak >= STUCK_LOOP_ABORT_AT) {
+  if (cycle && cycle.repeats >= STUCK_LOOP_ABORT_AT) {
     session.stuckLoopAbort = true;
-    const abortEntry = { step, note: `aborted after ${session.repeatCallStreak} consecutive identical ${isFailure ? "failing " : ""}${parsed.tool} calls (stuck loop, not a step-budget exhaustion)` };
+    const abortEntry = {
+      step,
+      note: cycle.period === 1
+        ? `aborted after ${cycle.repeats} consecutive identical ${isFailure ? "failing " : ""}${parsed.tool} calls (stuck loop, not a step-budget exhaustion)`
+        : `aborted after ${cycle.repeats} repeats of the same ${cycle.period}-step cycle (stuck loop, not a step-budget exhaustion)`,
+    };
     session.transcript.push(abortEntry);
     events.push({ ...abortEntry, phase: "aborted" });
     session.done = true;
@@ -270,16 +360,19 @@ export function applyResponse(session, raw) {
  *   Purely observational: it cannot alter the loop's own decisions, and a
  *   throwing onStep is never allowed to break a real eval run, so it is
  *   called inside a try/catch that only logs.
+ * @param {Function} [opts.validateFinish] see createSession's own doc —
+ *   optional domain-specific gate on "finish", refused like a failed tool
+ *   call rather than trusting the model to remember a prompt rule.
  */
 export async function runReactLoop({
   taskPrompt, groundingBlock = null, toolset, adapter, maxSteps = 8, maxTokensPerStep = 200, seed = 0,
-  foldK = DEFAULT_FOLD_K, onStep = null,
+  foldK = DEFAULT_FOLD_K, onStep = null, validateFinish = null,
 }) {
   const emit = onStep
     ? (entry) => { try { onStep(entry); } catch (err) { console.error(`[react-loop] onStep handler threw: ${err.message}`); } }
     : () => {};
 
-  const session = createSession({ taskPrompt, groundingBlock, toolset, foldK });
+  const session = createSession({ taskPrompt, groundingBlock, toolset, foldK, validateFinish });
 
   let step = 0;
   for (; step < maxSteps; step++) {
