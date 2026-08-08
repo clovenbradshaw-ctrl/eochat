@@ -76,6 +76,7 @@ export function fetchRepoFiles({ url, paths, sandboxDir }) {
 
   const copied = [];
   const missing = [];
+  const skipped = [];
 
   if (!cloneError) {
     for (const p of paths) {
@@ -87,6 +88,18 @@ export function fetchRepoFiles({ url, paths, sandboxDir }) {
       }
       try {
         const dest = resolveInSandbox(sandboxDir, rel);
+        // NEVER overwrite a file already at the destination. Real, measured
+        // reason: a live run called fetch_repo_files a second time after
+        // editing the first copy, to "fix" an unrelated coherence check —
+        // this silently reverted every edit back to the pristine clone,
+        // with no error, no warning, forcing the model into a genuine
+        // self-inflicted redo loop it never escaped. This tool seeds a
+        // file once; it is not a sync, and pretending otherwise cost a
+        // real run its entire remaining budget.
+        if (existsSync(dest)) {
+          skipped.push(rel);
+          continue;
+        }
         mkdirSync(dirname(dest), { recursive: true });
         copyFileSync(src, dest);
         copied.push(rel);
@@ -98,13 +111,16 @@ export function fetchRepoFiles({ url, paths, sandboxDir }) {
 
   return {
     copied,
+    skipped,
     missing,
     cloneError,
     note: cloneError
       ? "clone failed — check the URL"
-      : missing.length === 0
-        ? "every requested file is now at that same path in your workspace — read_file/edit_file it directly"
-        : `${copied.length}/${paths.length} copied; missing ones may be at a different path in this repo`,
+      : skipped.length > 0
+        ? `${skipped.length} file(s) already existed in your workspace and were NOT overwritten (your earlier edits are safe) — edit them directly, don't re-fetch them`
+        : missing.length === 0
+          ? "every requested file is now at that same path in your workspace — read_file/edit_file it directly"
+          : `${copied.length}/${paths.length} copied; missing ones may be at a different path in this repo`,
   };
 }
 
@@ -112,7 +128,7 @@ export function fetchRepoFiles({ url, paths, sandboxDir }) {
 export function addFetchRepoFilesTool(toolset, sandboxDir) {
   toolset.tools.fetch_repo_files = {
     description:
-      'fetch_repo_files({"url": "https://github.com/owner/repo", "paths": ["server/models/post.js"]}) — clones the repo and copies EXACTLY the files you list into the SAME relative path inside your own workspace, ready to read_file/edit_file right away. Use this instead of run_shell git clone + cp — mkdir and cp are not tools, and files cloned outside your workspace cannot be edited.',
+      'fetch_repo_files({"url": "https://github.com/owner/repo", "paths": ["server/models/post.js"]}) — clones the repo and copies EXACTLY the files you list into the SAME relative path inside your own workspace, ready to read_file/edit_file right away. ONE-TIME SEED, not a sync: it never overwrites a file already in your workspace, even if you call it again with the same paths — edit files directly instead of re-fetching them.',
     run(args) {
       let result;
       try {

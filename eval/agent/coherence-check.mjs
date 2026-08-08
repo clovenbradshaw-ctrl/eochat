@@ -34,6 +34,14 @@ function resolveInSandbox(sandboxDir, relPath) {
 }
 
 const CODE_EXTS = new Set([".js", ".mjs", ".jsx", ".ts", ".tsx"]);
+// .crispr-fetch is fetch_repo_files' own clone-cache scratch directory —
+// plumbing, not the snip being evaluated. A live run pointed check_coherence
+// at "." (the whole workspace) and always got coherent:false because ONE
+// unrelated file deep in the raw clone (a test-setup file no snip ever
+// touched) has no import edges — real, but not the question anyone asked.
+// Excluded the same way node_modules/.git already were, not left for a
+// small model to route around by guessing the right subdirectory.
+const IGNORE_DIRS = new Set(["node_modules", ".git", ".crispr-fetch"]);
 // Matches `import ... from "x"`, `import "x"`, and `require("x")` — good
 // enough to find the real edges a snip actually declares; a full parser
 // would catch more (dynamic imports, re-exports) but this is the same
@@ -48,7 +56,7 @@ function listCodeFiles(dir, base = dir, out = []) {
     return out;
   }
   for (const name of entries) {
-    if (name === "node_modules" || name === ".git") continue;
+    if (IGNORE_DIRS.has(name)) continue;
     const p = join(dir, name);
     let st;
     try {
@@ -111,7 +119,12 @@ function buildImportGraph(dir, files) {
 export function checkCoherence(dir, files = null) {
   const allFiles = files ?? listCodeFiles(dir);
   if (allFiles.length < 2) {
-    return { files: allFiles, relations: [], isolated: allFiles, coherent: allFiles.length === 1 };
+    // A lone file has nothing to be isolated FROM — trivially coherent by
+    // vacuous truth, not the "same failure, one file wide" the isolated
+    // field means for 2+ files. Reporting it as isolated too was a
+    // self-contradicting edge case, not the real multi-file failure this
+    // gate exists to catch.
+    return { files: allFiles, relations: [], isolated: [], coherent: allFiles.length === 1 };
   }
 
   const tasks = buildImportGraph(dir, allFiles);
