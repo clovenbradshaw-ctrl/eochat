@@ -17,6 +17,7 @@
     "test:prosify-integration": "node scripts/test-prosify-integration.mjs",
     "test:engine-ground": "node scripts/test-engine-ground.mjs",
     "test:senses-runtime": "node scripts/test-senses-runtime.mjs",
+    "test:webllm-client": "node scripts/test-webllm-client.mjs",
     "test:insight-extract": "node scripts/test-insight-extract.mjs",
     "test:project-instructions": "node scripts/test-project-instructions.mjs",
     "check:laws": "node scripts/check-laws.mjs",

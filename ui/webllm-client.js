@@ -91,7 +91,22 @@ function writeStoredNicknames(map) {
 
 // esm.run (jsdelivr) serves an ESM build with no bundler required — the
 // WebLLM README's own documented no-build integration path.
-const WEBLLM_MODULE_URL = "https://esm.run/@mlc-ai/web-llm";
+//
+// PINNED, deliberately. An unversioned specifier ("…/@mlc-ai/web-llm") resolves
+// to whatever MLC published most recently, so every page load is a silent
+// upgrade: an upstream regression, a renamed export, or a prebuilt-catalog
+// change reaches readers with no commit on this end and no way to tell a new
+// bug from an old one. The version moves when someone bumps it here and
+// re-tests, not when jsdelivr's cache expires.
+//
+// webllm-worker.js imports the same build and MUST stay on the same version —
+// two copies of web-llm in one page is a config/protocol mismatch waiting to
+// happen. Its import is static (no top-level await, so no window where a
+// message could arrive before the handler is installed), which means the
+// version is written out twice, spelled the same way in both files;
+// scripts/test-webllm-client.mjs asserts the two agree so the pair can't
+// drift. Bump both together.
+const WEBLLM_MODULE_URL = "https://esm.run/@mlc-ai/web-llm@0.2.84";
 
 // The worker script the engine actually runs in — see the header comment
 // above. Resolved relative to this module (not the page) so it keeps working
@@ -119,6 +134,15 @@ function isDeviceLostError(err) {
 // retry is usually resuming, not restarting.
 const MAX_LOAD_ATTEMPTS = 3;
 const RETRY_BACKOFF_MS = [1000, 3000, 7000];
+
+// How long a stopped generation gets to wind itself down before we treat the
+// engine as wedged — see _interruptAndDrain. The work left after an interrupt
+// is at most "finish the in-flight forward pass, emit the closing chunks",
+// which is sub-second while decoding; the ceiling is generous only because an
+// interrupt landing during prefill has to wait that prefill out, and a long
+// prompt on a slow GPU can make that several seconds. Anything past this is
+// not slowness, it's a stall.
+const INTERRUPT_DRAIN_TIMEOUT_MS = 30000;
 
 // Once those in-init() attempts are exhausted (or WebGPU is missing outright)
 // the reader is handed to standby mode — but this module keeps trying the
@@ -564,6 +588,67 @@ class LocalModel {
     return this.snapshot();
   }
 
+  // Stop a generation and let the engine finish tearing it down. This is the
+  // whole reason "Stop" used to hang the next question, so it's worth being
+  // precise about the mechanics:
+  //
+  // WebLLM serializes every request to a model behind an FCFS lock
+  // (mlc-ai/web-llm#549 — a model physically cannot run two overlapping
+  // generations). chatCompletion() acquires that lock BEFORE it hands back the
+  // streaming iterator, and the lock is released at the very bottom of the
+  // iterator's own body. There is no try/finally around it. So a caller that
+  // simply walks away from the iterator — `break`, an early `return`, dropping
+  // it on abort — leaves the lock held with nothing left running to release
+  // it, and the NEXT create() call blocks on acquire() forever. Not slow:
+  // stopped, until the page reloads.
+  //
+  // The worker split makes it strictly worse rather than better. The real
+  // generator lives in the worker, and the main thread only holds a proxy that
+  // asks for one chunk per postMessage; there is no "close the generator" RPC
+  // in the protocol at all, so abandoning the proxy cannot even in principle
+  // reach the generator holding the lock.
+  //
+  // The only exit that actually releases it is to let the generator finish:
+  // interruptGenerate() sets the flag its decode loop checks, then we keep
+  // pulling chunks (discarding them) until it reports done and runs its own
+  // release. That's what this does — interrupt, then drain, bounded by
+  // INTERRUPT_DRAIN_TIMEOUT_MS so a genuinely stuck engine can't hang the stop
+  // path too. A drain that times out means the lock is unrecoverable, which
+  // leaves exactly one honest move: throw the worker away and rebuild, which
+  // standby's retry loop does on its own.
+  async _interruptAndDrain(iterator) {
+    try {
+      // WebWorkerMLCEngine's interruptGenerate() is fire-and-forget (it posts
+      // the message and drops the promise), so this await returns immediately
+      // on the worker path — the drain below is what actually waits.
+      if (this.engine) await this.engine.interruptGenerate();
+    } catch (e) {
+      console.warn("[webllm-client] interruptGenerate failed:", e);
+    }
+
+    let timer = null;
+    const TIMED_OUT = Symbol("drain-timeout");
+    // A rejection thrown out of the generator is fine and needs no handling:
+    // WebLLM releases the lock on its own error paths before rethrowing, so
+    // the thing we came here to guarantee already happened.
+    const drained = (async () => { while (!(await iterator.next()).done) { /* discard */ } })()
+      .catch(() => {});
+    const expiry = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(TIMED_OUT), INTERRUPT_DRAIN_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([drained, expiry]);
+    } catch (err) {
+      if (err !== TIMED_OUT) throw err;
+      console.error("[webllm-client] interrupted generation did not wind down; rebuilding the engine.");
+      this._terminateWorker();
+      this._enterStandby("The in-tab model stopped responding after a generation was interrupted. Reloading it.");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // Streams completion text deltas. In 'ready' status this is the real model;
   // in 'standby' status (WebGPU missing, download failed — see _enterStandby)
   // it's the zero-dependency canned responder instead of a thrown error, so a
@@ -571,6 +656,14 @@ class LocalModel {
   // case the failure. Callers that require the real model (tool-executing
   // agent runs, the fidelity-checked long-form pipeline) should keep gating
   // on status === 'ready' before calling this at all.
+  //
+  // Stopping is the caller's `signal` and nothing else — every caller already
+  // passes one (the chat composer's Stop button, the web gate's timeout, the
+  // eoCode run panel, the long-form pipeline's deadline), and each of the
+  // three ways a caller can walk away — aborting the signal, `break`ing out of
+  // the `for await`, or returning from inside it — lands in the same finally
+  // below and gets the same interrupt-and-drain. No call site has to know the
+  // engine has a lock in it.
   async *stream(messages, { signal } = {}) {
     if (this.status === "standby") {
       yield* this.standby.stream(messages, { signal });
@@ -579,26 +672,63 @@ class LocalModel {
     if (this.status !== "ready" || !this.engine) {
       throw new Error("Local model is not ready — call init() first.");
     }
-    // Mid-answer engine failures — chiefly the WebGPU device getting
-    // reclaimed by the browser (mlc-ai/web-llm#647) — surface here as a
-    // rejected/thrown call on an engine WebLLM has already unloaded
-    // internally. Rather than let that throw reach the caller as a broken
-    // turn, drop to standby and finish this same answer from there: the
-    // reader sees a plain-spoken "the model dropped" reply instead of a
-    // thrown error, and the background retry loop takes it from here.
+    // Non-null exactly while the engine's generator may still be holding the
+    // model lock; cleared on every path where WebLLM has already released it
+    // (ran to completion, or threw).
+    let pending = null;
+    let onAbort = null;
     try {
       const chunks = await this.engine.chat.completions.create({
         messages,
         stream: true,
         temperature: 0.4,
       });
-      for await (const chunk of chunks) {
-        if (signal && signal.aborted) return;
-        const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
+      // Driven by hand rather than with `for await`, which is not a style
+      // choice: `for await` calls .return() on the iterator when the loop
+      // exits early, and unwinding this generator would fire that BEFORE the
+      // finally below could interrupt — closing the proxy while the worker's
+      // generator keeps the lock, the one state there is no recovery from.
+      const iterator = typeof chunks[Symbol.asyncIterator] === "function"
+        ? chunks[Symbol.asyncIterator]()
+        : chunks;
+      pending = iterator;
+
+      // Interrupt the moment the signal fires instead of at the next chunk
+      // boundary. Waiting for the loop to notice would mean an abort during a
+      // long prefill sits unheard until the first token arrives — the reader
+      // clicks Stop and watches text keep coming.
+      if (signal) {
+        onAbort = () => {
+          try { if (this.engine) this.engine.interruptGenerate(); }
+          catch (e) { console.warn("[webllm-client] interruptGenerate on abort failed:", e); }
+        };
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) {
+          pending = null; // ran out on its own: WebLLM released the lock
+          break;
+        }
+        if (signal && signal.aborted) break; // -> finally interrupts and drains
+        const chunk = next.value;
+        const delta = chunk && chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
         if (delta) yield delta;
       }
     } catch (err) {
+      // Every throw out of WebLLM releases the lock before it propagates, so
+      // there is nothing left to drain — and the engine may well be gone.
+      pending = null;
       if (signal && signal.aborted) return;
+      // Mid-answer engine failures — chiefly the WebGPU device getting
+      // reclaimed by the browser (mlc-ai/web-llm#647) — surface here as a
+      // rejected/thrown call on an engine WebLLM has already unloaded
+      // internally. Rather than let that throw reach the caller as a broken
+      // turn, drop to standby and finish this same answer from there: the
+      // reader sees a plain-spoken "the model dropped" reply instead of a
+      // thrown error, and the background retry loop takes it from here.
       console.error("[webllm-client] stream failed, falling back to standby:", err);
       const reason = isDeviceLostError(err)
         ? "The GPU device was lost mid-answer, usually from low memory or a driver reset — " + ((err && err.message) || "device lost")
@@ -606,6 +736,9 @@ class LocalModel {
       this._terminateWorker();
       this._enterStandby(reason);
       yield* this.standby.stream(messages, { signal });
+    } finally {
+      if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+      if (pending) await this._interruptAndDrain(pending);
     }
   }
 
