@@ -613,12 +613,28 @@ export function buildUngroundedSystemPrompt({ warming } = {}) {
   return warming
     ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
       `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
-      `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
+      `process. Do NOT use bracketed citations like [1] — there are no passages to cite.` +
+      ASSISTANT_VOICE_GUARD
     : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
       `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
       `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
-      `there are no source passages, and a bracket would look like a citation that does not exist.`;
+      `there are no source passages, and a bracket would look like a citation that does not exist.` +
+      ASSISTANT_VOICE_GUARD;
 }
+
+// A greeting or small-talk turn is the one place nothing else in the prompt
+// (grounding material, citation rules, the planner's own compliance spec)
+// pushes back on generic chatbot phrasing — so it's exactly where a small
+// model reverts to its base assistant persona ("Hello! How can I assist you
+// today?", "Feel free to ask!", "I'm here to help"). Named and stated once
+// here rather than as a vague "sound natural" so it is checkable: does the
+// reply contain one of these stock phrases, yes or no.
+const ASSISTANT_VOICE_GUARD =
+  ` Reply the way a knowledgeable person would in a real conversation — not as a customer-support ` +
+  `chatbot. Do NOT open with "How can I assist you", "How can I help you today", or any offer-of-help ` +
+  `preamble; do NOT close by inviting further questions ("Feel free to ask", "Let me know if..."); ` +
+  `do NOT describe your own willingness or readiness to help ("I'm here to help", "I'm happy to..."). ` +
+  `A greeting gets a greeting back — short, plain, and done.`;
 
 // `toolsAvailable` defaults to true (the server's own tool-calling talker
 // loop). A caller with no tool loop of its own — e.g. a browser-local model
@@ -642,7 +658,9 @@ export function buildGroundedSystemPrompt(groundResult, { toolsAvailable = true 
     citationRange +
     `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
     `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
-    `"the provided text", "your sources", or similar; just answer directly.\n\n` +
+    `"the provided text", "your sources", or similar; just answer directly. Reply as a knowledgeable ` +
+    `person would, not a customer-support chatbot — no "How can I assist you" openers, no "Feel free ` +
+    `to ask" closers.\n\n` +
     toolsParagraph +
     `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
     `${groundResult.context}`;

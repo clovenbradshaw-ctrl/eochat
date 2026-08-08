@@ -76,6 +76,20 @@ export function parseCitationRefs(text) {
   return out;
 }
 
+/**
+ * An ungrounded answer (maxCitation === 0: no passages, no web results) has
+ * nothing a bracket could point at — the system prompt tells the model not
+ * to write [1]-style brackets at all, but a small local model does not
+ * reliably obey that, and validateCitations below only fires when
+ * maxCitation > 0. Without this, an invented "[1][2][3]" on a plain greeting
+ * sails through untouched and the UI has to show it as three broken
+ * citations instead of the model just not having written them.
+ */
+export function stripUngroundedCitations(content) {
+  if (!content) return content;
+  return content.replace(BRACKET_RE, "").replace(/[ \t]+([.,;:!?])/g, "$1").replace(/[ \t]{2,}/g, " ");
+}
+
 /** Replace any [n] the model invented beyond the real citation table with a visible gap marker. */
 export function validateCitations(content, maxCitation) {
   if (!content || maxCitation <= 0) return content;

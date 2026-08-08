@@ -18,6 +18,7 @@
 import {
   validateCitations, verifyQuotedFidelity, parseCitationRefs,
   checkGrounding, groundingGaps, annotateVoids, autoAttachCitations,
+  stripUngroundedCitations,
 } from "./citation-check.js";
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
@@ -39,6 +40,7 @@ import { generateAnswer } from "./turn-generation.js";
 import { defineAnswerSpec, runHolonicEssay } from "./holonic-chat.js";
 import { researchTopic } from "./web-search.js";
 import { recordTokens, endGeneration } from "./telemetry.js";
+import { buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
 
 // Every blink can be longform — these are ceilings, not targets; the model
 // still decides when to stop. DEFAULT is generous headroom for the common
@@ -46,6 +48,34 @@ import { recordTokens, endGeneration } from "./telemetry.js";
 // earned section (turn-generation.js's outline collapses to one call, same
 // as before that module existed).
 const DEFAULT_MAX_TOKENS = 8192;
+// A wedged local Ollama backend (model-swap contention, an OOM-stalled
+// llama-server, a connection accepted but never written to) used to hang a
+// turn forever — no timeout anywhere meant no error, no partial answer, just
+// a spinner that never resolves. IDLE means measured from the last byte
+// received, not from request start, so a genuinely long generation is never
+// killed early. NON_STREAMING is a hard deadline (there is no byte-by-byte
+// progress to reset against) sized well above the slowest observed
+// planner/correction call on this hardware.
+const OLLAMA_IDLE_TIMEOUT_MS = 120_000;
+const OLLAMA_NON_STREAMING_TIMEOUT_MS = 90_000;
+
+// A raw `err.message` from a failed model call ("fetch failed", "The
+// operation was aborted due to timeout") tells the reader nothing they can
+// act on — the same problem /api/ollama/models already solves for the setup
+// guide (see its causeCode branch in proxy.js). This is that same
+// translation, reused here so a turn that fails mid-conversation (Ollama
+// died, was never started, or genuinely wedged past OLLAMA_*_TIMEOUT_MS)
+// reads as an instruction, not a stack-trace fragment, in the chat itself.
+function friendlyModelErrorMessage(err, target) {
+  const causeCode = err?.cause?.code || err?.cause?.errors?.[0]?.code;
+  if (causeCode === "ECONNREFUSED" || causeCode === "ENOTFOUND" || causeCode === "EHOSTUNREACH") {
+    return `No Ollama instance found at ${target}. Make sure Ollama is running.`;
+  }
+  if (err?.name === "TimeoutError" || /stalled: no data for|signal is aborted/i.test(err?.message || "")) {
+    return `The local model at ${target} stopped responding and timed out. It may be overloaded or stuck loading a different model — try again in a moment.`;
+  }
+  return err?.message || "The model call failed for an unknown reason.";
+}
 // The output-review correction pass only fixes flagged violations in an
 // already-generated answer — it does not need longform headroom.
 const CORRECTION_MAX_TOKENS = 1500;
@@ -154,31 +184,19 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 // measures its own copy: the thing under test — how a weak model behaves when
 // told which numbers exist — is exactly the thing a copy stops testing the
 // moment the two drift.
+// Delegates to engine-ground.js's buildUngroundedSystemPrompt/buildGroundedSystemPrompt
+// — the same functions /api/ground hands a browser-local WebLLM caller — so the
+// Ollama talker loop and the WebLLM path are answering from byte-identical
+// instruction text, not two hand-maintained copies that quietly drift apart.
+// toolsAvailable:true here (unlike /api/ground's WebLLM caller, which has no
+// tool loop of its own) because this talker can actually call verbatim_search
+// and search_memory.
 export function buildGroundedSystemMessage(groundResult, warming = false) {
   if (!groundResult.context) {
-    const content = warming
-      ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
-        `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
-        `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
-      : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
-        `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
-        `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
-        `there are no source passages, and a bracket would look like a citation that does not exist.`;
+    const content = buildUngroundedSystemPrompt({ warming });
     return { message: { role: "system", content }, maxCitation: 0, warming };
   }
-
-  const citationRange = groundResult.citations.length > 0
-    ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
-      `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
-    : "";
-  const content =
-    `Answer the reader's question using the material below, citing the passages you draw on ` +
-    `with bracketed numbers like [1], [2], etc. ` + citationRange +
-    `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
-    `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
-    `"the provided text", "your sources", or similar; just answer directly.\n\n` +
-    `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
-    `${groundResult.context}`;
+  const content = buildGroundedSystemPrompt(groundResult, { toolsAvailable: true });
   return { message: { role: "system", content }, maxCitation: groundResult.citations.length, warming: false };
 }
 
@@ -247,6 +265,7 @@ export function createTurnController(deps) {
     numCtx,
     modelRouter, heuristicModel, latencyBudgetMs, isWarming, webSearchFn,
     cabinetStore, prosifyModel, prosifyTimeoutMs,
+    requiresGroundedModel, mediumModel,
   } = deps;
 
   const _getAnthropicKey = () => typeof anthropicKey === 'function' ? anthropicKey() : anthropicKey;
@@ -502,40 +521,69 @@ export function createTurnController(deps) {
     });
   }
 
+  // No timeout at all here used to mean a wedged Ollama (model swap
+  // contention, an OOM-stalled llama-server, a backend that accepted the
+  // connection but never wrote a byte) hung the turn forever — no error, no
+  // partial answer, just a spinner that never resolves. This is an IDLE
+  // timeout (reset on every chunk received), not an absolute deadline, so a
+  // slow-but-progressing long essay is never killed early; only true silence
+  // for OLLAMA_IDLE_TIMEOUT_MS aborts it.
   async function callOllamaStreaming(model, messages, { signal, onDelta, maxTokens = DEFAULT_MAX_TOKENS }) {
-    const resp = await fetch(`${target}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model, messages, stream: true,
-        options: { temperature: 0.7, num_predict: maxTokens, num_ctx: numCtx },
-      }),
-      signal,
-    });
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => resp.statusText);
-      throw new Error(`Ollama ${resp.status}: ${errText}`);
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal?.reason);
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener("abort", onAbort);
     }
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "", text = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() || "";
-      for (const line of lines) {
-        const t = line.trim().replace(/^data:\s*/, "");
-        if (!t) continue;
-        let j;
-        try { j = JSON.parse(t); } catch { continue; }
-        if (j.error) throw new Error(`Ollama: ${j.error}`);
-        const delta = j.message?.content || "";
-        if (delta) { text += delta; onDelta(delta, text); recordTokens(delta.length / 4, model); }
+    let idleTimer;
+    const armIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () => controller.abort(new Error(`Ollama stream stalled: no data for ${OLLAMA_IDLE_TIMEOUT_MS}ms`)),
+        OLLAMA_IDLE_TIMEOUT_MS,
+      );
+    };
+    try {
+      armIdle();
+      const resp = await fetch(`${target}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model, messages, stream: true,
+          options: { temperature: 0.7, num_predict: maxTokens, num_ctx: numCtx },
+        }),
+        signal: controller.signal,
+      });
+      armIdle();
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => resp.statusText);
+        throw new Error(`Ollama ${resp.status}: ${errText}`);
       }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "", text = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        armIdle();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          const t = line.trim().replace(/^data:\s*/, "");
+          if (!t) continue;
+          let j;
+          try { j = JSON.parse(t); } catch { continue; }
+          if (j.error) throw new Error(`Ollama: ${j.error}`);
+          const delta = j.message?.content || "";
+          if (delta) { text += delta; onDelta(delta, text); recordTokens(delta.length / 4, model); }
+        }
+      }
+      return { text, model };
+    } finally {
+      clearTimeout(idleTimer);
+      if (signal) signal.removeEventListener("abort", onAbort);
     }
-    return { text, model };
   }
 
   async function callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens = DEFAULT_MAX_TOKENS }) {
@@ -598,6 +646,13 @@ export function createTurnController(deps) {
       model = draftModel;
     } else if (modelOverride) {
       model = modelOverride;
+    } else if (requiresGroundedModel?.(messages) && mediumModel) {
+      // Grounded/essay generation is a correctness requirement, not a
+      // latency/quality tradeoff the learned router gets to sample — see
+      // requiresGroundedModel's comment in proxy.js. routerCtx stays unset
+      // so no reveal() is recorded for this call; the bandit only learns
+      // from turns it was actually allowed to choose.
+      model = mediumModel;
     } else if (modelRouter) {
       ({ model, ctx: routerCtx } = modelRouter.pick(messages));
     } else {
@@ -633,6 +688,8 @@ export function createTurnController(deps) {
       model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
     } else if (modelOverride) {
       model = modelOverride;
+    } else if (requiresGroundedModel?.(messages) && mediumModel) {
+      model = mediumModel;
     } else if (modelRouter) {
       ({ model } = modelRouter.pick(messages));
     } else {
@@ -666,6 +723,7 @@ export function createTurnController(deps) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(OLLAMA_NON_STREAMING_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
     const j = await resp.json();
@@ -693,7 +751,7 @@ export function createTurnController(deps) {
     // resolution, fidelity, the void-checker) runs against this text exactly
     // as it would against citations the model wrote itself; the mechanical
     // pass never gets a separate, weaker check.
-    let text = maxCitation > 0 ? autoAttachCitations(rawText, lastCitations) : rawText;
+    let text = maxCitation > 0 ? autoAttachCitations(rawText, lastCitations) : stripUngroundedCitations(rawText);
     let display = formatOutput(text);
     let brackets = resolveCitationBrackets(text, lastCitations).citations;
     let finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
@@ -714,6 +772,7 @@ export function createTurnController(deps) {
 
     let corrected = false, iterations = 0;
     let { review, denial } = runReviews();
+    if (process.env.EOCHAT_DEBUG_REVIEW) console.error("[review-debug]", JSON.stringify({ review, denial }));
     // The denial flags as first seen, kept even when a correction resolves
     // them: an audit trail that says "the answer denied, then was fixed" must
     // say what it denied, not just that something was fixed.
@@ -895,10 +954,11 @@ export function createTurnController(deps) {
         }).catch(() => {});
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
+        const friendlyMessage = friendlyModelErrorMessage(err, target);
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+          status: "failed", completedAt: new Date().toISOString(), error: friendlyMessage,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+        sendEvent("failed", { turnId: turn.id, answerId, message: friendlyMessage, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
@@ -989,10 +1049,11 @@ export function createTurnController(deps) {
         }).catch(() => {});
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
+        const friendlyMessage = friendlyModelErrorMessage(err, target);
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+          status: "failed", completedAt: new Date().toISOString(), error: friendlyMessage,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+        sendEvent("failed", { turnId: turn.id, answerId, message: friendlyMessage, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
@@ -1180,10 +1241,11 @@ export function createTurnController(deps) {
         }).catch(() => {});
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
+        const friendlyMessage = friendlyModelErrorMessage(err, target);
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+          status: "failed", completedAt: new Date().toISOString(), error: friendlyMessage,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+        sendEvent("failed", { turnId: turn.id, answerId, message: friendlyMessage, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
@@ -1600,10 +1662,11 @@ export function createTurnController(deps) {
         }).catch(() => {});
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
+        const friendlyMessage = friendlyModelErrorMessage(err, target);
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+          status: "failed", completedAt: new Date().toISOString(), error: friendlyMessage,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+        sendEvent("failed", { turnId: turn.id, answerId, message: friendlyMessage, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
