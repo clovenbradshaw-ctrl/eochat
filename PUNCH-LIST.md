@@ -217,6 +217,17 @@ right history rather than just that *a* reply rendered).
   just enough for the model to actually see what was attached, the same bar a ChatGPT/
   Claude-style paste-a-file-and-ask-about-it turn needs to clear. Verified: the stub
   server's received system message now contains the attached file's exact text.
+- **The same bug (and the same fix) applied to the other three upload paths** —
+  `_uploadSpreadsheetBinary` (.xlsx/.xls via SheetJS), `_uploadPDFBinary` (text-layer/OCR),
+  and `_uploadImageBinary` (vision senses) each call the same proxy-only
+  `_ingestTextContent()` but cached `readerContent` only *after* a successful ingest and
+  had no `noProxyMode()` branch in their catch blocks — so a spreadsheet/PDF/image
+  attachment lost its already-extracted content on a no-proxy ingest failure exactly the
+  way plain text files did, and (for the spreadsheet path specifically) the failure was
+  additionally mislabeled as "SheetJS could not read" a file SheetJS had actually parsed
+  fine. Applied the identical fix to all three: cache the extracted content before
+  attempting to index it, and give each its own honest no-engine status instead of folding
+  a proxy-unreachable error into the parser's own failure message.
 
 ## Not yet tested — recommended follow-up
 

@@ -8056,31 +8056,21 @@ class Component extends DCLogic {
       await this._uploadParsedFile(file, projectId, 'spreadsheet');
       return;
     }
+    let names, csv;
     try {
       const buf = await file.arrayBuffer();
       const workbook = XLSX.read(buf, { type: 'array' });
-      const names = workbook.SheetNames;
+      names = workbook.SheetNames;
       // Every sheet, not just the first. The reader's grid renders the first
       // one; the rest follow behind a labelled break so they are present and
       // searchable instead of being silently dropped from a workbook the
       // reader can see has five tabs.
-      const csv = names
+      csv = names
         .map((n, i) => {
           const body = XLSX.utils.sheet_to_csv(workbook.Sheets[n]);
           return i === 0 ? body : `\n--- Sheet: ${n} ---\n${body}`;
         })
         .join('\n');
-      this._rememberKind(file.name, 'spreadsheet');
-      const result = await this._ingestTextContent(file.name, csv, projectId);
-      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '▦', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
-      this.setState(s => ({
-        readerContent: { ...s.readerContent, [file.name]: csv },
-        readerFileInfo: {
-          ...(s.readerFileInfo || {}),
-          [file.name]: { kind: 'spreadsheet', format: 'xlsx', label: 'Spreadsheet workbook', method: 'sheetjs', size: file.size, meta: { sheets: names.length, sheetNames: names } },
-        },
-      }));
-      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${names.length} sheet(s): ${names.join(', ')} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
       // SheetJS refusing a workbook is not the end of the road for .xlsx —
       // it is a ZIP of XML this app can open unaided, and a reader who is
@@ -8089,6 +8079,35 @@ class Component extends DCLogic {
       // path reports its own named gap.
       this.logAdd('◱', `SheetJS could not read "${file.name}" (${err.message}) — trying the built-in reader`, 'sources');
       await this._uploadParsedFile(file, projectId, 'spreadsheet');
+      return;
+    }
+    this._rememberKind(file.name, 'spreadsheet');
+    // Cache before attempting to index — parsing already succeeded, so this
+    // survives a proxy-only ingest failure below the same way
+    // _uploadParsedFile's does (see its comment).
+    this.setState(s => ({
+      readerContent: { ...s.readerContent, [file.name]: csv },
+      readerFileInfo: {
+        ...(s.readerFileInfo || {}),
+        [file.name]: { kind: 'spreadsheet', format: 'xlsx', label: 'Spreadsheet workbook', method: 'sheetjs', size: file.size, meta: { sheets: names.length, sheetNames: names } },
+      },
+    }));
+    try {
+      const result = await this._ingestTextContent(file.name, csv, projectId);
+      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '▦', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
+      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${names.length} sheet(s): ${names.join(', ')} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
+    } catch (err) {
+      // Same distinction as _uploadParsedFile's catch: no engine to index
+      // against is not a parse failure — the sheet content is already
+      // cached above and available to localAskConversation()'s no-engine
+      // fallback.
+      if (this.noProxyMode()) {
+        this.markSource(file.name, { processing: false, glyph: '◐', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+        this.logAdd('◐', `"${file.name}" stored in this tab — no engine to index it, so it will be included directly (not searched/cited) when you ask about it`, 'sources');
+      } else {
+        this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
+        this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
+      }
     }
   }
 
@@ -8201,8 +8220,9 @@ class Component extends DCLogic {
         .filter(Boolean).join('\n\n');
       const finalText = combinedOcr || text;
       const extractMethod = combinedOcr ? 'ocr' : 'pdf-text-layer';
-      const result = await this._ingestTextContent(file.name, finalText, projectId);
-      this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
+      // Cache before attempting to index — extraction (text layer or OCR)
+      // already succeeded, so this survives a proxy-only ingest failure
+      // below the same way _uploadParsedFile's does (see its comment).
       this.setState(s => ({
         readerContent: { ...s.readerContent, [file.name]: finalText },
         readerPDFLayout: { ...(s.readerPDFLayout || {}), [file.name]: layout },
@@ -8210,8 +8230,22 @@ class Component extends DCLogic {
         readerPDFNumPages: pdf.numPages,
         readerPDFBlob: this._uploadBlobUrls.get(file.name),
       }));
-      this.fetchWindowOutline(file.name, finalText);
-      this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
+      try {
+        const result = await this._ingestTextContent(file.name, finalText, projectId);
+        this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
+        this.fetchWindowOutline(file.name, finalText);
+        this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${extractMethod} extracted ${pdf.numPages} page(s) (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
+      } catch (ingestErr) {
+        // No engine to index against is not a PDF-extraction failure — the
+        // text/OCR result is already cached above.
+        if (this.noProxyMode()) {
+          this.markSource(file.name, { processing: false, glyph: '◐', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+          this.logAdd('◐', `"${file.name}" stored in this tab — no engine to index it, so it will be included directly (not searched/cited) when you ask about it`, 'sources');
+        } else {
+          this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: ingestErr.message });
+          this.logAdd('⊘', `Upload failed for "${file.name}" — ${ingestErr.message}`, 'sources');
+        }
+      }
     } catch (err) {
       this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
       this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
@@ -8280,15 +8314,25 @@ class Component extends DCLogic {
     }
 
     const finalText = sections.join('\n\n');
+    // Cache before attempting to index — the senses already produced this
+    // text, so it survives a proxy-only ingest failure below the same way
+    // _uploadParsedFile's does (see its comment).
+    this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: finalText } }));
     try {
       const result = await this._ingestTextContent(file.name, finalText, projectId);
       this.markSource(file.name, { processing: false, glyph: result.truncated ? '◐' : '●', color: result.truncated ? '#A3592B' : '#1F5A4C', ingested: true, chunks: result.chunks || 0, truncated: !!result.truncated, droppedChars: result.droppedChars || 0 });
-      this.setState(s => ({ readerContent: { ...s.readerContent, [file.name]: finalText } }));
       this.fetchWindowOutline(file.name, finalText);
       this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${file.name}" — ${sections.length} sense(s) contributed (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
     } catch (err) {
-      this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
-      this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
+      // No engine to index against is not a senses failure — the text is
+      // already cached above.
+      if (this.noProxyMode()) {
+        this.markSource(file.name, { processing: false, glyph: '◐', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+        this.logAdd('◐', `"${file.name}" stored in this tab — no engine to index it, so it will be included directly (not searched/cited) when you ask about it`, 'sources');
+      } else {
+        this.markSource(file.name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
+        this.logAdd('⊘', `Upload failed for "${file.name}" — ${err.message}`, 'sources');
+      }
     }
   }
 
