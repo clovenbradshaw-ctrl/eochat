@@ -1,5 +1,21 @@
 # Proposed laws from building eoCode's CRISPR organs — staged for later disposition
 
+**Disposition update: staged into `LAWS.md`'s own "Candidate laws" section**
+(the mechanism that section exists for — "observed as consistent practice
+but not yet enforced by a check"), since the disposition question raised
+below resolved toward host behavior, not engine design, and `LAWS.md`
+already has the right holding area for a law before its check is written
+into `scripts/check-laws.mjs`. This document is kept as the fuller,
+evidence-heavy version (real clauses, a measurement each candidate would
+need to be promoted past candidate status) — `LAWS.md` carries the
+compressed candidate-list form. If a human reviewer judges any of the five
+are actually engine-design material instead, `../eo-constitution/` is still
+the right home for those specific ones as an `AMENDMENT-N-PROPOSAL.md`,
+same as this repo's existing precedent
+(`CONSTITUTION-AND-LAWS-AMENDMENTS-PROPOSED.md`) — nothing here forecloses
+that; the candidate-laws staging is the reversible, low-cost default while
+that judgment call is still open.
+
 Written the same way `CONSTITUTION-AND-LAWS-AMENDMENTS-PROPOSED.md` was:
 staged here because `../eo-constitution/` is not reachable from this session
 (not vendored in eochat, not in this session's GitHub scope), so this
