@@ -138,12 +138,38 @@ export function updateHotTerms(hot = [], { userText = "", assistantText = "", tu
 // and with acknowledgment; an acknowledged fact is kept ahead of an unconfirmed
 // one under budget pressure, and the renderer labels it so the model can tell
 // "the reader told me this and I confirmed it" from "the reader told me this".
+
+// Real speech routinely states something and asks about it in the same
+// breath, with no terminal punctuation between the two — "I already replaced
+// the o-ring — does that matter?", "...it's Sunday night, right?". splitSentences
+// sees one sentence ending in "?", and a naive question-filter would discard
+// the whole thing, throwing away the stated half along with the asked half.
+// This recovers the declarative lead-in from that specific shape — a dash- or
+// tag-question-attached question — WITHOUT touching a sentence that is a
+// question from the start (no declarative lead-in exists to recover).
+const TAG_QUESTION = /^(.*?),\s*(?:right|correct|isn'?t (?:it|that)|wasn'?t (?:it|that)|didn'?t (?:i|it|you|we)|doesn'?t it|don'?t you think)\?\s*$/i;
+function declarativeLeadIn(sentence) {
+  const dashParts = sentence.split(/\s+[—–]\s+/);
+  if (dashParts.length > 1) {
+    const lead = dashParts[0].trim();
+    const rest = dashParts.slice(1).join(" — ").trim();
+    if (lead && !/\?\s*$/.test(lead) && /\?\s*$/.test(rest)) return lead;
+  }
+  const tag = sentence.match(TAG_QUESTION);
+  if (tag && tag[1] && !/\?\s*$/.test(tag[1].trim())) return tag[1].trim();
+  return null;
+}
+
 export function extractStatedFacts(text, { cap = 12 } = {}) {
   const out = [];
   for (const s of splitSentences(text)) {
-    const t = s.text.trim();
+    let t = s.text.trim();
+    if (/\?\s*$/.test(t)) {
+      const lead = declarativeLeadIn(t);
+      if (!lead) continue; // a genuine question states nothing
+      t = lead;
+    }
     if (t.length < FACT_MIN_CHARS || t.length > FACT_MAX_CHARS) continue;
-    if (/\?\s*$/.test(t)) continue; // a question states nothing
     // A denial is not a fact — it is a claim about the record that the
     // recall-denial review (below) handles instead of the desk.
     if (isDenialSentence(t)) continue;

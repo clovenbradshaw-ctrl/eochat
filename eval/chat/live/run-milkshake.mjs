@@ -70,6 +70,31 @@ function nowStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function updateScoreboard({ runId, claudeModel, localModel, promptChars, acc, factResults }) {
+  const scoreboardPath = join(RESULTS_DIR, "milkshake-scoreboard.md");
+  const charRatio = (promptChars.growing / promptChars.holonic).toFixed(1);
+  const misses = factResults.filter((f) => !f.holonic.recalled).map((f) => f.topic);
+  const section = [
+    `## ${runId}`,
+    ``,
+    `adversary (${claudeModel}, growing, ${promptChars.growing} chars): **${(acc.growing * 100).toFixed(0)}%** — local windowed-only (${localModel}, no fold, ${promptChars.localBaseline} chars): **${(acc.localBaseline * 100).toFixed(0)}%** — local + surf/fold (${promptChars.holonic} chars, ${charRatio}x smaller than the adversary's): **${(acc.holonic * 100).toFixed(0)}%**`,
+    ``,
+    misses.length ? `local+fold missed: ${misses.join(", ")}` : `local+fold missed nothing.`,
+    ``,
+  ].join("\n");
+
+  const header = `# Milkshake-Machine-Repair — Real Conversation Adversary Comparison\n\nSame methodology as scoreboard.md in this directory, but against the REAL, API-generated troubleshooting transcript (eval/chat/live/milkshake-scenario.mjs + build-transcript.mjs) instead of synthetic trivia. Newest runs first.\n`;
+
+  let existing = "";
+  if (existsSync(scoreboardPath)) {
+    const prior = readFileSync(scoreboardPath, "utf8");
+    const bodyStart = prior.indexOf("\n## ");
+    existing = bodyStart === -1 ? "" : prior.slice(bodyStart);
+  }
+  writeFileSync(scoreboardPath, `${header}\n${section}\n${existing}`);
+  return scoreboardPath;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!existsSync(TRANSCRIPT_PATH)) {
@@ -122,6 +147,14 @@ async function main() {
     factResults,
   }, null, 2));
   console.log(`\nResults: ${outPath}`);
+
+  const scoreboardPath = updateScoreboard({
+    runId, claudeModel: args.claudeModel, localModel: args.localModel,
+    promptChars: { growing: contextText(growingMsgs).length, localBaseline: contextText(localBaselineMsgs).length, holonic: contextText(holonicMsgs).length },
+    acc: { growing: acc("growing"), localBaseline: acc("localBaseline"), holonic: acc("holonic") },
+    factResults,
+  });
+  console.log(`Scoreboard: ${scoreboardPath}`);
 
   for (const r of factResults) {
     if (!r.holonic.recalled) {
