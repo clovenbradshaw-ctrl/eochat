@@ -8,7 +8,7 @@ could be exercised end-to-end rather than just error paths.
 ## P0 — Correctness / data integrity
 
 1. **Chat messages can silently fail to register / conversation state bleeds across projects and sessions.** Reproduced repeatedly: switching to a brand-new project with 0 sources still showed an unrelated prior conversation's messages; a freshly typed message never appeared in the transcript at all — the view kept showing a stale conversation instead. Needs root-cause in whichever code path resolves `activeConversationId` relative to `activeProjectId` (`ui/index.html`, `switchProject`/conversation-load path) and on the server in `conversation-store.js` / `/api/conversations/:id`.
-2. **Duplicate project names allowed with no disambiguation.** Creating multiple projects with the same name is silently permitted; the sidebar shows indistinguishable rows with no id/date/description to tell them apart.
+2. ~~**Duplicate project names allowed with no disambiguation.**~~ **Fixed** (see follow-up pass below): `createProject` now auto-suffixes `(2)`, `(3)`, … the same way Finder/Notion do, so rows stay distinguishable without blocking creation.
 3. **Document ingestion status shows "pending" with no visible progress, retry, or timeout.** An uploaded file sat at `pending` in the Explorer legend indefinitely with no spinner, ETA, or way to check what it's waiting on.
 
 ## P1 — Misleading / missing user feedback
@@ -98,6 +98,12 @@ New, confirmed bugs found and fixed this pass (all in `ui/index.html` unless not
   misleading about which engine was answering. Fixed `staticSelectLocal` /
   `staticSelectAnthropic` / `staticSelectOllama` to set `localModel` accordingly and mark
   `_localModelUserTouched` so the periodic health-check auto-default doesn't flip it back.
+
+- **#2 (duplicate project names) — fixed.** `createProject` now checks the current
+  project list (case-insensitive, trimmed) and auto-suffixes ` (2)`, ` (3)`, … on a
+  collision instead of creating an indistinguishable duplicate row. Verified in browser:
+  creating "Research" three times in a row produced "Research", "Research (2)",
+  "Research (3)".
 
 ## Not yet tested — recommended follow-up
 

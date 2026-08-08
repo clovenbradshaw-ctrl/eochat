@@ -4572,8 +4572,23 @@ class Component extends DCLogic {
     }
   }
 
+  // Two projects with the same name are otherwise indistinguishable in the
+  // sidebar — no id, date, or description shown there — so a reader who
+  // fat-fingers "New Project" twice, or copies a name from an old one, ends
+  // up with rows they cannot tell apart without opening each one. Auto-
+  // suffixing is the same fix Finder/Notion/etc. use: never block creation,
+  // just make the name unique enough to click the right row.
+  _uniqueProjectName(name) {
+    const existing = new Set(this.state.projects.map(p => (p.name || '').trim().toLowerCase()));
+    if (!existing.has(name.trim().toLowerCase())) return name;
+    for (let n = 2; ; n++) {
+      const candidate = `${name} (${n})`;
+      if (!existing.has(candidate.trim().toLowerCase())) return candidate;
+    }
+  }
+
   async createProject(name) {
-    const finalName = name || 'Untitled project';
+    const finalName = this._uniqueProjectName(name || 'Untitled project');
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
