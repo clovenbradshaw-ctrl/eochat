@@ -6544,6 +6544,17 @@ class Component extends DCLogic {
   // Regenerate keeps the user's question in place and asks for a new answer
   // variant — the server records both; the client shows only the new one.
   async regenerateAnswer(turnId) {
+    // No proxy means no server-side conversation to regenerate against — the
+    // endpoint below is proxy-only and would just fail every time, silently
+    // (see localAskConversation's opts.regenerateTurnId comment). Route
+    // through the same local/Ollama-direct/Anthropic-direct answer path a
+    // normal send() uses instead.
+    if (this.noProxyMode()) {
+      const turn = (this.activeSpace().turns || []).find(t => t.id === turnId);
+      if (!turn) return;
+      await this.localAskConversation(turn.q, null, { regenerateTurnId: turnId });
+      return;
+    }
     const conversationId = this.state.activeSpaceId;
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === turnId ? { ...t, ...patch } : t)),
@@ -7164,8 +7175,18 @@ class Component extends DCLogic {
   // server's instruction gate says the turn deserves deliberate treatment,
   // the answer runs through the SAME outline-earned, per-section,
   // fidelity-checked pipeline the server uses (window.EOWebLLMLongform).
-  async localAskConversation(question, attachments) {
-    const localId = 'local-' + Date.now();
+  // `opts.regenerateTurnId`, when set, reuses that turn in place (same id,
+  // same position, same question) instead of appending a new one — see
+  // regenerateAnswer(), which used to hit the proxy-only
+  // /api/conversations/:id/turns/:id/regenerate endpoint unconditionally and
+  // so silently no-opped (a caught fetch failure logged only to the Glass
+  // box, never shown in the transcript) whenever there was no proxy to hit —
+  // i.e. every local/Ollama-direct/Anthropic-direct turn. Regenerate is core
+  // chat-back-and-forth behavior; it needs the same three answer paths a
+  // normal send() gets.
+  async localAskConversation(question, attachments, opts = {}) {
+    const regenerateTurnId = opts.regenerateTurnId || null;
+    const localId = regenerateTurnId || ('local-' + Date.now());
     const webAllowed = !!this.state.webSearch;
     const anthropic = this.noProxyMode() && this.state.provider === 'anthropic';
     const ollamaDirect = this.noProxyMode() && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
@@ -7173,12 +7194,24 @@ class Component extends DCLogic {
     // lived only in this array — never resent — so a follow-up like
     // "reformat it into bullet points" reached the model as its entire
     // conversation, with no referent for "it" and nothing to reformat.
-    const priorTurns = this.activeSpace().turns || [];
+    // Regenerating excludes the turn being redone and anything after it —
+    // it should see exactly what the turn saw the first time, not its own
+    // stale answer nor turns that came later.
+    const allTurns = this.activeSpace().turns || [];
+    const regenIndex = regenerateTurnId ? allTurns.findIndex(t => t.id === regenerateTurnId) : -1;
+    const priorTurns = regenIndex >= 0 ? allTurns.slice(0, regenIndex) : allTurns;
     this._localAbort = new AbortController();
-    this.updateActiveSpace(sp => ({
-      ...sp,
-      turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
-    }));
+    if (regenerateTurnId) {
+      this.updateActiveSpace(sp => ({
+        ...sp,
+        turns: sp.turns.map(t => (t.id === regenerateTurnId ? { ...t, a: '', citations: null, streaming: true, grounding: null } : t)),
+      }));
+    } else {
+      this.updateActiveSpace(sp => ({
+        ...sp,
+        turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
+      }));
+    }
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
     }));
@@ -8383,6 +8416,33 @@ class Component extends DCLogic {
     const turnsCopy = active.turns.slice(0, upToTurnIndex + 1);
     const retrievedCount = turnsCopy.filter(t => t.retrieval).length;
     const name = active.name + ' (fork)';
+    // activeSpace() (see its own comment) only ever resolves a space whose
+    // `spaceId` matches the active project — every other space-creation path
+    // (newConversation, updateActiveSpace's own fallback, the server-loaded
+    // list) sets it, but this one never did. Without it the forked space was
+    // unreachable the instant it was created: setState pointed activeSpaceId
+    // at it, but activeSpace() couldn't find it in the project-scoped list
+    // and silently fell back to the pre-fork conversation — so forking
+    // looked like a no-op, on both the proxy and no-proxy paths, since
+    // nothing ever visibly changed.
+    const spaceId = active.spaceId ?? (this.state.activeProjectId || null);
+    // No proxy means no server conversation record to create — the endpoint
+    // below is proxy-only and every no-proxy fork used to fail the fetch,
+    // silently (logged only to the Glass box's 'spaces' feed, never shown in
+    // the transcript). Same fallback createProject/createConversation use:
+    // build the id and record client-side rather than blocking on a server
+    // that may never exist for this deployment.
+    if (this.noProxyMode()) {
+      const id = 'local-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      const space = {
+        id, name, spaceId, pool: active.pool, turns: turnsCopy,
+        retrievals: (active.retrievals || []).slice(0, retrievedCount),
+        sources: active.sources.slice(), sourcesOff: { ...(active.sourcesOff || {}) }, _loaded: true,
+      };
+      this.setState(s => ({ spaces: s.spaces.concat([space]), activeSpaceId: id, tab: 'chat', selectedEntity: null }));
+      this.logAdd('△', `Forked "${active.name}" into "${name}" at turn ${upToTurnIndex + 1}`, 'spaces');
+      return;
+    }
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8390,7 +8450,7 @@ class Component extends DCLogic {
       });
       const conv = await res.json();
       const space = {
-        id: conv.id, name: conv.title, turns: turnsCopy,
+        id: conv.id, name: conv.title, spaceId: conv.spaceId ?? spaceId, pool: active.pool, turns: turnsCopy,
         retrievals: (active.retrievals || []).slice(0, retrievedCount),
         sources: active.sources.slice(), sourcesOff: { ...(active.sourcesOff || {}) }, _loaded: true,
       };

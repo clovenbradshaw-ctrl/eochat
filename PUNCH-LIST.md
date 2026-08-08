@@ -16,7 +16,7 @@ could be exercised end-to-end rather than just error paths.
 4. **`proxy · live` status pill conflates "proxy process is up" with "model backend is reachable."** It reads "live" even when Ollama itself is completely unreachable; the user only discovers the real state when a send fails with a raw `(Proxy unavailable — fetch failed)`.
 5. **Raw/internal error strings surfaced verbatim to users** — `fetch failed`, `(Proxy unavailable — fetch failed)`, `Plan parsing failed. Model returned: ...` — these are Node/fetch/JSON-parse errors, not user-facing copy.
 6. **"Stop generating" button appears to be unconditionally rendered**, not state-gated to "a response is currently streaming." Clicked it at rest (no active generation) and it was present/clickable with no error.
-7. **One of Fork / Surf / Regenerate produced a `404 Not Found`** from the proxy in a sequence where the preceding send had already silently failed (see #1) — likely assumes a real prior turn existed when it didn't.
+7. ~~**One of Fork / Surf / Regenerate produced a `404 Not Found`**~~ **Regenerate and Fork fixed** (see follow-up pass below) for the no-proxy path; Surf not yet checked.
 
 ## P2 — Feature fragility
 
@@ -104,6 +104,54 @@ New, confirmed bugs found and fixed this pass (all in `ui/index.html` unless not
   collision instead of creating an indistinguishable duplicate row. Verified in browser:
   creating "Research" three times in a row produced "Research", "Research (2)",
   "Research (3)".
+
+## Follow-up pass — chat back-and-forth (this session)
+
+Drove multi-turn conversation specifically, against a context-echoing stub Ollama server
+(one that reports back exactly what it received, so the test verifies the UI sent the
+right history rather than just that *a* reply rendered).
+
+- **Multi-turn history threading works correctly.** 3 turns in a row: turn 2's request
+  correctly included turn 1's Q+A, turn 3's included both prior turns. No dropped or
+  duplicated history within the `LOCAL_HISTORY_TURNS` (6-turn) window.
+- **#7 (Regenerate) — fixed, no-proxy path.** `regenerateAnswer()` unconditionally hit
+  the proxy-only `/api/conversations/:id/turns/:id/regenerate` endpoint with no
+  `noProxyMode()` check, so on local/Ollama-direct/Anthropic-direct turns the fetch
+  always failed — caught and logged only to the Glass box's internal activity feed,
+  never shown in the transcript. Clicking "regenerate" looked like it did nothing.
+  Fixed by giving `localAskConversation()` an `opts.regenerateTurnId` that reuses the
+  existing turn in place (same id/position, `a`/`citations` reset, history correctly
+  excludes the turn being redone and anything after it) instead of appending a new one,
+  and routing `regenerateAnswer()` through it when there's no proxy. Verified against
+  the stub server: 2 real `/api/chat` calls, turn count stayed at 1 (in-place replace,
+  not a duplicate), answer content updated.
+- **#7 (Fork) — fixed, and the root cause was deeper than the proxy call.** Same
+  proxy-only-fetch problem as regenerate (`forkSpace()` always POSTed to
+  `/api/conversations` with no no-proxy fallback) — but even after adding one, forking
+  still looked like a complete no-op: the new space was created and `activeSpaceId` was
+  pointed at it, yet the header/transcript kept showing the *pre-fork* conversation.
+  Root cause: `activeSpace()` resolves the current space by filtering
+  `state.spaces` on `sp.spaceId === activeProjectId` first — every other space-creation
+  path (`newConversation`, `updateActiveSpace`'s own fallback) sets `spaceId`, but
+  `forkSpace()` never did, on either the proxy or no-proxy path. An orphaned space with
+  no `spaceId` can never be found by that filter, so `activeSpace()` silently fell back
+  to `scoped[0]` — the original conversation — as if nothing had happened. This means
+  **fork has likely never worked as advertised even against the real engine**, not just
+  in the no-proxy path (PUNCH-LIST's earlier "confirmed working well" note on fork was
+  apparently a case where this didn't surface, or wasn't checked against the sidebar/
+  header). Fixed by carrying `spaceId` (and `pool`) forward from the space being forked.
+  Verified: after fixing both issues, forking now correctly bumps the sidebar's "Chats"
+  count and switches the header/transcript to show the new "<name> (fork)" conversation.
+- **Surf not yet tested** (needs a grounded/citation-bearing turn to be meaningful).
+- **"Edit & ask again" is a simple compose-box repopulate, not a ChatGPT-style branching
+  edit** — it puts the old question text back in the composer for the reader to change
+  and re-send; it does not remove the old turn or truncate history after it. Sending the
+  edited version appends a *new* turn rather than replacing the old one in place, so a
+  correction leaves the original (wrong) Q&A pair visible above it. This may be
+  deliberate (simpler, non-destructive), but it reads differently from the "general
+  Claude/ChatGPT" edit behavior the task asked about — flagging as a product-direction
+  question rather than fixing outright, since removing/rewriting history on edit is a
+  larger behavior change than the other fixes in this pass.
 
 ## Not yet tested — recommended follow-up
 
