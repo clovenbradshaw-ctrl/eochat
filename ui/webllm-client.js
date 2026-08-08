@@ -23,6 +23,15 @@
 // background timer keeps quietly retrying the real model on a growing
 // backoff for as long as the tab stays open. There is no terminal failure
 // state; there is only "not up yet."
+//
+// Off the main thread: the engine itself runs in webllm-worker.js via
+// CreateWebWorkerMLCEngine, not inline via CreateMLCEngine. Shader
+// compilation and generation are heavy enough to jank the UI thread while
+// running there, and — the part that actually motivates this — a WebGPU
+// device the browser reclaims mid-answer (low memory, a backgrounded tab, a
+// driver reset; see mlc-ai/web-llm#647) only takes the worker down. The
+// client below terminates and rebuilds that worker and routes to standby
+// instead of the page hanging or the failure surfacing as an uncaught error.
 const DEFAULT_MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
 // The models a reader may install, smallest first. These are prebuilt WebLLM
@@ -83,6 +92,25 @@ function writeStoredNicknames(map) {
 // esm.run (jsdelivr) serves an ESM build with no bundler required — the
 // WebLLM README's own documented no-build integration path.
 const WEBLLM_MODULE_URL = "https://esm.run/@mlc-ai/web-llm";
+
+// The worker script the engine actually runs in — see the header comment
+// above. Resolved relative to this module (not the page) so it keeps working
+// regardless of what URL index.html itself is served from.
+const WEBLLM_WORKER_URL = new URL("./webllm-worker.js", import.meta.url);
+
+// WebLLM's own MLCEngine watches for the WebGPU device being reclaimed by the
+// browser and unloads itself when it happens (mlc-ai/web-llm#647); the next
+// call against that engine then throws. Errors crossing the worker's
+// postMessage RPC boundary don't reliably keep their subclass identity —
+// structured clone flattens custom Error subclasses to a plain Error — so
+// match on both the exported class name (works same-thread) and the message
+// text WebLLM ships for DeviceLostError (survives the clone).
+function isDeviceLostError(err) {
+  if (!err) return false;
+  const name = err.name || "";
+  const message = err.message || String(err);
+  return name === "DeviceLostError" || /device (was |is )?lost/i.test(message);
+}
 
 // The download is many sharded fetches over a CDN; a transient failure on
 // one shard is common and not evidence the model can never load here. Each
@@ -188,6 +216,11 @@ class LocalModel {
     this.modelId = readStoredModelId();
     this.nicknames = readStoredNicknames();
     this.engine = null;
+    // The Worker the engine RPCs into — see WEBLLM_WORKER_URL. Owned
+    // one-to-one with `engine`: created fresh each load attempt, terminated
+    // in unload() and whenever the engine is discarded (a failed attempt, a
+    // lost device), so a dead worker is never reused for a retry.
+    this.worker = null;
     // Catalog rows as the picker sees them: the static entries above plus
     // whether each is already on disk. Filled by refreshCatalog(); until then
     // `cached` is null, meaning "not looked yet", which the UI renders as
@@ -407,6 +440,18 @@ class LocalModel {
     }
   }
 
+  // Tear down the worker the engine (if any) is running in. Always safe to
+  // call — a worker in a bad state (crashed, device lost, mid-attempt
+  // failure) must never be handed to the next load attempt or left running
+  // after unload(), so every path that discards `engine` discards `worker`
+  // with it.
+  _terminateWorker() {
+    if (this.worker) {
+      try { this.worker.terminate(); } catch { /* best effort */ }
+      this.worker = null;
+    }
+  }
+
   // The one and only way this module gives up on the real model for now. It
   // never gives up permanently: a background timer keeps re-attempting on a
   // slow-growing backoff (capped at STANDBY_RETRY_MAX_MS) for as long as the
@@ -445,8 +490,8 @@ class LocalModel {
 
     // The WebGPU API existing does not mean an adapter can be created
     // (headless Chrome, GPU blocklisted, hardware acceleration off). Fail
-    // fast with the specific reason rather than letting CreateMLCEngine throw
-    // after the download has already started.
+    // fast with the specific reason rather than letting CreateWebWorkerMLCEngine
+    // throw after the download has already started.
     try {
       const adapter = await navigator.gpu.requestAdapter();
       if (!adapter) {
@@ -468,7 +513,18 @@ class LocalModel {
     for (let attempt = 0; attempt < MAX_LOAD_ATTEMPTS; attempt++) {
       try {
         const webllm = await loadWebLLMModule();
-        const engine = await webllm.CreateMLCEngine(this.modelId, {
+        // A fresh worker per attempt — see _terminateWorker: an attempt that
+        // failed partway through model load can leave its worker in an
+        // unknown state, so the next attempt never reuses one.
+        this._terminateWorker();
+        this.worker = new Worker(WEBLLM_WORKER_URL, { type: "module" });
+        this.worker.onerror = (event) => {
+          if (this.status !== "ready" && this.status !== "loading") return;
+          console.error("[webllm-client] worker crashed:", (event && event.message) || event);
+          this._terminateWorker();
+          this._enterStandby("The in-tab model's background worker crashed" + (event && event.message ? `: ${event.message}` : "") + ".");
+        };
+        const engine = await webllm.CreateWebWorkerMLCEngine(this.worker, this.modelId, {
           initProgressCallback: (report) => {
             this.progress = {
               text: report && report.text ? report.text : "Downloading…",
@@ -493,6 +549,7 @@ class LocalModel {
         lastErr = err;
         console.error(`[webllm-client] load attempt ${attempt + 1}/${MAX_LOAD_ATTEMPTS} failed:`, err);
         this.engine = null;
+        this._terminateWorker();
         if (attempt < MAX_LOAD_ATTEMPTS - 1) {
           const wait = RETRY_BACKOFF_MS[attempt] || 5000;
           this.progress = { text: `Download failed — retrying in ${Math.round(wait / 1000)}s (attempt ${attempt + 2}/${MAX_LOAD_ATTEMPTS})…`, percent: 0 };
@@ -522,15 +579,33 @@ class LocalModel {
     if (this.status !== "ready" || !this.engine) {
       throw new Error("Local model is not ready — call init() first.");
     }
-    const chunks = await this.engine.chat.completions.create({
-      messages,
-      stream: true,
-      temperature: 0.4,
-    });
-    for await (const chunk of chunks) {
+    // Mid-answer engine failures — chiefly the WebGPU device getting
+    // reclaimed by the browser (mlc-ai/web-llm#647) — surface here as a
+    // rejected/thrown call on an engine WebLLM has already unloaded
+    // internally. Rather than let that throw reach the caller as a broken
+    // turn, drop to standby and finish this same answer from there: the
+    // reader sees a plain-spoken "the model dropped" reply instead of a
+    // thrown error, and the background retry loop takes it from here.
+    try {
+      const chunks = await this.engine.chat.completions.create({
+        messages,
+        stream: true,
+        temperature: 0.4,
+      });
+      for await (const chunk of chunks) {
+        if (signal && signal.aborted) return;
+        const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
+        if (delta) yield delta;
+      }
+    } catch (err) {
       if (signal && signal.aborted) return;
-      const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
-      if (delta) yield delta;
+      console.error("[webllm-client] stream failed, falling back to standby:", err);
+      const reason = isDeviceLostError(err)
+        ? "The GPU device was lost mid-answer, usually from low memory or a driver reset — " + ((err && err.message) || "device lost")
+        : ((err && err.message) || String(err));
+      this._terminateWorker();
+      this._enterStandby(reason);
+      yield* this.standby.stream(messages, { signal });
     }
   }
 
@@ -541,6 +616,7 @@ class LocalModel {
       try { await this.engine.unload(); } catch { /* best-effort teardown */ }
     }
     this.engine = null;
+    this._terminateWorker();
     this.status = "idle";
     this.progress = { text: "", percent: 0 };
     this.error = null;
