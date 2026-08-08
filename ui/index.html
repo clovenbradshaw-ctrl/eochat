@@ -2779,11 +2779,12 @@ class Component extends DCLogic {
     // `localModel` is the reader's intent (toggle on); `localModelStatus`
     // mirrors window.EOWebLLM's own state machine, so the toggle can want
     // local mode before the download is ready — or after it has failed —
-    // without those two facts being confused with each other. Defaults on
-    // for the GitHub Pages deployment (see ON_GH_PAGES above), and turns on
-    // for everyone else too once the first health check finds no engine at
-    // all (see _defaultToLocalModelIfNoEngine).
-    localModel: ON_GH_PAGES || readStoredLocalIntent() === true, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
+    // without those two facts being confused with each other. Defaults ON
+    // everywhere (GitHub Pages included) — WebLLM is the default engine, not
+    // an opt-in fallback for a missing server. `readStoredLocalIntent()`
+    // still wins when set: a reader who explicitly turned this off keeps it
+    // off across reloads, same as before; only the *unset* case changed.
+    localModel: readStoredLocalIntent() ?? true, localModelStatus: 'idle', localModelProgress: { text: '', percent: 0 }, localModelError: null,
     // Set only in the 'standby' status (see webllm-client.js _enterStandby):
     // why the real model isn't up right now, while the zero-dependency
     // standby responder answers basic chat in its place and a background

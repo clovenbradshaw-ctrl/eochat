@@ -39,7 +39,7 @@
 // caller's seam, so this module drives either the server's Ollama/Anthropic
 // calls or a browser WebLLM adapter unchanged.
 
-import { autoAttachCitations } from "./citation-check.js";
+import { autoAttachCitations, stripUngroundedCitations } from "./citation-check.js";
 
 // ── bounds ──
 // These are infrastructure ceilings (cost, latency, context budget), not
@@ -56,7 +56,11 @@ export const MAX_ESSAY_SECTIONS = 6;
 export const MAX_SECTION_EVIDENCE_CHARS = 3500;
 export const PER_ITEM_EVIDENCE_CHARS = 900;
 // When a section's local evidence is thinner than this, and the web toggle is
-// on, the orchestrator researches the web for that section automatically.
+// on, the orchestrator researches the web for that section automatically —
+// web hops still run to gather supplementary provenance even when the local
+// passage alone is already sufficient to answer (see the "per-section
+// research" test); the actual reader-first ordering happens in
+// buildSectionPrompt, not by suppressing the web fetch.
 export const THIN_LOCAL_ITEMS = 2;
 export const THIN_LOCAL_CHARS = 800;
 export const DEFAULT_SECTION_TOKENS = 1500;
@@ -365,14 +369,22 @@ export async function defineAnswerSpec({
   const raw = await generate(PLANNER_SYSTEM_PROMPT, user, 220);
   const parsed = parsePlannerReply(raw);
   let units = parsed.units;
-  // A reply that came back with no units but DID independently ask for real
-  // length (its own compliance.minWords, not a value we suggested) still
-  // wanted structure and just didn't enumerate it — recovered as a real,
-  // subject-anchored section breakdown rather than shipped as an empty plan.
-  // parsed.depth === "essay" covers the legacy/salvaged-reply case where an
-  // explicit depth survived without units.
-  const wantsStructure = parsed.depth === "essay" || (parsed.compliance?.minWords || 0) >= STRUCTURED_MIN_WORDS;
-  if (!units.length && wantsStructure) {
+  // Recovery for a reply that survived with no units but DID explicitly say
+  // "essay" (a legacy/salvaged reply, or a parse that kept depth but lost the
+  // units array) — deriveSectionsFromQuestion's generic Overview/History/Key
+  // Aspects/Importance skeleton is a real topic breakdown for an open "tell
+  // me about X" ask, but it is NOT subject-anchored for a narrow factual
+  // lookup ("how long does the battery last, how deep is the sensor rated");
+  // it just inserts the subject string into wiki-article section names that
+  // have nothing to do with what was asked. compliance.minWords alone used to
+  // trigger this same recovery — a small model asking for a 100+ word
+  // *plain* answer (a real single-paragraph need, common for a two-part
+  // factual question) is not the same signal as "this needs essay
+  // structure," and treating it as one turned an ordinary lookup into a
+  // multi-section essay with sections unrelated to the question, each
+  // requiring its own plan/retrieve/generate/evaluate/reconcile model round
+  // trip — see PUNCH-LIST.md, the ~9-minute Zorbex-9 battery-question case.
+  if (!units.length && parsed.depth === "essay") {
     units = deriveSectionsFromQuestion(question);
   }
   units = units.slice(0, MAX_ESSAY_SECTIONS);
@@ -415,9 +427,21 @@ function formDirective(form) {
 // The writer's folded window: this unit's evidence only, capped, no citation
 // numbers, no machinery. The writer is never told to cite.
 function buildSectionPrompt({ question, unit, evidence }) {
+  // Local (the reader's own ingested material) and web (a supplementary
+  // fetch — see runHolonicEssay's "thin" gate) are flattened into one
+  // MATERIAL list with no provenance marker, so a weak writer model has no
+  // signal that item [1] is the reader's own document and item [4] is an
+  // unrelated page a web search happened to return — it was observed
+  // picking whichever passage read more fluently and writing an answer
+  // almost entirely about a different product than the one the reader's own
+  // manual described (see PUNCH-LIST.md). "(your document)" vs "(web
+  // search)" tags plus the explicit preference rule below fix that without
+  // touching what gets fetched.
   const material = evidence
-    .map((e, i) => `[${i + 1}]\n${String(e.text).slice(0, PER_ITEM_EVIDENCE_CHARS)}`)
+    .map((e, i) => `[${i + 1}] (${e.url ? "web search" : "your document"})\n${String(e.text).slice(0, PER_ITEM_EVIDENCE_CHARS)}`)
     .join("\n\n");
+  const hasWeb = evidence.some((e) => e.url);
+  const hasLocal = evidence.some((e) => !(e.url));
   const lines = [
     "You are writing ONE unit of a longer piece that answers the reader's question below.",
     `Unit: ${unit.id}`,
@@ -425,6 +449,9 @@ function buildSectionPrompt({ question, unit, evidence }) {
     formDirective(unit.form || "prose"),
     "Write ONLY this unit. No heading, no preamble, no closing.",
     "Base every factual claim strictly on the MATERIAL below. If the material does not support something you want to say, leave it out. Brief connective analysis between facts is fine.",
+    hasWeb && hasLocal
+      ? "Some MATERIAL is marked (your document), some (web search). The reader is asking about their own document — prefer (your document) passages for every claim they cover. Use (web search) passages only to fill a gap (your document) does not address, and never let a web passage override or replace what the reader's own document says. Those labels are for you only — never write the words \"your document\" or \"web search\" in the answer itself."
+      : "",
     "Do not mention sources, citations, or the material itself in your writing.",
     "",
     `Reader's question: ${question}`,
@@ -445,7 +472,16 @@ function buildSectionPrompt({ question, unit, evidence }) {
 
 // Hard leaks block a section outright; soft ones are advisory (e.g.
 // "evidence" / "research" are ordinary scientific prose, "source" is not).
-const LEAK_HARD = /\b(sources?|citation(s)?|cited|citing|material(s)?|passage(s)?|verbatim)\b/i;
+// Bare "material(s)"/"passage(s)"/"source(s)" are ordinary English words in
+// plenty of legitimate technical writing ("moisture sensor materials",
+// "the power source is USB-C", "raw materials") — matching them unqualified
+// blocked correct, on-topic answers as if they were machinery leaks (see
+// PUNCH-LIST.md). Only counted as a leak when paired with a determiner/
+// qualifier that actually signals "the thing I was handed" ("the source
+// material", "these passages", "provided material"). "cited"/"citing"/
+// "citation(s)"/"verbatim" stay bare — those are near-exclusively
+// meta-commentary regardless of context.
+const LEAK_HARD = /\b(?:cited|citing|citation(?:s)?|verbatim|(?:the|this|that|these|those|provided|given|above)\s+(?:source\s+material|source(?:s)?|material(?:s)?|passage(?:s)?))\b/i;
 const LEAK_SOFT = /\b(evidence|research(ed|ing)?|the web|online search|brackets?)\b/i;
 
 // The specificity residual — the same metric longform.js's fidelityResidual
@@ -463,7 +499,15 @@ const STOP = new Set(("the a an and or but of to in on at for with from by as is
   .split(" "));
 
 export function specificsResidual(draft, citedPassages) {
-  const words = (s) => String(s || "").toLowerCase().match(/[a-z][a-z'-]{2,}/g) ?? [];
+  // Must tokenize identically to `specifics` below (\b[A-Z][a-z]{2,}\b —
+  // letters only, no hyphen). A hyphenated proper name in the source
+  // ("Zorbex-9") used to swallow its own trailing hyphen here ("zorbex-")
+  // while the draft's clean "Zorbex" tokenized as "zorbex" — two different
+  // strings that could never match, so every hyphenated product/spec name in
+  // real source material was reported as unsupported no matter what the
+  // draft actually said (see PUNCH-LIST.md). Apostrophe stays (contractions,
+  // possessives); hyphen no longer does.
+  const words = (s) => String(s || "").toLowerCase().match(/[a-z][a-z']{2,}/g) ?? [];
   const evidence = new Set(citedPassages.flatMap((p) => words(p.text)));
   const rawDraft = String(draft || "");
   const specifics = [...new Set(
@@ -695,6 +739,18 @@ export async function runHolonicEssay({
     } catch (err) {
       writeErr = err;
     }
+    // The writer is shown its evidence as "PASSAGES: [1] ... [2] ..." (see
+    // buildSectionPrompt) and a small model reliably imitates that numbering
+    // back into its own prose despite being told not to — evaluateUnit's
+    // leak check then blocks the unit outright for a self-written [n], even
+    // when every actual claim in it is accurate and evidence-backed.
+    // Citations are mechanically reattached below (autoAttachCitations) once
+    // the unit ships, so a bracket the writer added itself is never load-
+    // bearing — stripped here exactly like an ungrounded riff's invented
+    // brackets, before evaluation ever sees it, rather than spending a
+    // reconcileRounds retry (and sometimes still losing the whole section)
+    // fixing a formatting quirk that was never a grounding problem.
+    if (form !== "code" && draft) draft = stripUngroundedCitations(draft);
     if (writeErr) {
       gaps.push({ type: "section_failed", reason: `"${unit.id}" — ${writeErr.message}` });
       emit({ phase: "section_failed", id: unit.id, reason: writeErr.message });
@@ -715,6 +771,7 @@ export async function runHolonicEssay({
       } catch { revised = null; }
       if (!revised || !String(revised).trim()) break;
       draft = String(revised).trim();
+      if (form !== "code") draft = stripUngroundedCitations(draft);
       reconciled++;
       eva = evaluateUnit({ form, unit, draft, evidence, compliance, question });
       emit({ phase: "section_reconciled", id: unit.id, round: reconciled, compliant: eva.compliant, violations: eva.violations.map((v) => v.type) });

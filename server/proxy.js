@@ -165,17 +165,39 @@ function rebuildProviders() {
   ];
 }
 
+// When the system message includes grounding passages ("CITED PASSAGES",
+// "--- Material", or the holonic essay path's own "MATERIAL:"/"PASSAGES:"
+// section-writer and reconcile prompts — see buildSectionPrompt/reconcileUnit
+// in holonic-chat.js), the talker must bracket its answer with [1], [2],
+// etc. and hold to only the material it was given. The tiny model routinely
+// ignores this: it writes plain prose with no references, or — observed on
+// a live run — abandons the reader's own attached document entirely for an
+// unrelated web passage in the same evidence set, then unravels across
+// reconcile rounds into leaked meta-commentary about its own corrections.
+//
+// This is exported and called directly by turn-controller.js's model-call
+// sites, BEFORE the learned modelRouter is ever consulted — not just left as
+// selectModel()'s internal heuristic. The learned router's reward signal
+// (see model-router.js/reveal, gated on LATENCY_BUDGET_MS) measures only
+// speed, never content quality, so once a fast-but-noncompliant candidate
+// has enough recorded "successes" the router will happily keep sampling it
+// for grounded work — which is exactly how a 30+ minute, citation-scrambled
+// answer about the wrong product got shipped with heuristicModel's fix
+// already in place but never actually reached (see PUNCH-LIST.md). Grounded
+// generation is not a latency/quality tradeoff the bandit gets to learn; it
+// is a correctness requirement, decided the same deterministic way every
+// time.
+function requiresGroundedModel(messages) {
+  const text = (messages || []).map(m => m.content || "").join(" ");
+  return /CITED PASSAGES|--- Material\b|^MATERIAL:|^PASSAGES:/m.test(text);
+}
+
 function selectModel(messages) {
   const text = (messages || []).map(m => m.content || "").join(" ");
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const charCount = text.length;
 
-  // When the system message includes grounding passages ("CITED PASSAGES" or
-  // "--- Material"), the talker must bracket its answer with [1], [2], etc.
-  // The tiny model routinely ignores this instruction and writes plain prose
-  // with no references — every source ends up in the gap list, none in the
-  // answer. Force the medium model for any turn with grounding.
-  if (/CITED PASSAGES|--- Material\b/.test(text)) {
+  if (requiresGroundedModel(messages)) {
     return MEDIUM_MODEL;
   }
 
@@ -287,6 +309,8 @@ const turnController = createTurnController({
   numCtx: NUM_CTX,
   modelRouter,
   heuristicModel: selectModel,
+  requiresGroundedModel,
+  mediumModel: MEDIUM_MODEL,
   latencyBudgetMs: LATENCY_BUDGET_MS,
   isWarming: () => corpusWarmup.started && !corpusWarmup.ready,
   webSearchFn: webSearchAndFetch,
