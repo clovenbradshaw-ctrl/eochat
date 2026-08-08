@@ -228,6 +228,17 @@ right history rather than just that *a* reply rendered).
   fine. Applied the identical fix to all three: cache the extracted content before
   attempting to index it, and give each its own honest no-engine status instead of folding
   a proxy-unreachable error into the parser's own failure message.
+- **Audited the remaining ~55 `fetch(this.proxyUrl() ...)` call sites for the same
+  missing-`noProxyMode()`-guard pattern** (task: systematic sweep). Most are read-only
+  polls that are supposed to fail in no-proxy mode (health/status checks, sources/models
+  lists) and already degrade correctly. `deleteSource` is worth a note even though it's
+  not broken: its confirm text promises "moved to the recycle bin and can be restored
+  later," which isn't true in no-proxy mode (the recycle bin is server-side only) — but
+  the optimistic client-side removal is safe either way (`fetchSources()`'s catch is a
+  silent no-op that never touches the local `sp.sources` the removal edited, so nothing
+  flickers back). Priors, Senses, and the recycle bin's own restore/purge are real
+  proxy-only features with no offline equivalent conceivable — not bugs, just gaps
+  already covered by "Not yet tested" below.
 
 ## Not yet tested — recommended follow-up
 
