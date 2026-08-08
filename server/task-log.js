@@ -462,34 +462,68 @@ export function isProductionOrder(priorOp, nextOp) {
 }
 
 /**
- * Walks one task_id's own entries (in seq order, as they appear in
+ * A thread is not always one task_id. `supersedes` is the SPIRAL link — the
+ * same work revisited under a new task_id, one turn later — distinct from
+ * `depends_on`, the LATTICE link across different live tasks that
+ * `deriveLevels` walks. Root-finding follows `supersedes` back to the entry
+ * that opened the thread, so t1 -> t2 -> t3 all collapse to t1's key
+ * regardless of how many times the work was revised. A task_id nothing
+ * supersedes is its own root, so an ordinary single-task_id thread is
+ * unaffected.
+ */
+function threadRootOf(task_id, supersedes) {
+  let current = task_id;
+  const seen = new Set();
+  while (supersedes.has(current) && !seen.has(current)) {
+    seen.add(current);
+    current = supersedes.get(current);
+  }
+  return current;
+}
+
+/**
+ * Walks one thread's own entries (in seq order, as they appear in
  * `log.entries` — the raw log, not the fold, because a coarsening that a
  * LATER entry superseded is still a real event that happened) and flags any
- * step where grain coarsened or production order ran backward. Cross-task
- * cube position is not compared here — two DIFFERENT tasks legitimately sit
- * at different cells with no ordering claim between them; this checks one
+ * step where grain coarsened or production order ran backward.
+ *
+ * A thread follows `supersedes` across task_ids, because that is the same
+ * spiral the module header describes ("a thread may be revisited
+ * (SUPERSEDE), but only upward") — checking literal task_id equality missed
+ * exactly this case: t2 supersedes t1 at a shallower grain produced two
+ * one-entry groups and nothing to compare, silently permitting the very
+ * coarsening this function exists to catch. Two DIFFERENT tasks with no
+ * supersede link between them still get no ordering claim — this checks one
  * thread's own trajectory against itself, the same scope `checkNumericLocks`
  * gives "first mention locks it" (a fact about one thread's history, not a
  * cross-thread claim).
  */
 export function checkCubeProgression(log) {
-  const byTask = new Map();
+  const supersedes = new Map();
+  for (const e of log.entries) {
+    if (e.kind === ENTRY_KINDS.SUPERSEDE && e.supersedes) supersedes.set(e.task_id, e.supersedes);
+  }
+
+  const byThread = new Map();
   for (const e of log.entries) {
     if (e.operator == null || e.grain == null) continue;
-    if (!byTask.has(e.task_id)) byTask.set(e.task_id, []);
-    byTask.get(e.task_id).push(e);
+    const root = threadRootOf(e.task_id, supersedes);
+    if (!byThread.has(root)) byThread.set(root, []);
+    // `log.entries` is append-only in seq order, so entries collected here
+    // in iteration order are already in seq order — no re-sort needed.
+    byThread.get(root).push(e);
   }
 
   const flags = [];
-  for (const [task_id, entries] of byTask) {
+  for (const entries of byThread.values()) {
     for (let i = 1; i < entries.length; i++) {
       const prior = entries[i - 1];
       const next = entries[i];
       if (isGrainProgression(prior.grain, next.grain) === false) {
-        flags.push({ task_id, kind: "grain-coarsened", from: prior.grain, to: next.grain, atSeq: next.seq });
+        flags.push({ task_id: next.task_id, kind: "grain-coarsened", from: prior.grain, to: next.grain, atSeq: next.seq });
       }
       if (prior.operator !== next.operator && isProductionOrder(prior.operator, next.operator) === false) {
-        flags.push({ task_id, kind: "production-order-reversed", from: prior.operator, to: next.operator, atSeq: next.seq });
+        flags.push({ task_id: next.task_id, kind: "production-order-reversed", from: prior.operator, to: next.operator, atSeq: next.seq });
       }
     }
   }

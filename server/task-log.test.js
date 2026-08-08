@@ -283,3 +283,36 @@ test("checkCubeProgression ignores entries carrying no cube address at all", () 
   log = append(log, { kind: ENTRY_KINDS.EVIDENCE, task_id: "t", evidence: ["x"] });
   assert.deepEqual(checkCubeProgression(log), []);
 });
+
+// ── checkCubeProgression follows supersede links as one spiral thread ─────
+
+test("checkCubeProgression catches a coarsening that crosses a supersede link — the spiral, not just one task_id", () => {
+  // Regression: grouping by literal task_id meant t2-supersedes-t1 produced
+  // two one-entry groups with nothing to compare, silently permitting exactly
+  // the "spiral, not a flat loop" violation this module's header forbids.
+  let log = createTaskLog();
+  log = append(log, { kind: ENTRY_KINDS.PROPOSE, task_id: "t1", operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Pattern" });
+  log = append(log, { kind: ENTRY_KINDS.SUPERSEDE, task_id: "t2", supersedes: "t1", operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Ground" });
+
+  const flags = checkCubeProgression(log);
+  assert.equal(flags.length, 1);
+  assert.equal(flags[0].kind, "grain-coarsened");
+  assert.equal(flags[0].from, "Pattern");
+  assert.equal(flags[0].to, "Ground");
+  assert.equal(flags[0].task_id, "t2", "flagged at the entry where the coarsening actually landed");
+});
+
+test("checkCubeProgression stays silent across a supersede chain that keeps deepening", () => {
+  let log = createTaskLog();
+  log = append(log, { kind: ENTRY_KINDS.PROPOSE, task_id: "t1", operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Ground" });
+  log = append(log, { kind: ENTRY_KINDS.SUPERSEDE, task_id: "t2", supersedes: "t1", operator: "CON", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Figure" });
+  log = append(log, { kind: ENTRY_KINDS.SUPERSEDE, task_id: "t3", supersedes: "t2", operator: "SYN", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Pattern" });
+  assert.deepEqual(checkCubeProgression(log), []);
+});
+
+test("checkCubeProgression does not merge threads that were never linked by supersedes, even with similar ids", () => {
+  let log = createTaskLog();
+  log = append(log, { kind: ENTRY_KINDS.PROPOSE, task_id: "t1", operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Pattern" });
+  log = append(log, { kind: ENTRY_KINDS.PROPOSE, task_id: "t2", operator: "SEG", operator_basis: OPERATOR_BASIS.PRODUCED, grain: "Ground" });
+  assert.deepEqual(checkCubeProgression(log), [], "no supersedes edge exists between t1 and t2 — they stay two unrelated threads");
+});
