@@ -20,7 +20,7 @@ export const title = "checkRecallDenial catches a false denial without over-trig
 const FACT = "X9-Falcon-42";
 
 const SCRIPT = [
-  { question: "Please remember this for later.", answer: `Noted — the vault access code is ${FACT}.` },
+  { question: `Please remember this for later — the vault access code is ${FACT}.`, answer: `Noted — the vault access code is ${FACT}.` },
   { question: "What's the weather like on Mars?", answer: "Mars has a thin CO2 atmosphere and averages around -60C." },
   { question: "Who wrote Moby-Dick?", answer: "Herman Melville wrote Moby-Dick, published in 1851." },
 ];

@@ -24,3 +24,8 @@ eocode-workspace/
 # Claude Code worktree scratch space — isolated checkouts for parallel work,
 # not part of this repo's own tree.
 .claude/worktrees/
+
+# Resumability progress file for eval/chat/live/build-transcript.mjs — an
+# in-flight ledger of a real API call sequence, not a deliverable. The
+# finished eval/chat/live/transcripts/milkshake.transcript.json IS committed.
+eval/chat/live/transcripts/*.progress.jsonl
