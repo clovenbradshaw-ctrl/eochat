@@ -19,7 +19,7 @@ export function createClaudeAdapter({ model, apiKey = process.env.ANTHROPIC_API_
   if (!apiKey) throw new TypeError("createClaudeAdapter: apiKey is required (set ANTHROPIC_API_KEY)");
   return {
     id: model,
-    async generate(messages, { maxTokens = 300, retries = 4, webSearch = false } = {}) {
+    async generate(messages, { maxTokens = 300, retries = 4, webSearch = false, timeoutMs = 5 * 60 * 1000 } = {}) {
       const systemMessages = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
       const body = {
         model,
@@ -38,7 +38,12 @@ export function createClaudeAdapter({ model, apiKey = process.env.ANTHROPIC_API_
             method: "POST",
             headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
             body: JSON.stringify(body),
-            signal: AbortSignal.timeout(2 * 60 * 1000),
+            // A non-streaming call that includes web_search (real research,
+            // possibly multiple search rounds) plus a large max_tokens with
+            // adaptive thinking on can genuinely take minutes — a tight
+            // timeout here doesn't fail fast, it fails a call that was about
+            // to succeed. Caller-overridable per request.
+            signal: AbortSignal.timeout(timeoutMs),
           });
         } catch (err) {
           lastErr = err;
