@@ -90,7 +90,7 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.3/dist/tesseract.min.js"></script>
 <!-- Renders markdown in AI answers. Falls through to plain text if the CDN is
       unreachable — same offline-degrade pattern as the other optional libs. -->
-<script src="https://unpkg.com/marked@15.0.7/lib/marked.umd.min.js"></script>
+<script src="https://unpkg.com/marked@15.0.7/marked.min.js"></script>
 <!-- Renders LaTeX math ($...$ / $$...$$) in AI answers via KaTeX.
      renderMarkdown() checks `typeof katex` and falls through to the literal
      $…$ text if this fails to load (offline, CDN blocked), the same offline-
@@ -3505,7 +3505,15 @@ class Component extends DCLogic {
         models = data.models || [];
       }
       this.setState({ _ollamaModels: models, _ollamaFetching: false, _ollamaError: null });
-      if (models.length && !this.state.model) {
+      // `!this.state.model` used to gate this, on the assumption a fresh
+      // reader has no model chosen yet — but fetchModels() fills state.model
+      // with the WebLLM default id as soon as the tab loads (so the "Local"
+      // provider has something to show), which means state.model is already
+      // truthy by the time a reader connects Ollama and this never ran: every
+      // Ollama turn went out with the WebLLM model id in the request body,
+      // which a real Ollama server rejects as an unknown model. Default
+      // whenever the current model isn't actually one Ollama just reported.
+      if (models.length && !models.some(m => m.name === this.state.model)) {
         this.setState({ model: models[0].name });
       }
     } catch (err) {
@@ -4580,8 +4588,23 @@ class Component extends DCLogic {
     }
   }
 
+  // Two projects with the same name are otherwise indistinguishable in the
+  // sidebar — no id, date, or description shown there — so a reader who
+  // fat-fingers "New Project" twice, or copies a name from an old one, ends
+  // up with rows they cannot tell apart without opening each one. Auto-
+  // suffixing is the same fix Finder/Notion/etc. use: never block creation,
+  // just make the name unique enough to click the right row.
+  _uniqueProjectName(name) {
+    const existing = new Set(this.state.projects.map(p => (p.name || '').trim().toLowerCase()));
+    if (!existing.has(name.trim().toLowerCase())) return name;
+    for (let n = 2; ; n++) {
+      const candidate = `${name} (${n})`;
+      if (!existing.has(candidate.trim().toLowerCase())) return candidate;
+    }
+  }
+
   async createProject(name) {
-    const finalName = name || 'Untitled project';
+    const finalName = this._uniqueProjectName(name || 'Untitled project');
     try {
       const res = await fetch(this.proxyUrl() + '/api/projects', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4645,6 +4668,12 @@ class Component extends DCLogic {
   }
 
   async deleteProject(id) {
+    // Same gap as deleteConversation: every other destructive action in this
+    // app confirms first, but a project — its documents, instructions, and
+    // every conversation scoped to it — used to disappear on one click with
+    // no confirmation and no recycle bin.
+    const target = this.state.projects.find(p => p.id === id);
+    if (!window.confirm(`Delete "${target ? target.name : 'this project'}"? This deletes all its documents and conversations and cannot be undone.`)) return;
     this._saveLocalInstruction(id, '');
     const remaining = this.state.projects.filter(p => p.id !== id);
     const nextActive = this.state.activeProjectId === id ? (remaining[0] ? remaining[0].id : null) : this.state.activeProjectId;
@@ -6226,6 +6255,14 @@ class Component extends DCLogic {
     if (!trimmed || !current || current.name === trimmed) return;
     // Optimistic — setSpaces also re-saves the localStorage mirror.
     this.setSpaces(spaces => spaces.map(sp => sp.id === id ? { ...sp, name: trimmed } : sp));
+    // No proxy means no server record to PATCH — every no-proxy rename used
+    // to fire this fetch anyway, have it fail (connection refused), and roll
+    // the name straight back a moment later: the reader would see their new
+    // title flash for an instant and then silently revert, with the only
+    // explanation logged to the Glass box, never the visible chat. Treat the
+    // local-storage-backed rename above as final instead of provisional —
+    // same as renameProject's fire-and-forget PATCH, which never rolls back.
+    if (this.noProxyMode()) return;
     fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(id), {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: trimmed }),
     }).then(res => {
@@ -6239,6 +6276,13 @@ class Component extends DCLogic {
   }
 
   async deleteConversation(id) {
+    // Every other destructive action in this app confirms first — deleting a
+    // source (which even then only moves it to a recoverable recycle bin),
+    // purging the recycle bin, clearing downloaded local models. A whole
+    // conversation was the one exception: one click on the trash icon, no
+    // confirmation, no recycle bin, gone for good. Match the rest of the app.
+    const target = this.state.spaces.find(sp => sp.id === id);
+    if (!window.confirm(`Delete "${target ? target.name : 'this conversation'}"? This cannot be undone.`)) return;
     const remaining = this.state.spaces.filter(s => s.id !== id);
     this.setState(s => {
       const nextActive = s.activeSpaceId === id ? (remaining[0] ? remaining[0].id : null) : s.activeSpaceId;
@@ -6550,6 +6594,17 @@ class Component extends DCLogic {
   // Regenerate keeps the user's question in place and asks for a new answer
   // variant — the server records both; the client shows only the new one.
   async regenerateAnswer(turnId) {
+    // No proxy means no server-side conversation to regenerate against — the
+    // endpoint below is proxy-only and would just fail every time, silently
+    // (see localAskConversation's opts.regenerateTurnId comment). Route
+    // through the same local/Ollama-direct/Anthropic-direct answer path a
+    // normal send() uses instead.
+    if (this.noProxyMode()) {
+      const turn = (this.activeSpace().turns || []).find(t => t.id === turnId);
+      if (!turn) return;
+      await this.localAskConversation(turn.q, null, { regenerateTurnId: turnId });
+      return;
+    }
     const conversationId = this.state.activeSpaceId;
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === turnId ? { ...t, ...patch } : t)),
@@ -6630,6 +6685,30 @@ class Component extends DCLogic {
   // has no business holding onto. This is the shape a turn actually keeps.
   _turnAttachments(attachments) {
     return (attachments || []).map(a => ({ id: a.id, name: a.name, title: a.title }));
+  }
+
+  // Raw fallback for when there's no engine to index/search an attachment
+  // (see localAskConversation's groundFailed branch): fold each attached
+  // file's already-extracted text (uploadFiles/EOFormats already did the
+  // parsing — this only reads what's cached in readerContent, never fetches
+  // or re-parses) straight into the prompt, capped so one large attachment
+  // can't blow the whole context window. No chunking, no search, no
+  // citations — just enough for the model to see what was actually attached.
+  _attachmentContextText(names) {
+    const CAP = 24000;
+    const parts = [];
+    let used = 0;
+    for (const name of names || []) {
+      const text = this.state.readerContent[name];
+      if (!text || !text.trim()) continue;
+      const room = CAP - used;
+      if (room <= 0) { parts.push(`[ATTACHED FILE: ${name}] — omitted, over the per-turn size cap for uncited attachments.`); continue; }
+      const slice = text.length > room ? text.slice(0, room) + '\n[...truncated...]' : text;
+      used += slice.length;
+      parts.push(`[ATTACHED FILE: ${name}]\n${slice}`);
+    }
+    if (!parts.length) return '';
+    return 'ATTACHED FILES — the reader attached these to this question. There is no engine to search or cite them, so they are included here in full (or truncated where noted); read them directly.\n\n' + parts.join('\n\n');
   }
 
   async send() {
@@ -7170,8 +7249,18 @@ class Component extends DCLogic {
   // server's instruction gate says the turn deserves deliberate treatment,
   // the answer runs through the SAME outline-earned, per-section,
   // fidelity-checked pipeline the server uses (window.EOWebLLMLongform).
-  async localAskConversation(question, attachments) {
-    const localId = 'local-' + Date.now();
+  // `opts.regenerateTurnId`, when set, reuses that turn in place (same id,
+  // same position, same question) instead of appending a new one — see
+  // regenerateAnswer(), which used to hit the proxy-only
+  // /api/conversations/:id/turns/:id/regenerate endpoint unconditionally and
+  // so silently no-opped (a caught fetch failure logged only to the Glass
+  // box, never shown in the transcript) whenever there was no proxy to hit —
+  // i.e. every local/Ollama-direct/Anthropic-direct turn. Regenerate is core
+  // chat-back-and-forth behavior; it needs the same three answer paths a
+  // normal send() gets.
+  async localAskConversation(question, attachments, opts = {}) {
+    const regenerateTurnId = opts.regenerateTurnId || null;
+    const localId = regenerateTurnId || ('local-' + Date.now());
     const webAllowed = !!this.state.webSearch;
     const anthropic = this.noProxyMode() && this.state.provider === 'anthropic';
     const ollamaDirect = this.noProxyMode() && this.state.provider === 'ollama' && this.state._ollamaAuthorized;
@@ -7179,12 +7268,30 @@ class Component extends DCLogic {
     // lived only in this array — never resent — so a follow-up like
     // "reformat it into bullet points" reached the model as its entire
     // conversation, with no referent for "it" and nothing to reformat.
-    const priorTurns = this.activeSpace().turns || [];
+    // Regenerating excludes the turn being redone and anything after it —
+    // it should see exactly what the turn saw the first time, not its own
+    // stale answer nor turns that came later.
+    const allTurns = this.activeSpace().turns || [];
+    const regenIndex = regenerateTurnId ? allTurns.findIndex(t => t.id === regenerateTurnId) : -1;
+    const priorTurns = regenIndex >= 0 ? allTurns.slice(0, regenIndex) : allTurns;
+    // Names of files attached to THIS turn, however it got here — a fresh
+    // send() carries live File objects (attachments), a regenerate has only
+    // the already-normalized {id,name,title} the turn was created with.
+    const attachmentNames = regenIndex >= 0
+      ? (allTurns[regenIndex].attachments || []).map(a => a.name)
+      : (attachments || []).map(a => a.name);
     this._localAbort = new AbortController();
-    this.updateActiveSpace(sp => ({
-      ...sp,
-      turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
-    }));
+    if (regenerateTurnId) {
+      this.updateActiveSpace(sp => ({
+        ...sp,
+        turns: sp.turns.map(t => (t.id === regenerateTurnId ? { ...t, a: '', citations: null, streaming: true, grounding: null } : t)),
+      }));
+    } else {
+      this.updateActiveSpace(sp => ({
+        ...sp,
+        turns: sp.turns.concat([{ id: localId, q: question, attachments: this._turnAttachments(attachments), hasAttachments: !!(attachments && attachments.length), retrieval: null, prompt: '', a: '', citations: null, streaming: true }]),
+      }));
+    }
     const patchTurn = (patch) => this.updateActiveSpace(sp => ({
       ...sp, turns: sp.turns.map(t => (t.id === localId ? { ...t, ...patch } : t)),
     }));
@@ -7210,14 +7317,22 @@ class Component extends DCLogic {
       webReason = 'the local model judged this needs live research';
     } else if (gate.needsWeb === false) {
       webReason = 'the local model judged this needs no web call';
+    } else {
+      // needsWeb is null, not false — the gate never actually rendered a
+      // verdict (today: only the in-browser WebLLM model can cast this
+      // vote, so Ollama-direct/Anthropic-direct turns land here every
+      // time), which is a different fact than "the model looked and said
+      // no." The old fallback text ("no discourse weight required it")
+      // implied a deliberate judgment call that never happened.
+      webReason = 'no engine was available to judge whether this needs web research';
     }
     this.setState({ thinkingPhase: useWeb ? 'searching the web...' : 'surfing...' });
     this.logAdd(useWeb ? '→' : '◱', useWeb
       ? `Web gate: on — ${webReason}.`
-      : `Web gate: off — ${webReason || 'no discourse weight required it'}.`, 'chat');
+      : `Web gate: off — ${webReason}.`, 'chat');
     this._thinkingLog(useWeb ? '→' : '◱', useWeb
       ? `Searching the web for "${gate.query}" — ${webReason}.`
-      : `No web search — ${webReason || 'no discourse weight required it'}.`);
+      : `No web search — ${webReason}.`);
 
     let groundData;
     let groundFailed = null;
@@ -7300,11 +7415,24 @@ class Component extends DCLogic {
       // invented citations — rather than refusing a reply this deployment was
       // built to produce. On the static build this is the normal shape: there
       // is no engine to reach.
-      this.logAdd('◱', `Local ${useWeb ? 'web search' : 'ground'} unavailable (${groundFailed.message}) — answering from project instructions and general knowledge only`, 'chat');
+      //
+      // Files attached to THIS turn are the one exception worth carrying
+      // through by hand: uploadFiles() already extracted their text
+      // client-side before the (proxy-only) /api/ingest call failed, and
+      // that text is cached in readerContent regardless of whether ingest
+      // succeeded (see _uploadParsedFile's catch). Without this, an attached
+      // file the reader can see sitting in the composer/Documents rail was
+      // invisible to the model — the turn answered "from general knowledge"
+      // as if nothing had been attached at all.
+      const attachmentContext = this._attachmentContextText(attachmentNames);
+      this.logAdd('◱', `Local ${useWeb ? 'web search' : 'ground'} unavailable (${groundFailed.message}) — answering from ${attachmentContext ? 'the attached file(s) and ' : ''}project instructions and general knowledge only`, 'chat');
       groundData = {
         grounded: false, warming: false, citations: [], gaps: [],
         total: 0, folded: 0, tokens: 0, budget: 0, dropped: 0, deliberate: false,
-        systemPrompt: 'No sources were reachable from this tab, so there are no documents or web results to cite. Answer from the project instructions and general knowledge only. Never fabricate source citations: if you would otherwise reference a source, say so plainly instead of inventing a bracket number.',
+        systemPrompt: (attachmentContext ? attachmentContext + '\n\n' : '')
+          + 'No sources were reachable from this tab, so there are no indexed documents or web results to cite.'
+          + (attachmentContext ? ' Answer using the attached file content above, the project instructions, and general knowledge.' : ' Answer from the project instructions and general knowledge only.')
+          + ' Never fabricate source citations: if you would otherwise reference a source, say so plainly instead of inventing a bracket number.',
       };
     }
 
@@ -7468,11 +7596,19 @@ class Component extends DCLogic {
         };
       });
 
+      const modelAttribution = anthropic
+        ? `anthropic: ${this.state.model || 'claude'} (API, browser-direct)`
+        : ollamaDirect
+          ? `ollama: ${this.state.model || 'unknown model'} (browser-direct, your own Ollama)`
+          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`;
+      const modelTraceDetail = anthropic
+        ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
+        : ollamaDirect
+          ? `ollama: ${this.state.model || 'unknown model'} — browser-direct call to your own Ollama instance`
+          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`;
       patchTurn({
         a: answer, citations: citations.length ? citations : null, streaming: false,
-        model: anthropic
-          ? `anthropic: ${this.state.model || 'claude'} (API, browser-direct)`
-          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
+        model: modelAttribution,
         trace: [
           { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: groundFailed
             ? `Unavailable — ${groundFailed.message}. Answered offline from the project's own rules and general knowledge, without retrieval.`
@@ -7483,9 +7619,7 @@ class Component extends DCLogic {
               : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}` },
           ...(webReason ? [{ kind: 'ground', name: 'Web gate', detail: webReason }] : []),
           ...(webSupplemented ? [{ kind: 'call', name: 'Discourse override', detail: 'The corpus carried no evidence for an essay-shaped request — web research supplied it despite the model verdict.' }] : []),
-          { kind: 'model', name: 'Model', detail: anthropic
-            ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
-            : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
+          { kind: 'model', name: 'Model', detail: modelTraceDetail },
           { kind: 'gap', name: 'Citation check', detail: useWeb
             ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
             : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
@@ -7858,6 +7992,15 @@ class Component extends DCLogic {
         this.logAdd('◱', `Stored "${name}" for reading — ${r.gap || 'nothing indexable was found in it'}`, 'sources');
         return;
       }
+      // Cache the extracted text before attempting to index it — extraction
+      // already succeeded at this point, and this is the only copy of it the
+      // reader gets in noProxyMode() if the ingest call below fails (see the
+      // catch: /api/ingest is proxy-only, so it always fails there). Setting
+      // this early means a no-proxy attachment still has its raw text
+      // available for localAskConversation() to fold directly into the
+      // prompt, instead of the file existing only as a failed-upload chip
+      // the model never sees any part of.
+      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
 
       const result = await this._ingestTextContent(name, text, projectId);
       this.markSource(name, {
@@ -7867,17 +8010,26 @@ class Component extends DCLogic {
         ingested: true, chunks: result.chunks || 0,
         truncated: !!result.truncated, droppedChars: result.droppedChars || 0,
       });
-      // Cache locally so the reader can render it (the spreadsheet grid, the
-      // extracted document) without a round trip back through the proxy's
-      // attachment store.
-      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
       if (r.kind !== 'spreadsheet') this.fetchWindowOutline(name, text);
       const how = r.method ? ` via ${r.method}` : '';
       this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${name}"${how} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
       if (r.note) this.logAdd('◱', `"${name}" — ${r.note}`, 'sources');
     } catch (err) {
-      this.markSource(name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
-      this.logAdd('⊘', `Upload failed for "${name}" — ${err.message}`, 'sources');
+      // No engine to index against (noProxyMode(): local WebLLM/Ollama-
+      // direct/Anthropic-direct) is not the same failure as a real ingest
+      // error — the text is already cached above and localAskConversation()
+      // folds it straight into the prompt when grounding is unavailable, so
+      // the reader's question still gets answered from the file, just
+      // without chunked search/citations. Say that plainly instead of the
+      // raw "Failed to fetch". A real ingest error (engine reachable, but it
+      // rejected the content) still reports as a failure.
+      if (this.noProxyMode()) {
+        this.markSource(name, { processing: false, glyph: '◐', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+        this.logAdd('◐', `"${name}" stored in this tab — no engine to index it, so it will be included directly (not searched/cited) when you ask about it`, 'sources');
+      } else {
+        this.markSource(name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
+        this.logAdd('⊘', `Upload failed for "${name}" — ${err.message}`, 'sources');
+      }
     }
   }
 
@@ -8383,6 +8535,33 @@ class Component extends DCLogic {
     const turnsCopy = active.turns.slice(0, upToTurnIndex + 1);
     const retrievedCount = turnsCopy.filter(t => t.retrieval).length;
     const name = active.name + ' (fork)';
+    // activeSpace() (see its own comment) only ever resolves a space whose
+    // `spaceId` matches the active project — every other space-creation path
+    // (newConversation, updateActiveSpace's own fallback, the server-loaded
+    // list) sets it, but this one never did. Without it the forked space was
+    // unreachable the instant it was created: setState pointed activeSpaceId
+    // at it, but activeSpace() couldn't find it in the project-scoped list
+    // and silently fell back to the pre-fork conversation — so forking
+    // looked like a no-op, on both the proxy and no-proxy paths, since
+    // nothing ever visibly changed.
+    const spaceId = active.spaceId ?? (this.state.activeProjectId || null);
+    // No proxy means no server conversation record to create — the endpoint
+    // below is proxy-only and every no-proxy fork used to fail the fetch,
+    // silently (logged only to the Glass box's 'spaces' feed, never shown in
+    // the transcript). Same fallback createProject/createConversation use:
+    // build the id and record client-side rather than blocking on a server
+    // that may never exist for this deployment.
+    if (this.noProxyMode()) {
+      const id = 'local-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+      const space = {
+        id, name, spaceId, pool: active.pool, turns: turnsCopy,
+        retrievals: (active.retrievals || []).slice(0, retrievedCount),
+        sources: active.sources.slice(), sourcesOff: { ...(active.sourcesOff || {}) }, _loaded: true,
+      };
+      this.setState(s => ({ spaces: s.spaces.concat([space]), activeSpaceId: id, tab: 'chat', selectedEntity: null }));
+      this.logAdd('△', `Forked "${active.name}" into "${name}" at turn ${upToTurnIndex + 1}`, 'spaces');
+      return;
+    }
     try {
       const res = await fetch(this.proxyUrl() + '/api/conversations', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8390,7 +8569,7 @@ class Component extends DCLogic {
       });
       const conv = await res.json();
       const space = {
-        id: conv.id, name: conv.title, turns: turnsCopy,
+        id: conv.id, name: conv.title, spaceId: conv.spaceId ?? spaceId, pool: active.pool, turns: turnsCopy,
         retrievals: (active.retrievals || []).slice(0, retrievedCount),
         sources: active.sources.slice(), sourcesOff: { ...(active.sourcesOff || {}) }, _loaded: true,
       };
@@ -10158,16 +10337,36 @@ class Component extends DCLogic {
       // off, and this picker had no way to turn Local off once it lost its
       // toggle button below).
       staticProviderIsOllama: S.provider === 'ollama',
+      // Each of these three flips `localModel` too, not just `provider` — the
+      // header pill, composer badge, and per-answer "via …" attribution all
+      // key off `localModel` first (see modelPickerLabel/localAskConversation)
+      // and only fall through to `provider` once it's off. Leaving it true
+      // after picking Anthropic or Ollama here left every one of those
+      // reading "local model · standby" while the turn was actually answered
+      // by the reader's own Ollama/Anthropic call — the exact bug the
+      // modelPickerLabel comment above describes, just from this picker
+      // instead of the toggle button. _localModelUserTouched is set for the
+      // same reason toggleLocalModel sets it: so the health poll's
+      // _defaultToLocalModelIfNoEngine doesn't flip localModel back on.
       staticSelectLocal: () => {
         const row = S._availableModels.find(m => m.id === 'local');
-        this.setState({ provider: 'local', model: row ? row.defaultModel : S.model });
+        this._localModelUserTouched = true;
+        writeStoredLocalIntent(true);
+        this.setState({ provider: 'local', model: row ? row.defaultModel : S.model, localModel: true });
+        if (window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
+          window.EOWebLLM.init();
+        }
       },
       staticSelectAnthropic: () => {
         const row = S._availableModels.find(m => m.id === 'anthropic');
-        this.setState({ provider: 'anthropic', model: row ? row.defaultModel : S.model });
+        this._localModelUserTouched = true;
+        writeStoredLocalIntent(false);
+        this.setState({ provider: 'anthropic', model: row ? row.defaultModel : S.model, localModel: false });
       },
       staticSelectOllama: () => {
-        this.setState({ provider: 'ollama' });
+        this._localModelUserTouched = true;
+        writeStoredLocalIntent(false);
+        this.setState({ provider: 'ollama', localModel: false });
         if (!S._ollamaAuthorized) this.requestOllamaConnect();
       },
       staticLocalBorder: S.provider === 'local' ? '#1F5A4C' : '#E0DACE',
