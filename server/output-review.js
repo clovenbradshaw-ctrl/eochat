@@ -54,7 +54,22 @@ const ANSWER_REFUSAL = /\b(?:i can'?t (?:do|help|provide|share|give|honor)|can'?
 // The gating mechanism itself — R4 and the gate-control folds forbid naming it.
 // Includes bare fold ids ("proj-035", "core-style"): a fold id in an answer is
 // the mechanism surfacing in the reader's face, exactly what R4 forbids.
+// RULES IN FORCE THIS TURN / END RULES IN FORCE THIS TURN: instruction-gate.js's
+// own header/footer framing for the folded-rules block it injects
+// (DEFAULT_LABEL, gateHeader/gateFooter) — observed verbatim in a live model
+// reply (a small local model apparently reading its own system prompt's
+// section markers as content to continue). The block is meant to bound the
+// rules FOR the model, never to be echoed, so its exact header/footer text is
+// as much "the mechanism surfacing" as a bare fold id.
 const MECHANISM_LEAK = /\b(?:instruction gate|ACTIVE FOLDS|FOLDED FOLDS|NOT active this turn|fingerprint index|folded away|surfaced this turn|NO FOLD SURFACED|gating mechanism|gate block|the gate decides|proj-\d+[\w-]*)\b/i;
+// Separate from MECHANISM_LEAK above: "=====" is not a word character, so it
+// cannot sit inside that regex's \b...\b wrapper (there is never a word/
+// non-word transition immediately before a run of "="). instruction-gate.js's
+// header/footer framing (DEFAULT_LABEL, gateHeader/gateFooter) is meant to
+// bound the folded-rules block FOR the model, never to be echoed — observed
+// verbatim in a live reply from a small local model reading its own system
+// prompt's section markers as content to continue.
+const MECHANISM_LEAK_FRAMING = /=====\s*(?:END\s+)?RULES IN FORCE THIS TURN\s*=====/i;
 
 function normalize(text) {
   return String(text || "")
@@ -344,7 +359,7 @@ export function reviewOutput({ question = "", answer = "", gate, groundText = ""
   }
 
   // R4 — the mechanism stays internal.
-  if (MECHANISM_LEAK.test(text)) {
+  if (MECHANISM_LEAK.test(text) || MECHANISM_LEAK_FRAMING.test(text)) {
     flags.push({ type: "mechanism_leak", detail: "the answer names the gating mechanism, which the folds say is internal" });
   }
 
@@ -363,7 +378,15 @@ export function reviewOutput({ question = "", answer = "", gate, groundText = ""
       });
     }
   }
-  if (directives.bracketCitations && !/\[\d+\]/.test(text)) {
+  // core-citation-law.md is explicit both ways: cite when passages were
+  // given, emit NO brackets "on a general-knowledge turn, a warming turn, or
+  // an empty retrieval." detectStyleDirectives only sees that the fold is
+  // *active* (it always is — always:true), not whether this turn actually
+  // handed the model anything to cite, so without the groundText gate a bare
+  // greeting or opinion question was flagged "missing_citations" every time —
+  // triggering a full correction round-trip to fix a violation the model
+  // never committed.
+  if (directives.bracketCitations && groundText.trim() && !/\[\d+\]/.test(text)) {
     flags.push({
       type: "missing_citations",
       detail: "the active folds require every text-claim to be followed by a bracket number [n] referencing the loaded passage it came from; the answer contains no citation brackets. Add the bracket number for each claim drawn from the loaded passages.",

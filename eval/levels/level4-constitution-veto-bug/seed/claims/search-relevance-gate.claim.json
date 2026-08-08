@@ -1,0 +1,26 @@
+{
+  "claim_id": "search-relevance-gate",
+  "what": "a relevance gate for web search preservation: a candidate result is preserved only if applying its relations to a copy of the reader's hypergraph moves the graph beyond what the ground's own reseeding variation produces (tuple-rotate reseeding null) — new existence is never redundant, restatement within the ground's capacity is refused, and unplaceable magnitude is censored, never ranked",
+  "proposed_placement": "engine",
+  "expect": "pass",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": [],
+    "level_test": "above"
+  }
+}

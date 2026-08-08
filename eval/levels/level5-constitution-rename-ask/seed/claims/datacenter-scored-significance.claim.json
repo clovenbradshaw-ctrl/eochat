@@ -1,0 +1,27 @@
+{
+  "claim_id": "datacenter-scored-significance",
+  "what": "a significance organ that asks a fleet of GPUs to score the arrival's revision against a model that does not fit on local hardware",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Exemplar for the 7th amendment (II.12). The shape of a claim that passes every earlier article — medium-agnostic (II.11), weights nothing present (II.8), measures a genuine revision (II.9), fixes nothing in particular (II.7), owns no clock or I/O (III.2) — and is refuted only by the boundary: its correctness depends on compute this lineage does not own. The AI datacenter with infinite GPU compute does not exist; the boundary conditions of the invention are local compute and mainstream hardware. The host may call a model it does not own (II.3); the measurement never presumes one.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": true,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": [],
+    "level_test": "above"
+  }
+}

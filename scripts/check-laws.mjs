@@ -668,6 +668,86 @@ async function checkErrorsDoNotWearSuccess() {
 // UI already read withheld_total per-document (`d.withheldTotal`, shown in
 // a summary line) but the specific panel listing withheld candidates
 // compared only against its own already-engine-truncated array length.
+// ── L9: no write vanishes for want of a home ────────────────────────────────
+//
+// Static, like L6/L7 — the guarantee is a source-level property (does the
+// shared write choke point ever return the array unchanged when nothing
+// matched?), not something that needs a live proxy or model call to observe.
+// Found live: a fresh project's first message ran every fetch to completion
+// (200s all the way down) and the transcript stayed on "No messages yet"
+// forever — updateActiveSpace mapped over the real spaces array, found no
+// entry matching activeSpaceId (activeSpace()'s own fallback object was
+// never actually IN that array), and silently returned it unchanged.
+async function checkNoWriteVanishes() {
+  section("L9: no write vanishes for want of a home");
+  const uiPath = path.join(UI_DIR, "index.html");
+  const src = fs.existsSync(uiPath) ? fs.readFileSync(uiPath, "utf8") : "";
+  if (!src) {
+    record("L9", "L9a", "SKIP", `ui/index.html not found at ${uiPath}`, {});
+    return;
+  }
+  // L9a: updateActiveSpace must materialize a real space when none matches,
+  // not map over the real array and return it unchanged.
+  const guardsChokePoint = /const hasMatch = s\.spaces\.some\(sp => sp\.id === id\)/.test(src)
+    && /spaces\.concat\(\[\{/.test(src.slice(src.indexOf("updateActiveSpace(fn)"), src.indexOf("updateActiveSpace(fn)") + 2000));
+  record("L9", "L9a", guardsChokePoint ? "PASS" : "VIOLATION",
+    guardsChokePoint
+      ? "updateActiveSpace materializes a real local space before writing when activeSpaceId names nothing in state.spaces, instead of silently mapping over the array and returning it unchanged"
+      : "updateActiveSpace has no guard against activeSpaceId naming no real space — a write through it in that state is dropped with no error, no thrown exception, nothing to catch",
+    { checked: uiPath, static_check: true });
+
+  // L9b: send() must ensure a real space exists before any answer path runs.
+  const sendFn = src.slice(src.indexOf("async send() {"), src.indexOf("async send() {") + 1200);
+  const guardsSendEntry = /if \(!this\.state\.spaces\.some\(sp => sp\.id === this\.state\.activeSpaceId\)\)/.test(sendFn)
+    && /await this\.newConversation\(\{ silent: true \}\)/.test(sendFn);
+  record("L9", "L9b", guardsSendEntry ? "PASS" : "VIOLATION",
+    guardsSendEntry
+      ? "send() confirms a real, persisted conversation exists before dispatching to any answer path — the first message in a brand-new project gets somewhere real to land"
+      : "send() dispatches to an answer path without first confirming activeSpaceId names a real conversation — the first message in a fresh project (opened without \"+ New chat\") has nowhere to land",
+    { checked: uiPath, static_check: true });
+}
+
+// ── L10: a narration handler must not crash the turn it narrates ───────────
+//
+// Static, same reasoning as L9. Found live: qwen2.5-coder answering "hi!"
+// crashed with "(Proxy unavailable — (data.sections || []).join is not a
+// function)" even though the proxy answered every request in the turn —
+// holonic_plan's sections (an array of titles) and holonic_assemble's
+// sections (a bare count, same field name, deliberately different shape)
+// collided in a handler that trusted the array shape without checking it,
+// and the catch block wrapping the crash blamed a proxy that was never at
+// fault.
+async function checkNarrationDoesNotCrashTurn() {
+  section("L10: a narration handler must not crash the turn it narrates");
+  const uiPath = path.join(UI_DIR, "index.html");
+  const src = fs.existsSync(uiPath) ? fs.readFileSync(uiPath, "utf8") : "";
+  if (!src) {
+    record("L10", "L10a", "SKIP", `ui/index.html not found at ${uiPath}`, {});
+    return;
+  }
+  // L10a: holonic_plan's sections must be type-checked before .join, not
+  // just null-checked — the collision is with a WRONG-TYPE value, not an
+  // absent one.
+  const guardsSectionsType = /Array\.isArray\(data\.sections\) \? data\.sections : \[\]\)\.join/.test(src);
+  const stillUnguarded = /\(data\.sections \|\| \[\]\)\.join/.test(src);
+  record("L10", "L10a", (guardsSectionsType && !stillUnguarded) ? "PASS" : "VIOLATION",
+    (guardsSectionsType && !stillUnguarded)
+      ? "_holonicLogEntry's holonic_plan branch checks Array.isArray(data.sections) before .join — a same-named, differently-shaped field on a sibling event (holonic_assemble) can no longer crash it"
+      : "_holonicLogEntry's holonic_plan branch still calls .join on `data.sections || []`, which only guards absence — a present-but-non-array value (e.g. holonic_assemble's numeric sections, same field name) throws straight through",
+    { checked: uiPath, static_check: true });
+
+  // L10b: the catch block must not default to a diagnosis it hasn't
+  // verified. "Proxy unavailable" names one specific cause for what can be
+  // any exception in the whole SSE-handling loop, including bugs entirely
+  // client-side.
+  const stillMislabels = /Proxy unavailable — ' \+ err\.message/.test(src);
+  record("L10", "L10b", stillMislabels ? "VIOLATION" : "PASS",
+    stillMislabels
+      ? "askConversation's catch block still labels every failure \"(Proxy unavailable — ...)\" regardless of cause — a client-side rendering bug reads as a server/network problem to anyone debugging from what the reader sees"
+      : "askConversation's catch block no longer claims a specific cause (\"Proxy unavailable\") it has not verified — the message names the failure, not a diagnosis",
+    { checked: uiPath, static_check: true });
+}
+
 async function checkNoImpliedCompleteness() {
   section("L6: no implied completeness");
   const uiPath = path.join(UI_DIR, "index.html");
@@ -816,6 +896,8 @@ async function main() {
   // check, the other imports the real formatting function and the real
   // vendored classifier directly. Run first, unconditionally, so they still
   // report in any environment, including one with no proxy running at all.
+  await checkNoWriteVanishes();
+  await checkNarrationDoesNotCrashTurn();
   await checkNoImpliedCompleteness();
   await checkNoSilentDegradation();
 

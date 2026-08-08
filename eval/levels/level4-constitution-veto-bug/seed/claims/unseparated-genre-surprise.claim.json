@@ -1,0 +1,27 @@
+{
+  "claim_id": "unseparated-genre-surprise",
+  "what": "an ensemble surprise signal that surfaces a top-N ranked by divergence against external priors with no recurrence check and no disclosure that genre-distinctiveness and narrative novelty are conflated",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Exemplar for the 11th amendment (II.16), drawn from a real 14-signal consensus reading of the Odyssey: three of a top-25 were the same recurring Homeric formula, scoring high only because it reads as distinctively epic against non-epic external priors, not because it is narratively unique. An automatic recurrence check — the cheapest available separator — cleanly distinguished the two once added.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": true,
+    "consumes_source": "direct",
+    "host_dependencies": [],
+    "level_test": "above"
+  }
+}

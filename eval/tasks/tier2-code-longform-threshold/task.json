@@ -1,0 +1,12 @@
+{
+  "id": "tier2-code-longform-threshold",
+  "tier": 2,
+  "title": "Bug fix from symptom only: escalation threshold off by one comparison operator",
+  "sourceNote": "Grounded in eochat commit 38f1d92 (server/code-longform.js, STRUCTURAL_MISMATCH_THRESHOLD). Reduced to a small self-contained function. The model is given only the buggy code and a symptom report.",
+  "system": "You are a careful software engineer fixing a real, reported bug. Output ONLY the complete, corrected file content for solution.js — no markdown fences, no commentary, no explanation.",
+  "maxTokens": 250,
+  "seed": 202,
+  "targetFile": "solution.js",
+  "fixtureFiles": [],
+  "prompt": "Fix the bug described below. Return the COMPLETE corrected content of solution.js (it must still export a function named exactly `shouldEscalate` with the same signature).\n\nCURRENT FILE (solution.js) — HAS A BUG:\n```js\n// A page-generation pipeline writes an HTML file, then a CSS/JS file that\n// references it. `distinctRefCount` is how many DISTINCT ids/classes the\n// CSS/JS file references that the HTML file never declared, after normal\n// correction attempts were already tried. Above the declared threshold, the\n// pipeline escalates: it patches the HTML file itself instead of continuing\n// to ask the later file to adapt to a structure that isn't really there.\nexport const STRUCTURAL_MISMATCH_THRESHOLD = 3;\n\nexport function shouldEscalate(distinctRefCount) {\n  return distinctRefCount > STRUCTURAL_MISMATCH_THRESHOLD;\n}\n```\n\nBUG REPORT (symptom only — no root-cause diagnosis given):\nA real generation run left EXACTLY 3 distinct CSS class references unresolved after normal correction attempts. `STRUCTURAL_MISMATCH_THRESHOLD` is documented and intended to mean \"3 or more distinct unresolved references should trigger escalation,\" but that run never escalated — `shouldEscalate(3)` returned `false` when it should have returned `true`. Runs with 4 or more unresolved references escalate correctly; only the exact boundary value of 3 is wrong.\n\nFix `shouldEscalate` so that exactly 3 (the declared threshold) DOES trigger escalation, values below 3 do NOT, and values above 3 still DO (unchanged). Return the full file, including the unchanged `STRUCTURAL_MISMATCH_THRESHOLD` export."
+}

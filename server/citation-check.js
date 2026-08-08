@@ -76,6 +76,20 @@ export function parseCitationRefs(text) {
   return out;
 }
 
+/**
+ * An ungrounded answer (maxCitation === 0: no passages, no web results) has
+ * nothing a bracket could point at — the system prompt tells the model not
+ * to write [1]-style brackets at all, but a small local model does not
+ * reliably obey that, and validateCitations below only fires when
+ * maxCitation > 0. Without this, an invented "[1][2][3]" on a plain greeting
+ * sails through untouched and the UI has to show it as three broken
+ * citations instead of the model just not having written them.
+ */
+export function stripUngroundedCitations(content) {
+  if (!content) return content;
+  return content.replace(BRACKET_RE, "").replace(/[ \t]+([.,;:!?])/g, "$1").replace(/[ \t]{2,}/g, " ");
+}
+
 /** Replace any [n] the model invented beyond the real citation table with a visible gap marker. */
 export function validateCitations(content, maxCitation) {
   if (!content || maxCitation <= 0) return content;
@@ -149,6 +163,14 @@ const ATTACH_WINDOW = 120;
 function quoteOccursIn(haystackNorm, quoteNorm) {
   if (haystackNorm.includes(quoteNorm)) return true;
   if (!quoteNorm) return false;
+  // The mechanical citator's proof clauses are the source's own bytes,
+  // truncated to a display budget with an ellipsis — the "…" is not part of
+  // the source, so exact-match fails. A quote that is a verbatim PREFIX of the
+  // cited passage up to that marker IS the source's bytes: accept it.
+  if (quoteNorm.endsWith("…")) {
+    const prefix = quoteNorm.slice(0, -1).trimEnd();
+    if (prefix.length >= 20 && haystackNorm.includes(prefix)) return true;
+  }
   const first = quoteNorm[0];
   const flipped = first === first.toUpperCase() ? first.toLowerCase() : first.toUpperCase();
   if (flipped === first) return false; // not a letter — no case to flip

@@ -1,0 +1,27 @@
+{
+  "claim_id": "terrain-stance-app",
+  "what": "eoreader-chat host face for terrain/stance: the terrain_report tool (verb-register.js:79) fulfills its declared verb by reading the engine's coverage report through engine-ground.js's engineTerrainReport(); DIAGONAL and getCell()'s hand-listed diagonal table are removed from proxy.js and routed through @eoreader/engine/operators' cellOf; ingest and search_memory annotate with the measured report instead of the refuted eoreader5 dispatch.js classifier (dominantTerrain/terrainAmplitudes).",
+  "proposed_placement": "app",
+  "expect": "pass",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": true,
+    "medium_agnostic": false,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "none",
+    "host_dependencies": [
+      "io"
+    ]
+  }
+}

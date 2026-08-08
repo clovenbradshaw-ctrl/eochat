@@ -1,0 +1,190 @@
+// Fixed, hand-written action sequences for --dry-run: a fast, offline,
+// zero-cost way to validate the harness plumbing (sandboxing, seeding,
+// holon-coder, oracle scoring, result recording) BEFORE spending real
+// CPU-minutes on the actual local model. This is NOT a model and its
+// "pass rate" says nothing about agentic capability — it says the harness
+// itself works. Labeled as such everywhere it's reported. Plain objects
+// here, not hand-escaped JSON strings — scripted-adapter.mjs stringifies
+// them, so file content can just be a real multi-line template literal.
+
+const csvConvert = `const fs = require("fs");
+const text = fs.readFileSync(process.argv[2], "utf8").trim();
+const lines = text.split("\\n");
+const headers = lines[0].split(",");
+const rows = lines.slice(1).map((line) => {
+  const vals = line.split(",");
+  const obj = {};
+  headers.forEach((h, i) => (obj[h] = vals[i]));
+  return obj;
+});
+console.log(JSON.stringify(rows));
+`;
+
+const csvConvertQuoteAware = `const fs = require("fs");
+const text = fs.readFileSync(process.argv[2], "utf8").trim();
+const lines = text.split("\\n");
+const headers = lines[0].split(",");
+function parseLine(line) {
+  const vals = [];
+  let cur = "", inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { inQ = !inQ; continue; }
+    if (c === "," && !inQ) { vals.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  vals.push(cur);
+  return vals;
+}
+const rows = lines.slice(1).map((line) => {
+  const vals = parseLine(line);
+  const obj = {};
+  headers.forEach((h, i) => (obj[h] = vals[i]));
+  return obj;
+});
+console.log(JSON.stringify(rows));
+`;
+
+const fizzbuzz = `const n = Number(process.argv[2]);
+const out = [];
+for (let i = 1; i <= n; i++) {
+  if (i % 15 === 0) out.push("FizzBuzz");
+  else if (i % 3 === 0) out.push("Fizz");
+  else if (i % 5 === 0) out.push("Buzz");
+  else out.push(String(i));
+}
+console.log(JSON.stringify(out));
+`;
+
+const jsonlSummarize = `const fs = require("fs");
+const text = fs.readFileSync(process.argv[2], "utf8");
+const lines = text.split("\\n").filter((l) => l.trim());
+let sum = 0;
+for (const line of lines) sum += JSON.parse(line).amount;
+console.log(sum);
+`;
+
+const wavDurationChunked = `const fs = require("fs");
+const buf = fs.readFileSync(process.argv[2]);
+let offset = 12;
+let byteRate = null, dataBytes = null;
+while (offset + 8 <= buf.length) {
+  const id = buf.toString("ascii", offset, offset + 4);
+  const size = buf.readUInt32LE(offset + 4);
+  const body = offset + 8;
+  if (id === "fmt ") byteRate = buf.readUInt32LE(body + 8);
+  if (id === "data") dataBytes = size;
+  offset = body + size + (size % 2);
+}
+console.log(dataBytes / byteRate);
+`;
+
+const routeListPatch = [
+  'if (mode === "list") {',
+  '  const dir = "claims";',
+  "  const lines = readdirSync(dir)",
+  '    .filter((f) => f.endsWith(".claim.json"))',
+  '    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")))',
+  "    .map((c) => `${c.claim_id} ${c.expect}`)",
+  "    .sort();",
+  "  for (const line of lines) console.log(line);",
+  "  process.exit(0);",
+  "}",
+  "",
+  "",
+].join("\n");
+
+const routeStatsPatch = [
+  'if (mode === "stats") {',
+  '  const dir = "claims";',
+  '  const files = readdirSync(dir).filter((f) => f.endsWith(".claim.json"));',
+  "  let pass = 0, refute = 0;",
+  "  const articleCounts = {};",
+  "  for (const f of files) {",
+  '    const claim = JSON.parse(readFileSync(join(dir, f), "utf8"));',
+  "    const v = check(claim);",
+  "    if (v.verdict === VERDICTS.PASS) pass++; else refute++;",
+  '    const cited = new Set(v.reasons.join(" ").match(/\\b[IVX]+\\.\\d+\\b/g) || []);',
+  "    for (const code of cited) articleCounts[code] = (articleCounts[code] ?? 0) + 1;",
+  "  }",
+  "  console.log(`TOTAL ${files.length}`);",
+  "  console.log(`PASS ${pass}`);",
+  "  console.log(`REFUTE ${refute}`);",
+  "  const ranked = Object.entries(articleCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));",
+  "  for (const [code, count] of ranked) console.log(`${code} ${count}`);",
+  "  process.exit(0);",
+  "}",
+  "",
+  "",
+].join("\n");
+
+export const DRY_RUN_SCRIPTS = {
+  "level6-constitution-stats-report": [
+    { decompose: false },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'import { readFileSync } from "node:fs";', new_string: 'import { readFileSync, readdirSync } from "node:fs";\nimport { join } from "node:path";' } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'console.error(`unknown mode "${mode}"`);', new_string: routeStatsPatch + 'console.error(`unknown mode "${mode}"`);' } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs stats" } },
+    { tool: "finish", args: { summary: "added the stats subcommand: reads every claim, calls the real check(), tallies verdicts and article citations" } },
+  ],
+  "level5-constitution-rename-ask": [
+    { decompose: false },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: "node assay/route.mjs ask <evidence.json>  classify evidence and return the routed placement", new_string: "node assay/route.mjs classify <evidence.json>  classify evidence and return the routed placement" } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'if (mode === "ask") {', new_string: 'if (mode === "classify") {' } },
+    { tool: "edit_file", args: { path: "README.md", old_string: "npm run route -- ask  <evidence>.json             # classify evidence, get the routed tier", new_string: "npm run route -- classify <evidence>.json             # classify evidence, get the routed tier" } },
+    { tool: "edit_file", args: { path: "README.md", old_string: "`level_test` is only for engine organs (IV.3 growth rule). `ask` accepts a", new_string: "`level_test` is only for engine organs (IV.3 growth rule). `classify` accepts a" } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs classify claims/holonic-task.claim.json" } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs ask claims/holonic-task.claim.json" } },
+    { tool: "finish", args: { summary: "renamed the ask subcommand to classify in route.mjs and README.md; left AMENDMENT-9-PROPOSAL.md's unrelated use of the word alone" } },
+  ],
+  "level3-constitution-list-command": [
+    { decompose: false },
+    { tool: "read_file", args: { path: "assay/route.mjs" } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'import { readFileSync } from "node:fs";', new_string: 'import { readFileSync, readdirSync } from "node:fs";\nimport { join } from "node:path";' } },
+    { tool: "edit_file", args: { path: "assay/route.mjs", old_string: 'console.error(`unknown mode "${mode}"`);', new_string: routeListPatch + 'console.error(`unknown mode "${mode}"`);' } },
+    { tool: "run_shell", args: { command: "node assay/route.mjs list" } },
+    { tool: "finish", args: { summary: "added the list subcommand to route.mjs, verified its output against claims/, and confirmed check still works" } },
+  ],
+  "level4-constitution-veto-bug": [
+    { decompose: false },
+    { tool: "run_shell", args: { command: "node --test conformance/assay.test.js" } },
+    { tool: "edit_file", args: { path: "assay/classify.js", old_string: "if (evidence.giver !== undefined) {", new_string: "if (evidence.giver) {" } },
+    { tool: "run_shell", args: { command: "node --test conformance/assay.test.js" } },
+    { tool: "finish", args: { summary: "fixed the giver falsy-check regression in classify.js; node --test conformance/assay.test.js now passes in full" } },
+  ],
+  "level1-csv-to-json": [
+    { decompose: false },
+    { tool: "write_file", args: { path: "convert.js", content: csvConvert } },
+    { tool: "write_file", args: { path: "sample.csv", content: "a,b\n1,2\n" } },
+    { tool: "run_shell", args: { command: "node convert.js sample.csv" } },
+    { tool: "finish", args: { summary: "wrote convert.js, ran it against sample.csv, output matched the expected JSON array" } },
+  ],
+  "level1-fizzbuzz": [
+    { decompose: false },
+    { tool: "write_file", args: { path: "fizzbuzz.js", content: fizzbuzz } },
+    { tool: "run_shell", args: { command: "node fizzbuzz.js 15" } },
+    { tool: "finish", args: { summary: "wrote fizzbuzz.js, ran it for N=15, output looked correct" } },
+  ],
+  "level2-csv-quoted-comma": [
+    { decompose: false },
+    { tool: "write_file", args: { path: "convert.js", content: csvConvertQuoteAware } },
+    { tool: "run_shell", args: { command: "node check.mjs" } },
+    { tool: "finish", args: { summary: "wrote convert.js with quote-aware parsing, node check.mjs printed CHECK: PASS" } },
+  ],
+  "level2-jsonl-quirk": [
+    { decompose: false },
+    { tool: "write_file", args: { path: "summarize.js", content: jsonlSummarize } },
+    { tool: "run_shell", args: { command: "node check.mjs" } },
+    { tool: "finish", args: { summary: "wrote summarize.js handling line-delimited JSON, node check.mjs printed CHECK: PASS" } },
+  ],
+  "level2-wav-duration-bug": [
+    { decompose: false },
+    { tool: "write_file", args: { path: "duration.js", content: wavDurationChunked } },
+    { tool: "run_shell", args: { command: "node check.mjs" } },
+    // check.mjs writes its fixture to disk before running duration.js, so it
+    // exists by now — this call smoke-tests the generic perceive dispatcher
+    // actually runs against a real file in the sandbox, not just that it
+    // exists as code.
+    { tool: "perceive", args: { path: "._check_fixture.wav" } },
+    { tool: "finish", args: { summary: "wrote duration.js walking real RIFF chunks (not a fixed offset); node check.mjs printed CHECK: PASS; perceive confirmed the fixture's real chunk layout via the wav sense" } },
+  ],
+};

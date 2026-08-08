@@ -69,7 +69,9 @@ import { cabinetStats } from "./project-memory.js";
 import { buildMemoryMessage, emptyMemory } from "./conversation-memory.js";
 import { webSearchAndFetch, flattenDdgTopics } from "./web-search.js";
 import { runSessionMessage } from "./code-longform-session.js";
+import { runEoCodeTask, listWorkspaces, listWorkspaceFiles, startEoCodeSession, stepEoCodeSession, cancelEoCodeSession } from "./eocode-agent.js";
 import { loadMorphologyPrior, discoverNarratorContext } from "./longform-node-context.js";
+import { startTelemetry, systemSnapshot, recordTokens, endGeneration } from "./telemetry.js";
 
 // ── CLI args with validation ──
 
@@ -163,17 +165,39 @@ function rebuildProviders() {
   ];
 }
 
+// When the system message includes grounding passages ("CITED PASSAGES",
+// "--- Material", or the holonic essay path's own "MATERIAL:"/"PASSAGES:"
+// section-writer and reconcile prompts — see buildSectionPrompt/reconcileUnit
+// in holonic-chat.js), the talker must bracket its answer with [1], [2],
+// etc. and hold to only the material it was given. The tiny model routinely
+// ignores this: it writes plain prose with no references, or — observed on
+// a live run — abandons the reader's own attached document entirely for an
+// unrelated web passage in the same evidence set, then unravels across
+// reconcile rounds into leaked meta-commentary about its own corrections.
+//
+// This is exported and called directly by turn-controller.js's model-call
+// sites, BEFORE the learned modelRouter is ever consulted — not just left as
+// selectModel()'s internal heuristic. The learned router's reward signal
+// (see model-router.js/reveal, gated on LATENCY_BUDGET_MS) measures only
+// speed, never content quality, so once a fast-but-noncompliant candidate
+// has enough recorded "successes" the router will happily keep sampling it
+// for grounded work — which is exactly how a 30+ minute, citation-scrambled
+// answer about the wrong product got shipped with heuristicModel's fix
+// already in place but never actually reached (see PUNCH-LIST.md). Grounded
+// generation is not a latency/quality tradeoff the bandit gets to learn; it
+// is a correctness requirement, decided the same deterministic way every
+// time.
+function requiresGroundedModel(messages) {
+  const text = (messages || []).map(m => m.content || "").join(" ");
+  return /CITED PASSAGES|--- Material\b|^MATERIAL:|^PASSAGES:/m.test(text);
+}
+
 function selectModel(messages) {
   const text = (messages || []).map(m => m.content || "").join(" ");
   const wordCount = text.split(/\s+/).filter(Boolean).length;
   const charCount = text.length;
 
-  // When the system message includes grounding passages ("CITED PASSAGES" or
-  // "--- Material"), the talker must bracket its answer with [1], [2], etc.
-  // The tiny model routinely ignores this instruction and writes plain prose
-  // with no references — every source ends up in the gap list, none in the
-  // answer. Force the medium model for any turn with grounding.
-  if (/CITED PASSAGES|--- Material\b/.test(text)) {
+  if (requiresGroundedModel(messages)) {
     return MEDIUM_MODEL;
   }
 
@@ -285,6 +309,8 @@ const turnController = createTurnController({
   numCtx: NUM_CTX,
   modelRouter,
   heuristicModel: selectModel,
+  requiresGroundedModel,
+  mediumModel: MEDIUM_MODEL,
   latencyBudgetMs: LATENCY_BUDGET_MS,
   isWarming: () => corpusWarmup.started && !corpusWarmup.ready,
   webSearchFn: webSearchAndFetch,
@@ -2382,6 +2408,9 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
             if (delta) {
               content += delta;
               if (onEvent) onEvent({ type: "content", content: delta, model });
+              // Token telemetry: count what the reader is watching arrive.
+              // ~4 chars/token (Ollama doesn't report eval counts per chunk).
+              recordTokens(delta.length / 4, model);
             }
           }
           if (ollamaErr) break;
@@ -2396,6 +2425,7 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
         }
         const data = await resp.json();
         msg = data.message || {};
+        if (msg.content) recordTokens(msg.content.length / 4, model); // non-streamed (tool rounds): count whole content
       }
 
       // Smaller local models routinely emit a tool call as prose — a bare or
@@ -2508,6 +2538,11 @@ async function runToolLoop(messages, tools, onEvent = null, maxRounds = 8, force
   } catch (err) {
     await revealOutcome("failure");
     throw err;
+  } finally {
+    // Generation is over (answer complete, tool loop done, or error) — let
+    // the monitor's live "generating" flag drop instead of waiting out the
+    // 3s idle timeout.
+    endGeneration();
   }
 }
 
@@ -3024,6 +3059,18 @@ const server = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // Private Network Access: this proxy is only ever reached from a browser
+  // as "public page (GitHub Pages) fetches a local/private target" — the
+  // exact shape PNA's preflight permission check exists to gate. Without
+  // this header, Chromium-family browsers (Chrome, Brave, Edge...) silently
+  // block any *preflighted* cross-origin request here — POSTs with a JSON
+  // body, like eoCode's /api/eocode/run, but not plain GETs like /health,
+  // which never preflight and so never hit this check. That asymmetry (GETs
+  // fine, JSON POSTs blocked) is what makes this easy to miss: the server
+  // already trusts any Origin (see Allow-Origin: * above), so granting the
+  // private-network preflight too is consistent with the trust this proxy
+  // already extends, not a new boundary.
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
 
   if (req.method === "OPTIONS") { res.writeHead(200); res.end(); return; }
 
@@ -3031,6 +3078,15 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", store_size: store.size, uptime: process.uptime().toFixed(1) }));
+    return;
+  }
+
+  // System telemetry for the Monitor surface. Always answers — the sampler
+  // degrades to whatever the host can report and flags what it can't (GPU on
+  // non-Apple, ollama CPU on Windows), and the UI hides what's unavailable.
+  if (req.method === "GET" && req.url === "/api/system/stats") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(systemSnapshot()));
     return;
   }
 
@@ -3121,8 +3177,22 @@ const server = http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ models }));
       } catch (err) {
+        // A bare err.message ("fetch failed") tells the reader nothing they
+        // can act on. Node's fetch nests the real reason in err.cause — an
+        // ECONNREFUSED/ENOTFOUND there means nothing is listening at TARGET
+        // at all (Ollama not installed, not running, or on a different
+        // port), which is a distinct fix from a slow-but-present upstream.
+        // The setup guide in ui/index.html (requestOllamaConnect /
+        // runOllamaDiagnosis) branches on `reason` to show the right one.
+        const causeCode = err.cause?.code || err.cause?.errors?.[0]?.code;
+        const reason = causeCode === "ECONNREFUSED" || causeCode === "ENOTFOUND" || causeCode === "EHOSTUNREACH"
+          ? "not-running"
+          : err.name === "AbortError" ? "timeout" : "unknown";
+        const message = reason === "not-running" ? `No Ollama instance found at ${TARGET}.`
+          : reason === "timeout" ? `Timed out waiting for Ollama at ${TARGET}.`
+          : "Could not reach Ollama: " + err.message;
         res.writeHead(502, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Could not reach Ollama: " + err.message }));
+        res.end(JSON.stringify({ error: message, reason, target: TARGET }));
       }
     })();
     return;
@@ -5354,6 +5424,193 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // eoCode — the agentic-coding tab. GET lists workspaces / a workspace's
+  // files (used to populate the picker and the "files touched" panel); POST
+  // runs one task and discloses every step live over SSE as react-loop.mjs's
+  // onStep fires it, the same real-time transparency Claude Code / opencode
+  // show for their own tool calls.
+  if (req.method === "GET" && req.url === "/api/eocode/workspaces") {
+    try {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ workspaces: listWorkspaces() }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (req.method === "GET" && req.url.startsWith("/api/eocode/workspaces/")) {
+    try {
+      const name = decodeURIComponent(req.url.slice("/api/eocode/workspaces/".length).split("?")[0]);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ workspace: name, files: listWorkspaceFiles(name) }));
+    } catch (err) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/eocode/run") {
+    let body = "";
+    let bodySize = 0;
+    req.on("data", chunk => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(new Error("Request body too large")); return; }
+      body += chunk.toString("utf8");
+    });
+    req.on("end", async () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
+        return;
+      }
+      if (!data.prompt || !String(data.prompt).trim()) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "'prompt' is required" }));
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      // Small, sparse writes (one per whole tool call, seconds apart, unlike
+      // chat's dense token deltas) get more benefit from skipping Nagle's
+      // send-side coalescing delay than they lose from it -- cheap and safe
+      // to disable here since every SSE frame is already a complete, whole
+      // write.
+      res.socket.setNoDelay(true);
+      const sendSSE = (event, payload) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+      };
+      // A client that navigates away mid-run should not leave a local model
+      // grinding on a step nobody is watching disclose. MUST be res.on
+      // ("close"), not req.on("close"): the request's own readable side
+      // closes as soon as its (tiny, already-consumed) body finishes
+      // reading -- which happens almost immediately, well before the
+      // response is done -- so req.on("close") set `aborted` true right at
+      // the start of every run, silently swallowing every SSE event after
+      // the first couple. res.on("close") fires when the actual underlying
+      // connection to the client ends, which is the real signal wanted here.
+      let aborted = false;
+      res.on("close", () => { aborted = true; });
+
+      try {
+        await runEoCodeTask({
+          workspace: data.workspace || "default",
+          prompt: data.prompt,
+          model: data.model || "qwen2.5-coder:1.5b",
+          maxSteps: Number.isFinite(data.maxSteps) ? data.maxSteps : 20,
+          // Kept in sync with eocode-agent.js's own runEoCodeTask default —
+          // see its comment for why 400 silently truncated content-heavy
+          // write_file calls into invalid JSON.
+          maxTokensPerStep: Number.isFinite(data.maxTokensPerStep) ? data.maxTokensPerStep : 1600,
+          seed: Number.isFinite(data.seed) ? data.seed : Date.now() % 100000,
+          onEvent: (type, payload) => { if (!aborted) sendSSE(type, payload); },
+        });
+      } catch (err) {
+        if (!aborted) sendSSE("error", { message: err.message });
+      } finally {
+        if (!aborted) res.end();
+      }
+    });
+    return;
+  }
+
+  // eoCode stepping API — the SAME agent as /api/eocode/run, driven one turn
+  // at a time by a caller supplying its own model text instead of a server-
+  // owned Ollama adapter. Exists for WebLLM: a model running in the reader's
+  // own browser can plan and write code as well as a server-side one, but it
+  // cannot touch this machine's filesystem or run a shell, so tool execution
+  // stays here unconditionally — only "what should I do next" text
+  // generation moves to wherever the caller's model runs. Plain JSON
+  // request/response, not SSE: the client already controls pacing (it waits
+  // on its own model between steps), so there is nothing for the server to
+  // push proactively.
+  if (req.method === "POST" && req.url === "/api/eocode/session/start") {
+    let body = "";
+    let bodySize = 0;
+    req.on("data", chunk => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(new Error("Request body too large")); return; }
+      body += chunk.toString("utf8");
+    });
+    req.on("end", () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
+        return;
+      }
+      try {
+        const started = startEoCodeSession({
+          workspace: data.workspace || "default",
+          prompt: data.prompt,
+          maxSteps: Number.isFinite(data.maxSteps) ? data.maxSteps : 20,
+          foldK: Number.isFinite(data.foldK) ? data.foldK : undefined,
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(started));
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url.startsWith("/api/eocode/session/") && req.url.endsWith("/step")) {
+    let body = "";
+    let bodySize = 0;
+    req.on("data", chunk => {
+      bodySize += chunk.length;
+      if (bodySize > MAX_BODY) { req.destroy(new Error("Request body too large")); return; }
+      body += chunk.toString("utf8");
+    });
+    req.on("end", () => {
+      let data;
+      try {
+        data = JSON.parse(body);
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
+        return;
+      }
+      const sessionId = req.url.slice("/api/eocode/session/".length, -"/step".length);
+      if (typeof data.raw !== "string") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "'raw' (the model's raw response text) is required" }));
+        return;
+      }
+      try {
+        const stepped = stepEoCodeSession({ sessionId, raw: data.raw });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(stepped));
+      } catch (err) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url.startsWith("/api/eocode/session/") && req.url.endsWith("/cancel")) {
+    const sessionId = req.url.slice("/api/eocode/session/".length, -"/cancel".length);
+    const cancelled = cancelEoCodeSession(sessionId);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ cancelled }));
+    return;
+  }
+
   // Chat completions (with tool calling)
   if (req.method === "POST" && (req.url === "/v1/chat/completions" || req.url === "/api/chat")) {
     let body = "";
@@ -5674,6 +5931,11 @@ async function start() {
     // Print ready message on stdout for consumers
     process.stdout.write(`EO_PROXY_READY:${PORT}\n`);
   });
+
+  // System telemetry for the Monitor surface — CPU/memory/GPU/token sampler.
+  // Degrades to what the host can report (no GPU on non-Apple, no ollama CPU
+  // on Windows); the UI hides whatever the snapshot flags as unavailable.
+  startTelemetry({ target: TARGET });
 
   // Load code (async, error-isolated) — happens AFTER server starts
   try {

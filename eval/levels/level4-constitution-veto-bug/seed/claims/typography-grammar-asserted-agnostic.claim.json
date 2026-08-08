@@ -1,0 +1,27 @@
+{
+  "claim_id": "typography-grammar-asserted-agnostic",
+  "what": "a fixed heading grammar that requires text's lines, blank lines, and numeral forms, declaring medium_agnostic: true with no cross-modal invariance fixture",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Exemplar for the 6th amendment (II.11). The shape of the live defect `segments-structural-boundaries` before its re-route: `needs_name_or_surface` is false (the grammar names no name — it requires typography), `medium_agnostic` is asserted without a fixture, and the default branch would have routed it to engine. Assertion is not measurement; an organ that needs one medium's surfaces is either received typography (priors, with its giver) or a surface with no tier.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": true,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": false,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": [],
+    "level_test": "above"
+  }
+}

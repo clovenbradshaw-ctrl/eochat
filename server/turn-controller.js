@@ -18,6 +18,7 @@
 import {
   validateCitations, verifyQuotedFidelity, parseCitationRefs,
   checkGrounding, groundingGaps, annotateVoids, autoAttachCitations,
+  stripUngroundedCitations,
 } from "./citation-check.js";
 import { buildVerbatimSnippets } from "./verbatim-snippets.js";
 import { HolonicTask } from "./holonic-task.js";
@@ -36,8 +37,10 @@ import {
 } from "./project-memory.js";
 import { createConversationHolon, recordTurn } from "./conversation-holon.js";
 import { generateAnswer } from "./turn-generation.js";
-import { planChatTurn, runHolonicEssay } from "./holonic-chat.js";
+import { defineAnswerSpec, runHolonicEssay } from "./holonic-chat.js";
 import { researchTopic } from "./web-search.js";
+import { recordTokens, endGeneration } from "./telemetry.js";
+import { buildGroundedSystemPrompt, buildUngroundedSystemPrompt } from "./engine-ground.js";
 
 // Every blink can be longform — these are ceilings, not targets; the model
 // still decides when to stop. DEFAULT is generous headroom for the common
@@ -45,6 +48,34 @@ import { researchTopic } from "./web-search.js";
 // earned section (turn-generation.js's outline collapses to one call, same
 // as before that module existed).
 const DEFAULT_MAX_TOKENS = 8192;
+// A wedged local Ollama backend (model-swap contention, an OOM-stalled
+// llama-server, a connection accepted but never written to) used to hang a
+// turn forever — no timeout anywhere meant no error, no partial answer, just
+// a spinner that never resolves. IDLE means measured from the last byte
+// received, not from request start, so a genuinely long generation is never
+// killed early. NON_STREAMING is a hard deadline (there is no byte-by-byte
+// progress to reset against) sized well above the slowest observed
+// planner/correction call on this hardware.
+const OLLAMA_IDLE_TIMEOUT_MS = 120_000;
+const OLLAMA_NON_STREAMING_TIMEOUT_MS = 90_000;
+
+// A raw `err.message` from a failed model call ("fetch failed", "The
+// operation was aborted due to timeout") tells the reader nothing they can
+// act on — the same problem /api/ollama/models already solves for the setup
+// guide (see its causeCode branch in proxy.js). This is that same
+// translation, reused here so a turn that fails mid-conversation (Ollama
+// died, was never started, or genuinely wedged past OLLAMA_*_TIMEOUT_MS)
+// reads as an instruction, not a stack-trace fragment, in the chat itself.
+function friendlyModelErrorMessage(err, target) {
+  const causeCode = err?.cause?.code || err?.cause?.errors?.[0]?.code;
+  if (causeCode === "ECONNREFUSED" || causeCode === "ENOTFOUND" || causeCode === "EHOSTUNREACH") {
+    return `No Ollama instance found at ${target}. Make sure Ollama is running.`;
+  }
+  if (err?.name === "TimeoutError" || /stalled: no data for|signal is aborted/i.test(err?.message || "")) {
+    return `The local model at ${target} stopped responding and timed out. It may be overloaded or stuck loading a different model — try again in a moment.`;
+  }
+  return err?.message || "The model call failed for an unknown reason.";
+}
 // The output-review correction pass only fixes flagged violations in an
 // already-generated answer — it does not need longform headroom.
 const CORRECTION_MAX_TOKENS = 1500;
@@ -153,31 +184,19 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 // measures its own copy: the thing under test — how a weak model behaves when
 // told which numbers exist — is exactly the thing a copy stops testing the
 // moment the two drift.
+// Delegates to engine-ground.js's buildUngroundedSystemPrompt/buildGroundedSystemPrompt
+// — the same functions /api/ground hands a browser-local WebLLM caller — so the
+// Ollama talker loop and the WebLLM path are answering from byte-identical
+// instruction text, not two hand-maintained copies that quietly drift apart.
+// toolsAvailable:true here (unlike /api/ground's WebLLM caller, which has no
+// tool loop of its own) because this talker can actually call verbatim_search
+// and search_memory.
 export function buildGroundedSystemMessage(groundResult, warming = false) {
   if (!groundResult.context) {
-    const content = warming
-      ? `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
-        `ordinary conversation. Do not mention an index, a document search, sources, or any retrieval ` +
-        `process. Do NOT use bracketed citations like [1] — there are no passages to cite.`
-      : `Answer the reader's question directly, from your own knowledge, as naturally as you would in ` +
-        `ordinary conversation. Do not preface the answer or otherwise mention that you lack sources, ` +
-        `documents, or "source material" — just answer. Do NOT use bracketed citations like [1], [2] — ` +
-        `there are no source passages, and a bracket would look like a citation that does not exist.`;
+    const content = buildUngroundedSystemPrompt({ warming });
     return { message: { role: "system", content }, maxCitation: 0, warming };
   }
-
-  const citationRange = groundResult.citations.length > 0
-    ? `You have ${groundResult.citations.length} source passage(s) numbered [1] through [${groundResult.citations.length}]. ` +
-      `ONLY cite these numbers. NEVER cite [${groundResult.citations.length + 1}] or higher — those do not exist. `
-    : "";
-  const content =
-    `Answer the reader's question using the material below, citing the passages you draw on ` +
-    `with bracketed numbers like [1], [2], etc. ` + citationRange +
-    `Do NOT invent facts beyond what the material contains. If it does not contain the answer, ` +
-    `say so plainly — but do not describe your process, and do not refer to "the source material", ` +
-    `"the provided text", "your sources", or similar; just answer directly.\n\n` +
-    `--- Material (${groundResult.total} passages found, ${groundResult.folded} folded, ${groundResult.tokens} tokens) ---\n` +
-    `${groundResult.context}`;
+  const content = buildGroundedSystemPrompt(groundResult, { toolsAvailable: true });
   return { message: { role: "system", content }, maxCitation: groundResult.citations.length, warming: false };
 }
 
@@ -213,12 +232,40 @@ export function buildWebSystemMessage(webResults) {
   return { message: { role: "system", content }, maxCitation: webResults.length, warming: false };
 }
 
+// Recent completed turns from THIS conversation, as real message history —
+// not reconstructed from a keyword memory search. Bounded so a long-running
+// conversation doesn't grow the prompt without limit.
+//
+// Module-level and exported for the same reason buildGroundedSystemMessage
+// is: a harness that reimplements this measures its own copy, not the real
+// windowing behavior a small local model actually gets.
+export function buildHistoryMessages(conv, beforeTurnId) {
+  const turns = (conv.turns || []).filter((t) => t.id !== beforeTurnId);
+  const recent = turns.slice(-HISTORY_TURNS);
+  const out = [];
+  for (const t of recent) {
+    out.push({ role: "user", content: t.question });
+    const active = (t.answers || []).find((a) => a.id === t.activeAnswerId);
+    if (active && active.status === "completed" && active.text) {
+      out.push({ role: "assistant", content: active.text });
+    }
+  }
+  return out;
+}
+
+// The user turns this gate should judge relevance against — the same bounded
+// history the model sees, user messages only.
+export function recentUserQuestions(conv, beforeTurnId) {
+  return (conv.turns || []).filter((t) => t.id !== beforeTurnId).slice(-HISTORY_TURNS).map((t) => t.question);
+}
+
 export function createTurnController(deps) {
   const {
     conversationStore, groundQuery, target, anthropicKey, anthropicModel,
     numCtx,
     modelRouter, heuristicModel, latencyBudgetMs, isWarming, webSearchFn,
     cabinetStore, prosifyModel, prosifyTimeoutMs,
+    requiresGroundedModel, mediumModel,
   } = deps;
 
   const _getAnthropicKey = () => typeof anthropicKey === 'function' ? anthropicKey() : anthropicKey;
@@ -232,29 +279,6 @@ export function createTurnController(deps) {
   // One in-flight generation per (conversation, turn) at a time — stop/regenerate
   // both need to find it by that key alone, before they know an answerId.
   const activeControllers = new Map();
-
-  // Recent completed turns from THIS conversation, as real message history —
-  // not reconstructed from a keyword memory search. Bounded so a long-running
-  // conversation doesn't grow the prompt without limit.
-  function buildHistoryMessages(conv, beforeTurnId) {
-    const turns = (conv.turns || []).filter((t) => t.id !== beforeTurnId);
-    const recent = turns.slice(-HISTORY_TURNS);
-    const out = [];
-    for (const t of recent) {
-      out.push({ role: "user", content: t.question });
-      const active = (t.answers || []).find((a) => a.id === t.activeAnswerId);
-      if (active && active.status === "completed" && active.text) {
-        out.push({ role: "assistant", content: active.text });
-      }
-    }
-    return out;
-  }
-
-  // The user turns this gate should judge relevance against — the same bounded
-  // history the model sees, user messages only.
-  function recentUserQuestions(conv, beforeTurnId) {
-    return (conv.turns || []).filter((t) => t.id !== beforeTurnId).slice(-HISTORY_TURNS).map((t) => t.question);
-  }
 
   // The desk (conversation-memory.js) and the cabinet (project-memory.js),
   // resolved together for one turn. The desk is always injected, from the
@@ -497,40 +521,69 @@ export function createTurnController(deps) {
     });
   }
 
+  // No timeout at all here used to mean a wedged Ollama (model swap
+  // contention, an OOM-stalled llama-server, a backend that accepted the
+  // connection but never wrote a byte) hung the turn forever — no error, no
+  // partial answer, just a spinner that never resolves. This is an IDLE
+  // timeout (reset on every chunk received), not an absolute deadline, so a
+  // slow-but-progressing long essay is never killed early; only true silence
+  // for OLLAMA_IDLE_TIMEOUT_MS aborts it.
   async function callOllamaStreaming(model, messages, { signal, onDelta, maxTokens = DEFAULT_MAX_TOKENS }) {
-    const resp = await fetch(`${target}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model, messages, stream: true,
-        options: { temperature: 0.7, num_predict: maxTokens, num_ctx: numCtx },
-      }),
-      signal,
-    });
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => resp.statusText);
-      throw new Error(`Ollama ${resp.status}: ${errText}`);
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal?.reason);
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason);
+      else signal.addEventListener("abort", onAbort);
     }
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "", text = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() || "";
-      for (const line of lines) {
-        const t = line.trim().replace(/^data:\s*/, "");
-        if (!t) continue;
-        let j;
-        try { j = JSON.parse(t); } catch { continue; }
-        if (j.error) throw new Error(`Ollama: ${j.error}`);
-        const delta = j.message?.content || "";
-        if (delta) { text += delta; onDelta(delta, text); }
+    let idleTimer;
+    const armIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () => controller.abort(new Error(`Ollama stream stalled: no data for ${OLLAMA_IDLE_TIMEOUT_MS}ms`)),
+        OLLAMA_IDLE_TIMEOUT_MS,
+      );
+    };
+    try {
+      armIdle();
+      const resp = await fetch(`${target}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model, messages, stream: true,
+          options: { temperature: 0.7, num_predict: maxTokens, num_ctx: numCtx },
+        }),
+        signal: controller.signal,
+      });
+      armIdle();
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => resp.statusText);
+        throw new Error(`Ollama ${resp.status}: ${errText}`);
       }
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "", text = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        armIdle();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          const t = line.trim().replace(/^data:\s*/, "");
+          if (!t) continue;
+          let j;
+          try { j = JSON.parse(t); } catch { continue; }
+          if (j.error) throw new Error(`Ollama: ${j.error}`);
+          const delta = j.message?.content || "";
+          if (delta) { text += delta; onDelta(delta, text); recordTokens(delta.length / 4, model); }
+        }
+      }
+      return { text, model };
+    } finally {
+      clearTimeout(idleTimer);
+      if (signal) signal.removeEventListener("abort", onAbort);
     }
-    return { text, model };
   }
 
   async function callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens = DEFAULT_MAX_TOKENS }) {
@@ -576,6 +629,7 @@ export function createTurnController(deps) {
         if (j.type === "content_block_delta" && j.delta?.text) {
           text += j.delta.text;
           onDelta(j.delta.text, text);
+          recordTokens(j.delta.text.length / 4, model);
         }
       }
     }
@@ -592,15 +646,29 @@ export function createTurnController(deps) {
       model = draftModel;
     } else if (modelOverride) {
       model = modelOverride;
+    } else if (requiresGroundedModel?.(messages) && mediumModel) {
+      // Grounded/essay generation is a correctness requirement, not a
+      // latency/quality tradeoff the learned router gets to sample — see
+      // requiresGroundedModel's comment in proxy.js. routerCtx stays unset
+      // so no reveal() is recorded for this call; the bandit only learns
+      // from turns it was actually allowed to choose.
+      model = mediumModel;
     } else if (modelRouter) {
       ({ model, ctx: routerCtx } = modelRouter.pick(messages));
     } else {
       model = heuristicModel(messages);
     }
     const startedAt = Date.now();
-    const result = useAnthropic
-      ? await callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens })
-      : await callOllamaStreaming(model, messages, { signal, onDelta, maxTokens });
+    let result;
+    try {
+      result = useAnthropic
+        ? await callAnthropicStreaming(model, messages, { signal, onDelta, maxTokens })
+        : await callOllamaStreaming(model, messages, { signal, onDelta, maxTokens });
+    } finally {
+      // The token-emitting phase is over — drop the live "generating" flag
+      // now rather than waiting out the monitor's 3s idle timeout.
+      endGeneration();
+    }
     const elapsedMs = Date.now() - startedAt;
     if (routerCtx) {
       const outcome = elapsedMs > latencyBudgetMs ? "failure" : "success";
@@ -620,6 +688,8 @@ export function createTurnController(deps) {
       model = modelOverride || anthropicModel || "claude-sonnet-4-20250514";
     } else if (modelOverride) {
       model = modelOverride;
+    } else if (requiresGroundedModel?.(messages) && mediumModel) {
+      model = mediumModel;
     } else if (modelRouter) {
       ({ model } = modelRouter.pick(messages));
     } else {
@@ -639,7 +709,10 @@ export function createTurnController(deps) {
       });
       if (!resp.ok) throw new Error(`Anthropic ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
       const j = await resp.json();
-      return (j.content?.map((c) => c.text).join("") || "").trim();
+      const txt = (j.content?.map((c) => c.text).join("") || "").trim();
+      if (txt) recordTokens(txt.length / 4, model);
+      endGeneration();
+      return txt;
     }
     const body = {
       model, messages, stream: false,
@@ -650,10 +723,14 @@ export function createTurnController(deps) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(OLLAMA_NON_STREAMING_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text().catch(() => resp.statusText)}`);
     const j = await resp.json();
-    return (j.message?.content || "").trim();
+    const txt = (j.message?.content || "").trim();
+    if (txt) recordTokens(txt.length / 4, model);
+    endGeneration();
+    return txt;
   }
 
   // Finalize the model's raw output AND review it against the instruction
@@ -666,7 +743,7 @@ export function createTurnController(deps) {
   //
   // Order matters: citations/brackets/fidelity are resolved on the final text,
   // whether that text is the original or a correction.
-  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel, skipCorrection = false }) {
+  async function finalizeAndReview({ rawText, lastCitations, maxCitation, question, gate, groundText, memory, sendEvent, turnId, answerId, provider, modelOverride, draftModel }) {
     // Mechanical pass before anything else touches the text: any sentence the
     // model left uncited gets a bracket (plus a verbatim clause as proof) when
     // — and only when — its own vocabulary is concentrated enough in one
@@ -674,7 +751,7 @@ export function createTurnController(deps) {
     // resolution, fidelity, the void-checker) runs against this text exactly
     // as it would against citations the model wrote itself; the mechanical
     // pass never gets a separate, weaker check.
-    let text = maxCitation > 0 ? autoAttachCitations(rawText, lastCitations) : rawText;
+    let text = maxCitation > 0 ? autoAttachCitations(rawText, lastCitations) : stripUngroundedCitations(rawText);
     let display = formatOutput(text);
     let brackets = resolveCitationBrackets(text, lastCitations).citations;
     let finalText = maxCitation > 0 ? validateCitations(display, maxCitation) : display;
@@ -695,6 +772,7 @@ export function createTurnController(deps) {
 
     let corrected = false, iterations = 0;
     let { review, denial } = runReviews();
+    if (process.env.EOCHAT_DEBUG_REVIEW) console.error("[review-debug]", JSON.stringify({ review, denial }));
     // The denial flags as first seen, kept even when a correction resolves
     // them: an audit trail that says "the answer denied, then was fixed" must
     // say what it denied, not just that something was fixed.
@@ -703,13 +781,10 @@ export function createTurnController(deps) {
     const needCorrection = () => review.verdict === "FLAGGED" || denial.verdict === "FLAGGED";
 
     if (gate || facts.length) {
-      // The essay path deliberately skips the correction loop: a sectioned
-      // essay assembled from per-section folded windows must not be flattened
-      // into one single-shot rewrite. The review still runs mechanically and
-      // its flags are still reported; only the auto-rewrite is skipped.
-      if (skipCorrection) {
-        // mark corrected=false, iterations=0 — the review below is unchanged
-      } else {
+      // The essay path never reaches this function — its per-section
+      // DEFINE → EVALUATE → RECONCILE loop decides compliance and its text is
+      // already numbered, so a flat single-shot rewrite must not be applied.
+      {
         // The correction pass regenerates the answer, so it must see the same
         // numbered passages the first pass saw — a [3] it writes is meaningless
         // if it never saw passage 3. Rebuilt from the turn's own citation table
@@ -757,7 +832,6 @@ export function createTurnController(deps) {
         }
       }
     }
-
     const fidelity = verifyQuotedFidelity(finalText, lastCitations);
     const snippets = buildVerbatimSnippets(brackets, lastCitations);
 
@@ -880,10 +954,11 @@ export function createTurnController(deps) {
         }).catch(() => {});
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
+        const friendlyMessage = friendlyModelErrorMessage(err, target);
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+          status: "failed", completedAt: new Date().toISOString(), error: friendlyMessage,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+        sendEvent("failed", { turnId: turn.id, answerId, message: friendlyMessage, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
@@ -927,6 +1002,14 @@ export function createTurnController(deps) {
         model: modelOverride || "phi4-mini:latest",
         engine: engineAdapter,
         ollamaUrl: target,
+        // Transparency: every model call this task makes (plan, learn, each
+        // section draft and iteration) streams its full messages to the
+        // reader-facing glass box, in the order it was sent.
+        onModelCall: (messages, maxTokens) => sendEvent("prompt_sent", {
+          turnId: turn.id, answerId,
+          messages, model: modelOverride || "phi4-mini:latest",
+          label: `think · ${messages.length} message(s)`, maxTokens,
+        }),
       });
 
       // Pipe holonic progress events through to the SSE stream
@@ -966,10 +1049,11 @@ export function createTurnController(deps) {
         }).catch(() => {});
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
+        const friendlyMessage = friendlyModelErrorMessage(err, target);
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+          status: "failed", completedAt: new Date().toISOString(), error: friendlyMessage,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+        sendEvent("failed", { turnId: turn.id, answerId, message: friendlyMessage, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
@@ -992,10 +1076,20 @@ export function createTurnController(deps) {
     const controller = new AbortController();
     activeControllers.set(key, controller);
     const userQuestionForMemory = originalQuestion || question;
-    const generate = (system, user, maxTokens) => callModelNonStreaming(
-      [{ role: "system", content: system }, { role: "user", content: user }],
-      { provider, modelOverride, maxTokens },
-    );
+    const generate = (system, user, maxTokens) => {
+      // Every essay model call (per-section drafts and evaluations) streams
+      // its full prompt to the glass box, in the order it was sent.
+      sendEvent("prompt_sent", {
+        turnId: turn.id, answerId,
+        messages: [{ role: "system", content: system }, { role: "user", content: user }],
+        model: modelOverride || null,
+        label: `essay · 2 message(s)`, maxTokens,
+      });
+      return callModelNonStreaming(
+        [{ role: "system", content: system }, { role: "user", content: user }],
+        { provider, modelOverride, maxTokens },
+      );
+    };
 
     try {
       const localRetrieve = async (topic) => {
@@ -1012,7 +1106,9 @@ export function createTurnController(deps) {
       const holonicEvents = [];
       const result = await runHolonicEssay({
         question,
-        sections: planning.sections,
+        sections: planning.units,
+        form: planning.form,
+        compliance: planning.compliance,
         generate,
         localRetrieve,
         webResearch,
@@ -1030,7 +1126,6 @@ export function createTurnController(deps) {
         index: i + 1, span_id: c.span_id, source_id: c.source_id, text: c.text,
       }));
       const maxCitation = lastCitations.length;
-      const groundText = lastCitations.map((c) => c.text).join("\n\n");
 
       const discourse = await loadDiscourseBlocks({ question, conv, pool });
       const cueResult = await prosifyCue({
@@ -1052,7 +1147,7 @@ export function createTurnController(deps) {
         citations: lastCitations,
         webSources: allWeb,
         gaps: result.gaps,
-        holonic: { depth: "essay", sections: planning.sections.length },
+        holonic: { depth: "essay", form: result.form, sections: planning.sections.length },
       });
 
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
@@ -1062,35 +1157,51 @@ export function createTurnController(deps) {
           empty: maxCitation === 0,
           citations: lastCitations,
           holonic: true,
+          form: result.form,
+          sufficiency: result.sufficiency,
+          dropped: result.dropped,
         },
       });
 
-      const { finalText, brackets, fidelity, snippets, review, denial, groundingCheck, annotatedText } = await finalizeAndReview({
-        rawText: result.text, lastCitations, maxCitation, question,
-        gate: gateInfo, groundText, memory: discourse,
-        sendEvent, turnId: turn.id, answerId, provider, modelOverride, draftModel,
-        skipCorrection: true,
-      });
+      // The DEFINE → EVALUATE → RECONCILE loop already decided what ships and
+      // what drops; the assembled text is already numbered and proven. No
+      // second autoAttach, no correction loop — that was the source of nested
+      // malformed splices and doubled gap noise.
+      const finalText = result.text;
+      const annotatedText = result.text;
+      const brackets = resolveCitationBrackets(finalText, lastCitations).citations;
+      const fidelity = verifyQuotedFidelity(finalText, lastCitations);
 
       for (const c of brackets) sendEvent("citation_verified", { turnId: turn.id, answerId, ...c });
-      for (const s of snippets) sendEvent("verbatim_snippet", { turnId: turn.id, answerId, ...s });
-      sendEvent("grounding_checked", { turnId: turn.id, answerId, ...groundingCheck, annotatedText });
+      sendEvent("grounding_checked", {
+        turnId: turn.id, answerId,
+        quotesChecked: fidelity.quotesChecked, verified: fidelity.verified,
+        unverified: fidelity.unverified, annotatedText,
+      });
 
-      const gaps = [...result.gaps, ...groundingGaps(groundingCheck)];
+      const gaps = [...result.gaps];
+      const seenQuotes = new Set(gaps.filter((g) => g.type === "unverified_quote").map((g) => g.quote));
       for (const u of fidelity.unverified) {
+        if (seenQuotes.has(u.quote)) continue;
+        seenQuotes.add(u.quote);
         gaps.push({ type: "unverified_quote", quote: u.quote, reason: "This quoted text does not appear verbatim in any cited source." });
       }
       for (const g of gaps) sendEvent("gap", { turnId: turn.id, answerId, ...g });
 
-      const summary = `${result.sections.length} sections · ${maxCitation} mechanical citations · ${result.references.length} sources`;
+      const denial = { verdict: "PASS", flags: [], denialSentences: [] };
+      const summary = `${result.sections.length} sections · ${result.dropped} dropped · ${maxCitation} mechanical citations · ${result.references.length} sources · ${result.form}`;
       await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
         text: finalText, annotatedText, model: modelOverride || draftModel || null,
-        citations: brackets, gaps, snippets, fidelity, grounding_check: groundingCheck,
-        review, status: "completed", completedAt: new Date().toISOString(),
+        citations: brackets, gaps, snippets: [], fidelity, grounding_check: null,
+        review: null, status: "completed", completedAt: new Date().toISOString(),
         mode: "chat", holonic: {
           depth: "essay",
+          form: result.form,
+          compliance: planning.compliance,
           plan: planning.sections.map((s) => s.title),
-          sections: result.sections.map((s) => ({ title: s.title, ungrounded: s.ungrounded, cited: s.cited })),
+          sections: result.sections.map((s) => ({ title: s.title, ungrounded: s.ungrounded, cited: s.cited, compliant: s.compliant, reconciled: s.reconciled })),
+          sufficiency: result.sufficiency,
+          dropped: result.dropped,
           references: result.references,
           events: holonicEvents,
         },
@@ -1107,9 +1218,12 @@ export function createTurnController(deps) {
       });
       sendEvent("completed", {
         turnId: turn.id, answerId, status: "completed", text: finalText,
-        annotatedText, groundingCheck, citations: brackets, gaps, snippets,
+        annotatedText, groundingCheck: {
+          quotesChecked: fidelity.quotesChecked, verified: fidelity.verified, unverified: fidelity.unverified,
+        },
+        citations: brackets, gaps, snippets: [],
         model: modelOverride || draftModel || null,
-        holonic: { depth: "essay", sections: result.sections, references: result.references, events: holonicEvents },
+        holonic: { depth: "essay", form: result.form, sections: result.sections, references: result.references, events: holonicEvents, sufficiency: result.sufficiency, dropped: result.dropped },
         summary,
       });
       await persistTurnMemory({
@@ -1127,10 +1241,11 @@ export function createTurnController(deps) {
         }).catch(() => {});
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
+        const friendlyMessage = friendlyModelErrorMessage(err, target);
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+          status: "failed", completedAt: new Date().toISOString(), error: friendlyMessage,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+        sendEvent("failed", { turnId: turn.id, answerId, message: friendlyMessage, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);
@@ -1180,7 +1295,7 @@ export function createTurnController(deps) {
       const cheapProbe = groundQuery(question, {
         budget: 600, maxUnits: 2, limit: 8, source: sourceScope, pool: pool || "corpus",
       });
-      const planning = await planChatTurn({
+      const planning = await defineAnswerSpec({
         question,
         history: recentUserQuestions(conv, turn.id),
         localEvidence: { count: cheapProbe.total || 0 },
@@ -1192,14 +1307,24 @@ export function createTurnController(deps) {
       });
       sendEvent("holonic_plan", {
         turnId: turn.id, answerId,
-        depth: planning.depth, reason: planning.reason,
+        depth: planning.depth, kind: planning.kind, form: planning.form, reason: planning.reason,
         sections: planning.sections.map((s) => s.title),
       });
       if (planning.depth === "essay") {
         return runEssayAnswer({ conv, turn, answerId, question, originalQuestion, sourceScope, pool, provider, model: modelOverride, draftModel, webSearch, planning }, sendEvent);
       }
 
-      if (webSearch && webSearchFn) {
+      // A riff the planner flagged as not needing outside evidence
+      // (planning.lookup === false) skips web search even when the
+      // conversation's webSearch toggle is on — searching the literal text of
+      // a greeting or a meta question ("hi", "are you an AI?") reliably
+      // returns keyword-matched but topically irrelevant pages, which then
+      // forces citation-bound generation against material that doesn't
+      // answer the question (see buildWebSystemMessage). Falling through to
+      // the engine-grounding branch below is safe here: with no local
+      // evidence either, buildGroundedSystemMessage already answers plainly
+      // from the model's own knowledge with no forced citations.
+      if (webSearch && webSearchFn && planning.lookup !== false) {
         // ── Web search path: retrieved carries web results, no engine grounding ──
         const webResults = await webSearchFn(question, { numResults: 5, maxFetchChars: 5000 });
         let { message: systemMsg, maxCitation } = buildWebSystemMessage(webResults);
@@ -1267,6 +1392,15 @@ export function createTurnController(deps) {
         });
         emitGateReport(sendEvent, turn.id, answerId, gateInfo);
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
+
+        // The full message array this turn actually sends the model — history,
+        // discourse desk, summary, gate rules and the web grounding block —
+        // streamed to the glass box so a reader can see the whole prompt.
+        sendEvent("prompt_sent", {
+          turnId: turn.id, answerId,
+          messages, model: modelOverride || draftModel || null,
+          label: `web · ${messages.length} message(s)`,
+        });
 
         const maxSections = await resolveMaxSections(conv, turn, webResults.map((r) => r.url));
         const webEvidence = webResults.map((r) => ({ source_id: r.url, span_id: r.url, text: r.text || r.snippet || "" }));
@@ -1425,6 +1559,15 @@ export function createTurnController(deps) {
         if (gateInfo) messages.push({ role: "system", content: gateInfo.systemMessage });
         messages.push(...history, { role: "user", content: question });
 
+        // The full message array this turn actually sends the model — history,
+        // discourse desk, summary, gate rules and the grounded evidence block —
+        // streamed to the glass box so a reader can see the whole prompt.
+        sendEvent("prompt_sent", {
+          turnId: turn.id, answerId,
+          messages, model: modelOverride || draftModel || null,
+          label: `ground · ${messages.length} message(s)`,
+        });
+
         const maxSections = await resolveMaxSections(conv, turn, (groundResult.citations || []).map((c) => c.source_id));
         let sawStart = false;
         const { text: rawText, model } = await generateAnswer({
@@ -1519,10 +1662,11 @@ export function createTurnController(deps) {
         }).catch(() => {});
         sendEvent("completed", { turnId: turn.id, answerId, status: "interrupted", text: partial });
       } else {
+        const friendlyMessage = friendlyModelErrorMessage(err, target);
         await conversationStore.patchAnswer(conv.id, turn.id, answerId, {
-          status: "failed", completedAt: new Date().toISOString(), error: err.message,
+          status: "failed", completedAt: new Date().toISOString(), error: friendlyMessage,
         }).catch(() => {});
-        sendEvent("failed", { turnId: turn.id, answerId, message: err.message, stack: err.stack });
+        sendEvent("failed", { turnId: turn.id, answerId, message: friendlyMessage, stack: err.stack });
       }
     } finally {
       activeControllers.delete(key);

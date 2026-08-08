@@ -6,6 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { writeProject } from "./code-longform.js";
+import { projectTasks } from "./task-log.js";
 
 // checkCrossFileReferences and verifySyntax are internal (not exported) —
 // exercised here through writeProject end to end with a stubbed model,
@@ -49,6 +50,24 @@ function stubModel({ badClass = null } = {}) {
     return { ok: true, json: async () => ({ message: { content: "" } }) };
   };
 }
+
+test("every file — planned or discovered — is tagged SEG at Figure grain, the identical cell narrative-longform.js's discovered characters resolve to", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stubModel();
+  try {
+    const result = await writeProject("a test site", { model: "stub", outDir: "/tmp/code-longform-test-cube", onProgress: () => {} });
+    const tasks = projectTasks(result.log);
+    const index = tasks.find((t) => t.task_id === "file:index.html");
+    const styles = tasks.find((t) => t.task_id === "file:styles.css");
+    assert.equal(index.operator, "SEG");
+    assert.equal(index.grain, "Figure");
+    assert.deepEqual(index.cell, styles.cell, "every registered file resolves to the same cube cell regardless of order or which file it is");
+    // Advisory cube-progression check must be clean on a real, successful run.
+    assert.deepEqual(result.cubeFlags, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("a stray unmatched triple-quote marker is stripped from EITHER end, never assumed paired", async () => {
   // MEASURED on two separate real runs: styles.css began with a bare `"""`

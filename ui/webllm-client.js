@@ -13,6 +13,16 @@
 // smaller survives a real reading question well. On the static (GitHub Pages)
 // build this download is the entire answer path, so it starts automatically
 // the moment the page mounts.
+//
+// Resilience: a multi-GB in-browser download over WebGPU has a lot of ways to
+// fail (no WebGPU, no adapter, a flaky CDN shard) that have nothing to do
+// with whether the reader can be helped at all. Rather than a status of
+// 'error'/'unsupported' that dead-ends the UI, every such failure lands in
+// 'standby' — see _enterStandby below — where a zero-dependency
+// StandbyResponder answers basic back-and-forth instead of throwing, and a
+// background timer keeps quietly retrying the real model on a growing
+// backoff for as long as the tab stays open. There is no terminal failure
+// state; there is only "not up yet."
 const DEFAULT_MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
 // The models a reader may install, smallest first. These are prebuilt WebLLM
@@ -82,6 +92,16 @@ const WEBLLM_MODULE_URL = "https://esm.run/@mlc-ai/web-llm";
 const MAX_LOAD_ATTEMPTS = 3;
 const RETRY_BACKOFF_MS = [1000, 3000, 7000];
 
+// Once those in-init() attempts are exhausted (or WebGPU is missing outright)
+// the reader is handed to standby mode — but this module keeps trying the
+// real model in the background forever, on a slow-growing backoff, rather
+// than requiring a manual click. Cheap either way: a blocked-WebGPU recheck
+// is a single requestAdapter() call, and a download retry resumes from
+// whatever the Cache API already committed (see the MAX_LOAD_ATTEMPTS
+// comment above) — this is that same reasoning applied on a longer clock.
+const STANDBY_RETRY_BASE_MS = 20000;
+const STANDBY_RETRY_MAX_MS = 300000;
+
 // Why local mode can be off. The three common reasons look nothing alike to
 // a reader — a browser with WebGPU disabled, a page served over plain http
 // (WebGPU requires a secure context), and a GPU that offers no adapter are
@@ -106,6 +126,63 @@ function loadWebLLMModule() {
   return webllmModulePromise;
 }
 
+// The reader must never be left with a hard dead end just because a multi-GB
+// download failed or this device has no WebGPU. StandbyResponder is the
+// bottom rung of that ladder: zero download, zero GPU, zero dependency on
+// anything that can fail — a handful of pattern-matched replies plus one
+// honest "the real model isn't up yet, here's why, it's retrying" message.
+// It is not a language model; it is a circuit breaker with a bedside manner,
+// so `.stream()` always has *something* to hand back instead of throwing.
+const STANDBY_GREETING = /^(hi|hello|hey|yo|good (morning|afternoon|evening))\b[!.,]*$/i;
+const STANDBY_THANKS = /\b(thanks|thank you|thx|ty)\b/i;
+const STANDBY_FAREWELL = /^(bye|goodbye|see ya|later|night)\b[!.,]*$/i;
+const STANDBY_WHOAMI = /\b(who are you|what are you|are you (a )?(bot|ai|model)|what('s| is) your name)\b/i;
+const STANDBY_CAPABILITY = /\b(what can you do|what can i ask|help me|how does this work)\b/i;
+const STANDBY_AFFIRM = /^(ok(ay)?|yes|yep|sure|got it|understood|cool|alright)\b[!.,]*$/i;
+
+function lastUserText(messages) {
+  for (let i = (messages || []).length - 1; i >= 0; i--) {
+    if (messages[i] && messages[i].role === "user" && typeof messages[i].content === "string") {
+      return messages[i].content.trim();
+    }
+  }
+  return "";
+}
+
+// `reason` is whatever LocalModel recorded as why the real model isn't up
+// (download failure text, "no WebGPU", etc.) — always spoken plainly rather
+// than glossed over, so standby mode never reads as the real model being
+// slow or dim.
+function standbyReply(question, reason) {
+  const q = question || "";
+  if (STANDBY_GREETING.test(q)) return "Hello. The full local model isn't up yet, so I'm just a lightweight standby for now — ask me anything simple, or wait a moment for the real thing to finish loading.";
+  if (STANDBY_FAREWELL.test(q)) return "Goodbye for now.";
+  if (STANDBY_THANKS.test(q)) return "You're welcome.";
+  if (STANDBY_WHOAMI.test(q)) return "I'm a standby responder — a small set of canned replies, not a language model. The real local model is unavailable right now" + (reason ? ` (${reason})` : "") + "; it's retrying in the background and I'll step aside the moment it's ready.";
+  if (STANDBY_CAPABILITY.test(q)) return "Not much, honestly — I can only manage this kind of short exchange until the real local model loads. It's retrying automatically in the background; check Settings → Local model for its status, or try a smaller model from the picker there.";
+  if (STANDBY_AFFIRM.test(q)) return "Noted.";
+  if (/\?\s*$/.test(q)) {
+    return "I can't actually answer that — the real local model isn't loaded yet" + (reason ? ` (${reason})` : "") + ", and I'm only a standby with a few canned replies, not a model that can read or reason. It's retrying in the background; try again shortly, or open Settings → Local model to check progress or pick a smaller model.";
+  }
+  return "The local model is still unavailable" + (reason ? ` (${reason})` : "") + ". I'm a lightweight standby, not the real thing — it's retrying automatically, so this should resolve on its own. You can also check Settings → Local model.";
+}
+
+class StandbyResponder {
+  async *stream(messages, { signal } = {}) {
+    const text = standbyReply(lastUserText(messages), this.reason);
+    // A light word-by-word cadence rather than dumping the whole string at
+    // once — mid-turn, both read the same as an engine actually thinking,
+    // and instant walls of text elsewhere in the UI are a "did this really
+    // run?" signal readers have learned to distrust.
+    const words = text.split(/(?<=\s)/);
+    for (const w of words) {
+      if (signal && signal.aborted) return;
+      yield w;
+      await new Promise((r) => setTimeout(r, 18));
+    }
+  }
+}
+
 class LocalModel {
   constructor() {
     this.modelId = readStoredModelId();
@@ -119,14 +196,25 @@ class LocalModel {
     // Bytes this origin is using / is allowed, from navigator.storage.estimate().
     // Null when the browser does not expose it.
     this.storage = null;
-    // idle -> loading -> ready, or idle -> unsupported / error.
-    // "error" is not terminal: init() may be called again (the UI's retry
-    // button does exactly that) and re-attempts the full sequence.
+    // idle -> loading -> ready, or idle -> loading -> standby.
+    // "standby" is never terminal: a background timer (_scheduleStandbyRetry)
+    // keeps quietly re-attempting the real model on a growing backoff, and
+    // init() may also be called directly (the UI's retry button does this).
+    // There is deliberately no permanent "unsupported"/"error" dead end — see
+    // _enterStandby.
     this.status = "idle";
     this.progress = { text: "", percent: 0 };
     this.error = null;
+    // Why the real model isn't currently active. Same text as `error` for a
+    // failed download, but also set for hard blockers (no WebGPU, insecure
+    // context) that never populate `error` today — standby mode needs a
+    // reason to show regardless of which branch produced it.
+    this.standbyReason = null;
+    this.standby = new StandbyResponder();
     this._listeners = new Set();
     this._loading = null; // in-flight init() promise, so concurrent callers share one attempt
+    this._standbyRetryTimer = null;
+    this._standbyRetryDelayMs = STANDBY_RETRY_BASE_MS;
   }
 
   subscribe(fn) {
@@ -146,6 +234,7 @@ class LocalModel {
       status: this.status,
       progress: this.progress,
       error: this.error,
+      standbyReason: this.standbyReason,
       modelId: this.modelId,
       nickname: this.nicknames[this.modelId] || null,
       catalog: this.catalog.map((m) => ({ ...m, active: m.id === this.modelId, nickname: this.nicknames[m.id] || null })),
@@ -289,6 +378,11 @@ class LocalModel {
     return this.init();
   }
 
+  // A reader- or timer-driven attempt at the real model. Called directly by
+  // the UI's retry button (deliberate — resets the backoff) and by
+  // _scheduleStandbyRetry (background — keeps the backoff growing). Either
+  // way it's safe to call from any status: 'ready' short-circuits, and a
+  // second concurrent call joins the same in-flight attempt.
   async init() {
     if (this.status === "ready") return this.snapshot();
     if (this._loading) return this._loading;
@@ -296,12 +390,56 @@ class LocalModel {
     return this._loading;
   }
 
+  // Same as init(), but for the reader's own "try again" click: cancels any
+  // pending background retry and restarts the backoff from the base delay, so
+  // one manual click doesn't inherit a five-minute wait a quiet failure
+  // earlier had already grown into.
+  retryNow() {
+    this._clearStandbyRetry();
+    this._standbyRetryDelayMs = STANDBY_RETRY_BASE_MS;
+    return this.init();
+  }
+
+  _clearStandbyRetry() {
+    if (this._standbyRetryTimer) {
+      clearTimeout(this._standbyRetryTimer);
+      this._standbyRetryTimer = null;
+    }
+  }
+
+  // The one and only way this module gives up on the real model for now. It
+  // never gives up permanently: a background timer keeps re-attempting on a
+  // slow-growing backoff (capped at STANDBY_RETRY_MAX_MS) for as long as the
+  // reader leaves the tab open, so a driver update, a flipped browser flag, or
+  // a network blip that resolves itself all self-heal without anyone coming
+  // back to click retry.
+  _enterStandby(reason) {
+    this.engine = null;
+    this.status = "standby";
+    this.standbyReason = reason;
+    this.standby.reason = reason;
+    this.progress = { text: "", percent: 0 };
+    this._emit();
+    this._scheduleStandbyRetry();
+  }
+
+  _scheduleStandbyRetry() {
+    this._clearStandbyRetry();
+    const delay = this._standbyRetryDelayMs;
+    this._standbyRetryTimer = setTimeout(() => {
+      this._standbyRetryTimer = null;
+      this._standbyRetryDelayMs = Math.min(this._standbyRetryDelayMs * 2, STANDBY_RETRY_MAX_MS);
+      // Only worth attempting if the reader hasn't since moved on (unload()
+      // clears the timer, so status would already be 'idle' here — this
+      // guard is belt-and-suspenders against a race between the two).
+      if (this.status === "standby") this.init();
+    }, delay);
+  }
+
   async _runInit() {
     const readiness = webgpuReadiness();
     if (!readiness.ok) {
-      this.status = "unsupported";
-      this.error = readiness.hint;
-      this._emit();
+      this._enterStandby(readiness.hint);
       return this.snapshot();
     }
 
@@ -312,20 +450,17 @@ class LocalModel {
     try {
       const adapter = await navigator.gpu.requestAdapter();
       if (!adapter) {
-        this.status = "unsupported";
-        this.error = "WebGPU is present but this device offers no GPU adapter — usually hardware acceleration being off or the GPU being blocklisted. Turn hardware acceleration on and reload.";
-        this._emit();
+        this._enterStandby("WebGPU is present but this device offers no GPU adapter — usually hardware acceleration being off or the GPU being blocklisted. Turn hardware acceleration on and reload.");
         return this.snapshot();
       }
     } catch (adapterErr) {
-      this.status = "unsupported";
-      this.error = "WebGPU adapter could not be created: " + ((adapterErr && adapterErr.message) || adapterErr);
-      this._emit();
+      this._enterStandby("WebGPU adapter could not be created: " + ((adapterErr && adapterErr.message) || adapterErr));
       return this.snapshot();
     }
 
     this.status = "loading";
     this.error = null;
+    this.standbyReason = null;
     this.progress = { text: "Starting…", percent: 0 };
     this._emit();
 
@@ -346,6 +481,9 @@ class LocalModel {
         this.status = "ready";
         this.progress = { text: "Ready", percent: 100 };
         this.error = null;
+        this.standbyReason = null;
+        this._standbyRetryDelayMs = STANDBY_RETRY_BASE_MS;
+        this._clearStandbyRetry();
         const row = this.catalog.find((m) => m.id === this.modelId);
         if (row) row.cached = true;
         this._emit();
@@ -364,16 +502,23 @@ class LocalModel {
       }
     }
 
-    this.status = "error";
     this.error = (lastErr && lastErr.message) || "Model download failed after retrying.";
-    this.progress = { text: "", percent: 0 };
-    this._emit();
+    this._enterStandby(this.error);
     return this.snapshot();
   }
 
-  // Streams completion text deltas. Caller owns the message array — this
-  // module has no opinion on grounding/citations, only on running the model.
+  // Streams completion text deltas. In 'ready' status this is the real model;
+  // in 'standby' status (WebGPU missing, download failed — see _enterStandby)
+  // it's the zero-dependency canned responder instead of a thrown error, so a
+  // caller that already treats 'standby' as answerable never has to special-
+  // case the failure. Callers that require the real model (tool-executing
+  // agent runs, the fidelity-checked long-form pipeline) should keep gating
+  // on status === 'ready' before calling this at all.
   async *stream(messages, { signal } = {}) {
+    if (this.status === "standby") {
+      yield* this.standby.stream(messages, { signal });
+      return;
+    }
     if (this.status !== "ready" || !this.engine) {
       throw new Error("Local model is not ready — call init() first.");
     }
@@ -390,6 +535,8 @@ class LocalModel {
   }
 
   async unload() {
+    this._clearStandbyRetry();
+    this._standbyRetryDelayMs = STANDBY_RETRY_BASE_MS;
     if (this.engine) {
       try { await this.engine.unload(); } catch { /* best-effort teardown */ }
     }
@@ -397,6 +544,7 @@ class LocalModel {
     this.status = "idle";
     this.progress = { text: "", percent: 0 };
     this.error = null;
+    this.standbyReason = null;
     this._emit();
   }
 }

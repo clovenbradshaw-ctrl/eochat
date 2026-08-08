@@ -28,6 +28,9 @@
 //   null-with-reason, never a guess. A missing operator is `null` with a stated
 //   basis, not a default of SEG.
 
+import { GRAINS, isGrain, cellFor } from "./eo-cube.js";
+export { GRAINS };
+
 // The Structure row of the canonical 3x3 (spec/operators/epoch.js):
 // Differentiate / Relate / Generate. These are the only structural acts a task
 // entry may carry. Existence (NUL/SIG/INS) and Interpretation (DEF/EVA/REC)
@@ -37,6 +40,16 @@ export const STRUCTURE_OPERATORS = Object.freeze({
   CON: "CON", // Relate — these parts bear on each other
   SYN: "SYN", // Generate — something holds only across the parts, not in any one
 });
+
+// A task entry may additionally carry the GRAIN its operator fired at
+// (Ground/Figure/Pattern — eo-cube.js). Operator alone names the act;
+// operator + grain together name one of the 27 legal cells of the cube and
+// derive its terrain and stance, so a fold that has earned both gets the full
+// EO address for free instead of a second mechanism guessing it from the
+// task's text — the guess is exactly the classifier path eoreader6/CUBE.md
+// tried and refuted (see eo-cube.js's header). Still restricted to the
+// Structure row: a grain does not widen which operators this log accepts,
+// it only completes the address for the three it already does.
 
 // How an entry's operator came to be what it is.
 //
@@ -96,6 +109,15 @@ export function append(log, entry) {
   if (entry.operator != null && !Object.values(OPERATOR_BASIS).includes(entry.operator_basis)) {
     throw new TypeError("append: an entry carrying an operator must state its operator_basis");
   }
+  if (entry.grain != null && !isGrain(entry.grain)) {
+    throw new TypeError(`append: ${JSON.stringify(entry.grain)} is not one of the three grains (${GRAINS.join(", ")})`);
+  }
+  // A grain names which of the three legal cells its operator's row lands
+  // on. Without the operator on the SAME entry there is no cell for it to
+  // complete — the two are earned together, not stitched from separate acts.
+  if (entry.grain != null && entry.operator == null) {
+    throw new TypeError("append: a grain was supplied without the operator that shares its cell");
+  }
 
   const sealed = Object.freeze({
     ...entry,
@@ -133,6 +155,9 @@ export function projectTasks(log) {
       operator: null,
       operator_basis: OPERATOR_BASIS.ABSENT,
       operator_gap: "no structural act has been earned for this task yet",
+      grain: null,
+      grain_gap: "no grain has been earned for this task's operator yet",
+      cell: null,
       description: null,
       depends_on: [],
       evidence: [],
@@ -147,12 +172,26 @@ export function projectTasks(log) {
     // all survived projection with their motifs stripped, and zero notes.
     const RESERVED = new Set([
       "kind", "task_id", "seq", "supersedes", "operator", "operator_basis",
-      "description", "depends_on", "evidence", "result",
+      "grain", "description", "depends_on", "evidence", "result",
     ]);
     const payload = {};
     for (const [key, value] of Object.entries(e)) {
       if (!RESERVED.has(key)) payload[key] = value;
     }
+
+    // grain and cell come from the SAME entry's operator+grain pair, never
+    // stitched across two different acts. An entry that moves the operator
+    // without repeating the grain lapses the old grain rather than pairing
+    // it with an operator it was never affirmed alongside — the old cell was
+    // earned for the operator that is no longer current.
+    const nextOperator = e.operator ?? prior.operator;
+    const nextGrain = e.grain ?? (e.operator != null ? null : prior.grain);
+    const nextGrainGap = e.grain != null
+      ? null
+      : e.operator != null
+        ? "no grain has been earned for this task's operator yet"
+        : prior.grain_gap;
+    const nextCell = nextOperator != null && nextGrain != null ? cellFor(nextOperator, nextGrain) : null;
 
     byId.set(e.task_id, {
       ...prior,
@@ -169,9 +208,12 @@ export function projectTasks(log) {
       result: e.kind === ENTRY_KINDS.RESULT ? e.result : prior.result,
       description: e.description ?? prior.description,
       depends_on: e.depends_on.length ? [...e.depends_on] : prior.depends_on,
-      operator: e.operator ?? prior.operator,
+      operator: nextOperator,
       operator_basis: e.operator != null ? e.operator_basis : prior.operator_basis,
       operator_gap: e.operator != null ? null : prior.operator_gap,
+      grain: nextGrain,
+      grain_gap: nextGrainGap,
+      cell: nextCell,
       last_seq: e.seq,
     });
   }
@@ -335,4 +377,121 @@ export function foldToWorkingSet(tasks, { k = 7, score = null } = {}) {
     withheld: ordered.length > k ? ordered.length - k : 0,
     withheld_ids: ordered.slice(k).map((t) => t.task_id),
   };
+}
+
+// ── Entities are entities: one discovery primitive, not one per domain ─────
+//
+// MEASURED, TWICE, INDEPENDENTLY: narrative-longform.js's `extractNewNames`
+// (a character the model introduces unasked, mid-scene) and
+// code-longform.js's `discoverReferencedFiles` (a file a written file
+// references but nobody planned) are the SAME act — "something unplanned
+// was noticed; register it so everything generated after this point sees
+// it, or the FORGETTING half of the continuity failure recurs regardless of
+// domain." code-longform.js's own comment already named this explicitly
+// ("the exact same move as extractNewNames() discovering a character") but
+// each domain still hand-rolled its own append loop. This is that loop,
+// pulled up to where task-log.js's own header says it belongs: the log
+// "knows about structure, not about what the structure is made of" — DETECTING
+// a character in prose vs. a `<script src>` in HTML is legitimately
+// domain-specific and stays in each engine; REGISTERING what was detected is
+// structure, not material, and belongs here exactly once.
+//
+// Every discovery is tagged SEG (Differentiate) at Figure grain — a single
+// thing pulled out of the undifferentiated material and individually named,
+// which is what "discovering a new entity/file" structurally IS regardless
+// of whether the material is prose or markup. This is the literal, addressed
+// version of "entities are entities": both domains' discoveries now resolve
+// to the identical cube cell, not merely an analogous one.
+export function proposeDiscovered(log, discoveries) {
+  let next = log;
+  for (const d of discoveries) {
+    if (typeof d.task_id !== "string" || !d.task_id) {
+      throw new TypeError("proposeDiscovered: every discovery needs a task_id");
+    }
+    const { task_id, description, depends_on, ...payload } = d;
+    next = append(next, {
+      kind: ENTRY_KINDS.PROPOSE,
+      task_id,
+      description,
+      depends_on,
+      operator: STRUCTURE_OPERATORS.SEG,
+      operator_basis: OPERATOR_BASIS.PRODUCED,
+      grain: GRAINS[1], // "Figure" — see eo-cube.js; a single distinguished thing, not yet a Ground field or a Pattern
+      ...payload,
+    });
+  }
+  return next;
+}
+
+// ── Navigating the cube: grain only deepens, production order holds ───────
+//
+// Two real invariants this codebase's own discipline already implies but
+// never stated as checkable functions:
+//
+//   1. GRAIN NEVER COARSENS for a given thread. Ground -> Figure -> Pattern
+//      is a move to higher resolution (a field becomes a distinguished
+//      figure becomes a recognized pattern); the reverse — having earned
+//      Pattern-grain understanding of something and then re-treating it as
+//      undifferentiated Ground — is not a legal revision, it is a real loss
+//      of ground already covered. This is the literal "spiral, not a flat
+//      loop" shape: a thread may be revisited (SUPERSEDE), but only upward.
+//   2. PRODUCTION ORDER holds for a single step: `produce()` above already
+//      enforces SEG before CON before SYN WITHIN one production step (its
+//      own `for (const op of ["SEG","CON","SYN"])` loop) — exposed here as
+//      data so a caller reasoning about one task's own operator history can
+//      check the same ordering without re-deriving it.
+//
+// Both are ADVISORY, never a blocking gate on append() — the same
+// "detect and report, never silently refuse" discipline checkContinuity and
+// checkNumericLocks (narrative-longform.js) already use for their own
+// declared invariants. A caller decides what a flag means for its domain;
+// this module only says what happened.
+export const GRAIN_RANK = Object.freeze(Object.fromEntries(GRAINS.map((g, i) => [g, i])));
+export const STRUCTURE_PRODUCTION_ORDER = Object.freeze({ SEG: 0, CON: 1, SYN: 2 });
+
+/** true iff `nextGrain` is the same or a deeper resolution than `priorGrain` — never a coarsening. */
+export function isGrainProgression(priorGrain, nextGrain) {
+  if (!isGrain(priorGrain) || !isGrain(nextGrain)) return null; // not a comparable claim — typed absence, not a guessed verdict
+  return GRAIN_RANK[nextGrain] >= GRAIN_RANK[priorGrain];
+}
+
+/** true iff `nextOp` does not fire strictly before `priorOp` in one production step's own SEG->CON->SYN order. */
+export function isProductionOrder(priorOp, nextOp) {
+  if (!(priorOp in STRUCTURE_PRODUCTION_ORDER) || !(nextOp in STRUCTURE_PRODUCTION_ORDER)) return null;
+  return STRUCTURE_PRODUCTION_ORDER[nextOp] >= STRUCTURE_PRODUCTION_ORDER[priorOp];
+}
+
+/**
+ * Walks one task_id's own entries (in seq order, as they appear in
+ * `log.entries` — the raw log, not the fold, because a coarsening that a
+ * LATER entry superseded is still a real event that happened) and flags any
+ * step where grain coarsened or production order ran backward. Cross-task
+ * cube position is not compared here — two DIFFERENT tasks legitimately sit
+ * at different cells with no ordering claim between them; this checks one
+ * thread's own trajectory against itself, the same scope `checkNumericLocks`
+ * gives "first mention locks it" (a fact about one thread's history, not a
+ * cross-thread claim).
+ */
+export function checkCubeProgression(log) {
+  const byTask = new Map();
+  for (const e of log.entries) {
+    if (e.operator == null || e.grain == null) continue;
+    if (!byTask.has(e.task_id)) byTask.set(e.task_id, []);
+    byTask.get(e.task_id).push(e);
+  }
+
+  const flags = [];
+  for (const [task_id, entries] of byTask) {
+    for (let i = 1; i < entries.length; i++) {
+      const prior = entries[i - 1];
+      const next = entries[i];
+      if (isGrainProgression(prior.grain, next.grain) === false) {
+        flags.push({ task_id, kind: "grain-coarsened", from: prior.grain, to: next.grain, atSeq: next.seq });
+      }
+      if (prior.operator !== next.operator && isProductionOrder(prior.operator, next.operator) === false) {
+        flags.push({ task_id, kind: "production-order-reversed", from: prior.operator, to: next.operator, atSeq: next.seq });
+      }
+    }
+  }
+  return flags;
 }

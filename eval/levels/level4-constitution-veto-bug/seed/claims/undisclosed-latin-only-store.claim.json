@@ -1,0 +1,27 @@
+{
+  "claim_id": "undisclosed-latin-only-store",
+  "what": "an associative-memory organ built on a Latin-alphabet-only character class, documented as general-purpose with no mention of its script scope and no cross-script fixture",
+  "proposed_placement": "engine",
+  "expect": "refute",
+  "notes": "Exemplar for the 8th amendment (II.13), drawn from the real defect in emergence/store/index.js: an extensive header grounds it in general associative-memory neuroscience with no mention that its tokenizer cannot see a non-Latin letter. Contrast cube/index.js, equally English-scoped but honest about it in its own header — that module passes as priors with a disclosed giver, not engine by silent assertion.",
+  "evidence": {
+    "needs_name_or_surface": false,
+    "is_material_knowledge": false,
+    "giver": "",
+    "is_host_knowledge": false,
+    "medium_agnostic": true,
+    "asserted_agnosticism": false,
+    "is_one_off_fix": false,
+    "weights_present": false,
+    "scores_arrival_alone": false,
+    "unconditional_null": false,
+    "needs_datacenter_compute": false,
+    "undisclosed_script_scope": true,
+    "fold_overclaims_completeness": false,
+    "drilldown_uses_keyword_trigger": false,
+    "surprise_claim_undisambiguated": false,
+    "consumes_source": "direct",
+    "host_dependencies": [],
+    "level_test": "above"
+  }
+}

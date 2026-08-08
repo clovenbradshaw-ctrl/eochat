@@ -49,7 +49,10 @@
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { createTaskLog, append, projectTasks, foldToWorkingSet, ENTRY_KINDS, OPERATOR_BASIS } from "./task-log.js";
+import {
+  createTaskLog, append, projectTasks, foldToWorkingSet,
+  proposeDiscovered, checkCubeProgression, ENTRY_KINDS, OPERATOR_BASIS,
+} from "./task-log.js";
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const TEMPERATURE = 0.6; // lower than fiction's 0.75 — code correctness rewards less variance than prose voice does
@@ -610,10 +613,20 @@ export async function writeProject(request, { model = "llama3.2:latest", outDir,
     const file = move.file;
     await writeFileStable({ file, request, files, contents, sharedVocabulary, model, seed, progress, verifications, continuityFlags, discoveryLog, assetGaps, fileNumber: fileCount });
 
-    log = append(log, {
-      kind: ENTRY_KINDS.PROPOSE, task_id: `file:${file.path}`, description: file.description,
+    // "Entities are entities": the SAME registration primitive
+    // narrative-longform.js uses for a character the model introduces
+    // unasked (task-log.js's proposeDiscovered) — a file entering the build,
+    // whether from the original plan or discovered mid-build from a real
+    // reference (discoverReferencedFiles above), resolves to the identical
+    // cube cell (SEG, Figure) a discovered character does. Both planned and
+    // discovered files pass through this one call site, so no separate
+    // "discovery" tagging is needed here the way narrative-longform.js needs
+    // one — discoverReferencedFiles already queues discovered files into
+    // `files` above; every file, planned or discovered, is registered here.
+    log = proposeDiscovered(log, [{
+      task_id: `file:${file.path}`, description: file.description,
       depends_on: ["project"], written: true, language: file.language,
-    });
+    }]);
   }
 
   // MEASURED: a real plan named "js/script.js" — a nested path — and this
@@ -628,5 +641,10 @@ export async function writeProject(request, { model = "llama3.2:latest", outDir,
   // sharedVocabulary is handed back so a sessionful caller can persist the
   // canonical names — decided ONCE at plan time — across messages instead of
   // re-deciding them per message (see code-longform-session.js).
-  return { files, contents, sharedVocabulary, verifications, continuityFlags, discoveryLog, assetGaps, outDir };
+  // Advisory only, same as the continuity checks above: reports whether any
+  // single file's own thread coarsened its cube grain or ran its operator
+  // backward — never blocks the build. See task-log.js's checkCubeProgression.
+  const cubeFlags = checkCubeProgression(log);
+
+  return { log, files, contents, sharedVocabulary, verifications, continuityFlags, cubeFlags, discoveryLog, assetGaps, outDir };
 }

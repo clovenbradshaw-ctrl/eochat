@@ -15,6 +15,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { nextMove, validateWorld, writeNarrative, checkContinuity, checkNumericLocks, LIGHTHOUSE_WORLD } from "./narrative-longform.js";
+import { projectTasks } from "./task-log.js";
 
 // ── validateWorld: a missing declaration is a wall, not a guess ───────────
 
@@ -294,6 +295,96 @@ test("a flagged scene that correction CANNOT fix is reported unresolved, never r
     assert.equal(unresolved[0].revisionAttempts, 2, "must stop at MAX_CONTINUITY_REVISIONS, not loop forever");
     // scene 1 (1 call, harmless) + scene 2 (1 original + 2 correction attempts).
     assert.equal(calls, 4);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ── Cube-tagging: introduce/plant/resolve resolve to real cells, cleanly ──
+
+test("a real end-to-end run tags introduce/plant/resolve with real cube cells and reports zero cube-progression flags", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = stubModel();
+  try {
+    const result = await writeNarrative(HEIST_WORLD, { model: "stub", maxScenes: 40, onProgress: () => {} });
+    const tasks = projectTasks(result.log);
+
+    const insider = tasks.find((t) => t.task_id === "entity:insider");
+    assert.equal(insider.operator, "SEG");
+    assert.equal(insider.grain, "Figure");
+    assert.equal(insider.cell.terrain, "Link", "SEG at Figure grain over the Structure domain resolves to the Link terrain");
+
+    // Checked against the RAW planting entry, not the final fold — this run
+    // goes to closure, so by the end vault-code's own resolve has overwritten
+    // CON with SYN in the live projection (the next assertion covers that).
+    // The planting act itself must still have been recorded as CON.
+    const vaultCodePlant = result.log.entries.find((e) => e.kind === "propose" && e.task_id === "commitment:vault-code");
+    assert.equal(vaultCodePlant.operator, "CON", "planting a commitment is the relate act — a link entering the field, not yet the payoff");
+    assert.equal(vaultCodePlant.grain, "Figure");
+
+    const escape = tasks.find((t) => t.task_id === "commitment:escape");
+    assert.equal(escape.operator, "SYN", "a CONFIRMED resolve overwrites the planted CON with the SYN that actually produced the payoff");
+    assert.equal(escape.grain, "Figure");
+
+    // The real end-to-end proof: a full, non-trivial causal chain (four
+    // dependent commitments, a discovered-character path via extractNewNames
+    // if the stub ever introduces one) produces ZERO grain-coarsening or
+    // production-order violations on its own — the cube-tagging is
+    // consistent with the causal ordering nextMove() already enforces
+    // independently, not just consistent with itself in isolation.
+    assert.deepEqual(result.cubeFlags, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a character the model introduces unasked resolves to the identical cell as a declared entity — entities are entities", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const body = JSON.parse(opts.body);
+    const isOpening = body.messages[1].content.includes(HEIST_WORLD.openingBeat);
+    // The opening scene mentions an unplanned character by name, twice, not
+    // sentence-initially — exactly what extractNewNames now requires.
+    const text = isOpening
+      ? "Priya briefed the crew. Dez said nothing. A stranger named Kessler watched from the doorway, and Kessler said nothing either."
+      : "Some invented prose for this scene.";
+    return { ok: true, json: async () => ({ message: { content: text } }) };
+  };
+  try {
+    const result = await writeNarrative(HEIST_WORLD, { model: "stub", maxScenes: 3, onProgress: () => {} });
+    const tasks = projectTasks(result.log);
+    const kessler = tasks.find((t) => t.task_id === "entity:kessler");
+    const insider = tasks.find((t) => t.task_id === "entity:insider");
+    assert.ok(kessler, "the unplanned character must be registered");
+    assert.deepEqual(kessler.cell, insider.cell, "a model-discovered character and a world-declared entity resolve to the identical cube cell");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a title-abbreviation name ('Mrs. Kuroba') registers as ONE entity, not a bare fragment with the real surname invisible", async () => {
+  // MEASURED on a real run with ZERO declared entities (every name entirely
+  // model-invented): "Mrs. Kuroba" recurred 10+ times, always as "Mrs.
+  // Kuroba". Before this fix, "Mrs" fragmented off as its own spurious
+  // entity AND "Kuroba" — the actual recurring surname — never registered
+  // at all, because every occurrence immediately followed "Mrs. " (period +
+  // space), which round 2's sentence-initial check misread as a genuine
+  // sentence boundary every single time.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, opts) => {
+    const body = JSON.parse(opts.body);
+    const isOpening = body.messages[1].content.includes(HEIST_WORLD.openingBeat);
+    const text = isOpening
+      ? "On Elm Street, Mrs. Kuroba stirred in her kitchen. Mrs. Kuroba smiled to herself, thinking of Mrs. Kuroba's own childhood."
+      : "Some invented prose for this scene.";
+    return { ok: true, json: async () => ({ message: { content: text } }) };
+  };
+  try {
+    const result = await writeNarrative(HEIST_WORLD, { model: "stub", maxScenes: 3, onProgress: () => {} });
+    const tasks = projectTasks(result.log);
+    assert.ok(tasks.find((t) => t.task_id === "entity:mrs. kuroba"), "the whole title+surname must register as one entity");
+    assert.ok(!tasks.find((t) => t.task_id === "entity:mrs"), "a bare 'Mrs' fragment must not be registered separately");
+    assert.ok(!tasks.find((t) => t.task_id === "entity:kuroba"), "the surname alone must not fragment off either, now that the full phrase matches");
   } finally {
     globalThis.fetch = originalFetch;
   }

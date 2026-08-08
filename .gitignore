@@ -12,3 +12,15 @@ server/web-history.jsonl
 .DS_Store
 sonata.mid
 *.mid
+
+# Scratch working directories the agentic eval creates and destroys per run —
+# not results (those are eval/results/), just throwaway sandbox state.
+eval/.sandbox/
+
+# eoCode tab's live workspaces — whatever the agent reads/writes while working
+# on a real task, not a fixture this repo ships.
+eocode-workspace/
+
+# Claude Code worktree scratch space — isolated checkouts for parallel work,
+# not part of this repo's own tree.
+.claude/worktrees/
