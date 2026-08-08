@@ -1,0 +1,13 @@
+{
+  "schema": "InsightKindVocabPrior@1",
+  "language": "es",
+  "provenance": {
+    "source": "hand-compiled from real section headers in two real, currently-published Spanish municipal housing plans: Málaga's 'Plan Municipal de Vivienda y Suelo' (malaga.eu/.../00_Introduccion.pdf) — real headers '2. OBJETIVOS Y METODOLOGÍA', '2.1. OBJETIVOS', 'Objetivos Generales:', 'Objetivos Específicos:', and its grouped 'BASES GENERALES DE OBJETIVOS Y ESTRATEGIAS' / 'ESTRATEGIA 1..5' section titles — and Valladolid's 'Plan de Vivienda 2021-2025' (smviva.com), which uses 'objetivos'/'estrategia' the same way throughout. 'diagnóstico'/'situación actual' for current_state are NOT directly confirmed as a bare header in either sampled document (both open straight into objetivos without an isolated 'diagnóstico' heading surviving pdftotext extraction) — added from the standard Spanish municipal-housing-plan structure description (La Moncloa's own account of the national plan process, 2024: the plan is built from an 'analítica' stage containing the 'diagnóstico' of the municipal housing problem before the 'estratégica' stage sets objectives). No real evidence sampled yet for a Spanish 'definition'/glossary header — left empty rather than guessed; do not fill without a real source."
+  },
+  "vocab": {
+    "goal": ["objetivo", "objetivos", "objetivo general", "objetivos generales", "objetivo específico", "objetivos específicos", "meta", "metas"],
+    "current_state": ["diagnóstico", "diagnostico", "situación actual", "situacion actual", "estado actual"],
+    "intervention_metric": ["estrategia", "estrategias", "programa de actuación", "programas de actuación", "medida", "medidas", "acción", "acciones"],
+    "definition": []
+  }
+}

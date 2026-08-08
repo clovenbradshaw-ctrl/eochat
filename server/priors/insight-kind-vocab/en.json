@@ -1,0 +1,13 @@
+{
+  "schema": "InsightKindVocabPrior@1",
+  "language": "en",
+  "provenance": {
+    "source": "hand-compiled from standard English-language community/organizational plan-document section conventions (goals/targets/objectives; current-state/baseline/status reporting; intervention/metric/indicator tables; definitions/glossary sections). The definition vocabulary is directly confirmed against a real document: Houston's FY2025 HUD Consolidated Plan glossary section (houston-consolidated-plan.pdf) uses exactly 'Definitions' as its section heading over real HUD-defined terms (Chronically Homeless, Continuum of Care, Emergency Shelter, HMIS, Subrecipient)."
+  },
+  "vocab": {
+    "goal": ["goal", "goals", "target", "targets", "objective", "objectives"],
+    "current_state": ["current state", "baseline", "status"],
+    "intervention_metric": ["intervention", "interventions", "metric", "metrics", "indicator", "indicators"],
+    "definition": ["definition", "definitions", "glossary"]
+  }
+}

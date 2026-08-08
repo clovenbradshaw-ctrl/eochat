@@ -14,11 +14,13 @@ import {
   InsightStore,
   normalizeKeyText,
   jaccardSimilarity,
+  keysStructurallyCorefer,
   matchKey,
   parseValue,
   sameValue,
   extractCandidateFacts,
   slugifyKey,
+  proposeFactsWithModel,
 } from "./insight-store.js";
 
 function freshStore() {
@@ -40,22 +42,67 @@ test("jaccardSimilarity is 1 for identical token bags and 0 for disjoint ones", 
   assert.ok(jaccardSimilarity("affordable housing units", "affordable housing target") > 0.3);
 });
 
-test("matchKey returns exact for an alias match, auto for a close fuzzy match, candidates for a plausible-but-unconfirmed one, unclear otherwise", () => {
+test("matchKey returns exact ONLY for literal identity after normalization — everything else, however close, is a candidate", () => {
   const registry = [
     { key: "housing_affordable_units", label: "Affordable housing units", aliases: ["Aff. Housing Units"] },
     { key: "youth_grad_rate", label: "Youth graduation rate", aliases: [] },
   ];
-  assert.deepEqual(matchKey("Aff. Housing Units", registry).status, "exact");
-  const auto = matchKey("affordable housing units total", registry);
-  assert.equal(auto.status, "auto");
-  assert.equal(auto.key, "housing_affordable_units");
+  assert.equal(matchKey("Aff. Housing Units", registry).status, "exact");
 
-  const candidates = matchKey("housing units", registry);
-  assert.ok(candidates.status === "auto" || candidates.status === "candidates");
+  // Containment (structural) — a real, rankable signal, but never auto-applied.
+  // eoreader6's referents/consequence.js retired appearance-based identity
+  // matching even for its own, harder, statistically-testable version of this
+  // problem ("No stem table, no edit distance... not even here"); this module
+  // has no equivalent evidence to test against, so it is stricter still.
+  const structural = matchKey("affordable housing units total", registry);
+  assert.equal(structural.status, "candidates");
+  assert.equal(structural.candidates[0].key, "housing_affordable_units");
+  assert.equal(structural.candidates[0].structural, true);
 
   const unclear = matchKey("stormwater capacity", registry);
   assert.equal(unclear.status, "unclear");
   assert.deepEqual(unclear.candidates, []);
+});
+
+// ── keysStructurallyCorefer — a ranking signal only, never a merge trigger ──
+
+test("keysStructurallyCorefer detects containment when the shared token is significant", () => {
+  assert.ok(keysStructurallyCorefer("Affordable Housing Units", "Housing Units"));
+  assert.ok(keysStructurallyCorefer("Housing Units", "Affordable Housing Units"));
+});
+
+test("keysStructurallyCorefer refuses containment on a shared GENERIC token alone — the 'Prince Andrew/Prince Vasili' failure mode ported to plan vocabulary", () => {
+  // Both end in "units", but that is the only thing they share, and "units"
+  // is exactly the kind of generic measurement noun discover-cast.js's
+  // shared-leading-honorific carve-out warns against treating as identity.
+  assert.ok(!keysStructurallyCorefer("Affordable Housing Units", "Broadband Access Units"));
+  assert.ok(!keysStructurallyCorefer("Housing Target", "Graduation Target"));
+});
+
+test("matchKey never returns 'auto' for anything short of literal identity — not even structural containment", () => {
+  const registry = [{ key: "housing_target_rate", label: "Housing target rate", aliases: [] }];
+  const structural = matchKey("Affordable Housing Target Rate", registry); // contains "housing"
+  assert.notEqual(structural.status, "auto");
+  assert.equal(structural.status, "candidates");
+
+  // High Jaccard overlap (both contain "target"/"rate") but no significant
+  // shared token and no containment — still just a candidate.
+  assert.ok(jaccardSimilarity("Annual Target Rate", "Housing target rate") >= 0.34);
+  const fuzzy = matchKey("Annual Target Rate", registry);
+  assert.notEqual(fuzzy.status, "auto");
+});
+
+test("matchKey reports an ambiguous structural match as candidates listing both, never guesses one", () => {
+  const registry = [
+    { key: "north_housing_units", label: "North district housing units", aliases: [] },
+    { key: "south_housing_units", label: "South district housing units", aliases: [] },
+  ];
+  // "Housing Units" structurally corefers with BOTH (containment both ways) —
+  // the "Prince across several princes" case. Must not silently pick one.
+  const m = matchKey("Housing Units", registry);
+  assert.equal(m.status, "candidates");
+  const keys = m.candidates.filter((c) => c.structural).map((c) => c.key).sort();
+  assert.deepEqual(keys, ["north_housing_units", "south_housing_units"]);
 });
 
 test("slugifyKey produces a stable, filesystem/JSON-safe key from a label", () => {
@@ -89,7 +136,7 @@ test("sameValue compares numeric values by number+unit and refuses to equate dif
 
 // ── extractCandidateFacts ────────────────────────────────────────────────
 
-test("extractCandidateFacts pulls key:value lines and tags kind from section headers", () => {
+test("extractCandidateFacts pulls key:value lines and tags kind from section headers, given a declared language", () => {
   const text = [
     "GOALS",
     "Affordable housing units: 500 by 2030",
@@ -97,30 +144,100 @@ test("extractCandidateFacts pulls key:value lines and tags kind from section hea
     "CURRENT STATE",
     "Affordable housing units: 210",
   ].join("\n");
-  const facts = extractCandidateFacts(text);
+  const facts = extractCandidateFacts(text, { language: "en" });
   assert.equal(facts.length, 2);
   assert.equal(facts[0].kind, "goal");
   assert.equal(facts[0].rawKey, "Affordable housing units");
-  assert.equal(facts[0].rawValue, "500 by 2030");
+  assert.equal(facts[0].rawValue, "500"); // trailing "by 2030" is stripped into asOfYear, not left in the value
+  assert.equal(facts[0].asOfYear, 2030);
   assert.equal(facts[1].kind, "current_state");
   assert.equal(facts[1].rawValue, "210");
 });
 
-test("extractCandidateFacts honors a leading 'By <year>' / '(<year>)' prefix as asOfYear", () => {
+// "goals may never ever be called goals": the literal English word is never
+// baked into this module as a universal signal. Undeclared language, the
+// exact same document above gets NO kind signal from its headers at all —
+// an honest gap, not a silent assumption that untagged text is English.
+test("extractCandidateFacts gives no kind signal from section headers when no language is declared", () => {
+  const text = ["GOALS", "Affordable housing units: 500"].join("\n");
+  const facts = extractCandidateFacts(text);
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, null);
+});
+
+test("extractCandidateFacts reads a real Spanish municipal-plan header ('OBJETIVOS') via the es kind-vocabulary prior", () => {
+  // "OBJETIVOS" is a real section heading in Málaga's published Plan
+  // Municipal de Vivienda y Suelo ("2. OBJETIVOS Y METODOLOGÍA", "2.1.
+  // OBJETIVOS", "Objetivos Generales:") — not a translation guessed from the
+  // English word list.
+  const facts = extractCandidateFacts(
+    ["OBJETIVOS", "Viviendas asequibles: 500"].join("\n"),
+    { language: "es" },
+  );
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "goal");
+});
+
+test("extractCandidateFacts reads a real French PLH header ('DIAGNOSTIC') via the fr kind-vocabulary prior", () => {
+  // "DIAGNOSTIC" is a real section heading in Plaine Commune's published
+  // Programme Local de l'Habitat 2022-2027 synthesis — the document's own
+  // word for its current-state/needs-assessment section.
+  const facts = extractCandidateFacts(
+    ["DIAGNOSTIC", "Logements sociaux: 4200"].join("\n"),
+    { language: "fr" },
+  );
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "current_state");
+});
+
+test("extractCandidateFacts degrades honestly (no crash, no kind) for a language with no prior file yet", () => {
+  const facts = extractCandidateFacts(
+    ["ZIELE", "Bezahlbare Wohnungen: 500"].join("\n"),
+    { language: "de" },
+  );
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, null);
+});
+
+test("extractCandidateFacts honors a leading 'By <year>' / '(<year>)' prefix as asOfYear, without defaulting an unsignaled kind to 'goal'", () => {
   const facts = extractCandidateFacts("By 2030: Affordable housing units = 500");
   assert.equal(facts.length, 1);
   assert.equal(facts[0].asOfYear, 2030);
   assert.equal(facts[0].rawKey, "Affordable housing units");
   assert.equal(facts[0].rawValue, "500");
+  // A dated line is not, by itself, evidence of being a GOAL — a dated
+  // current-state line ("By 2024, current population reached 45,000") is
+  // exactly as plausible and an earlier version of this code silently
+  // guessed "goal" for both.
+  assert.equal(facts[0].kind, null);
 });
 
-test("extractCandidateFacts reads a markdown table using header names to pick key/value columns", () => {
+test("extractCandidateFacts strips a TRAILING 'by <year>' clause from the value — the far more natural phrasing real plan documents actually use", () => {
+  // Found on real sample data: without this, parseValue("500 by 2030") is
+  // type 'text' (the trailing digits aren't valid unit text), which silently
+  // makes a goal-vs-current delta report 'type-mismatch' against a clean
+  // current-state number, even though both sides are plainly numeric.
+  const facts = extractCandidateFacts("Affordable housing units: 500 by 2030");
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].rawValue, "500");
+  assert.equal(facts[0].asOfYear, 2030);
+  assert.equal(parseValue(facts[0].rawValue).type, "number");
+});
+
+test("extractCandidateFacts does not strip a trailing year from a value that already carries a real unit before it", () => {
+  const facts = extractCandidateFacts("Stormwater capacity: 12M gallons by 2028");
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].rawValue, "12M gallons");
+  assert.equal(facts[0].asOfYear, 2028);
+});
+
+test("extractCandidateFacts reads a markdown table using header names to pick key/value columns, given a declared language", () => {
   const text = [
     "| Indicator | Baseline | Target |",
     "| --- | --- | --- |",
     "| Graduation rate | 74% | 90% |",
   ].join("\n");
-  const facts = extractCandidateFacts(text);
+  const facts = extractCandidateFacts(text, { language: "en" });
   // Both baseline and target columns are not both extracted by one row scan —
   // this module picks one value column per row (target-like wins over
   // current/baseline-like when both are present) and the other one is not
@@ -131,11 +248,134 @@ test("extractCandidateFacts reads a markdown table using header names to pick ke
   assert.equal(facts[0].kind, "goal");
 });
 
+test("extractCandidateFacts picks no target/current column split at all without a declared language, rather than guessing from English column names", () => {
+  const text = [
+    "| Indicator | Baseline | Target |",
+    "| --- | --- | --- |",
+    "| Graduation rate | 74% | 90% |",
+  ].join("\n");
+  const facts = extractCandidateFacts(text);
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, null);
+});
+
 test("extractCandidateFacts reads tab-separated rows (DOCX table extraction shape)", () => {
   const facts = extractCandidateFacts("Berth capacity\t3.4m\n");
   assert.equal(facts.length, 1);
   assert.equal(facts[0].rawKey, "Berth capacity");
   assert.equal(facts[0].rawValue, "3.4m");
+});
+
+// ── Kind is derived from document structure only, never scored from a
+//    sentence's own vocabulary — see insight-store.js's header on why a
+//    keyword-based classifier (measured against CUBE.md's own refutation of
+//    the mechanism it was ported from) was removed rather than kept
+//    "advisory."
+
+test("extractCandidateFacts leaves kind null (an honest gap) for a line with no header/table/date signal, however decisive its own wording sounds", () => {
+  // No section header, no defaultKind, no year prefix — nothing structural
+  // declares a kind, so none is guessed from the sentence's own words alone,
+  // even though "goal" appears right in the text.
+  const facts = extractCandidateFacts("Youth graduation rate goal: 90% by 2030");
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, null);
+});
+
+test("extractCandidateFacts takes kind directly from a section header's own declared title, not from scoring the header's words", () => {
+  const facts = extractCandidateFacts("GOALS\nStormwater capacity: 12M gallons\n", { language: "en" });
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "goal");
+});
+
+test("extractCandidateFacts takes kind from the caller's document-level default when nothing else declares one", () => {
+  const facts = extractCandidateFacts("Stormwater capacity: 12M gallons\n", { defaultKind: "current_state" });
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "current_state");
+});
+
+// ── proposeFactsWithModel — model-assisted extraction, grounding-verified ──
+
+function stubModel(response) {
+  return async () => response;
+}
+
+test("proposeFactsWithModel accepts a candidate whose quote is a real, verbatim substring of the source", async () => {
+  const text = "Community Plan 2030\n\nThe city aims to increase the affordable housing stock by 40% by 2030 through zoning reform.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Affordable housing stock increase", value: "40%", kind: "goal", quote: "The city aims to increase the affordable housing stock by 40% by 2030 through zoning reform." },
+  ]));
+  const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
+  assert.equal(result.rejected.length, 0);
+  assert.equal(result.proposed.length, 1);
+  assert.equal(result.proposed[0].extractionMethod, "model");
+  assert.equal(result.proposed[0].kind, "goal");
+});
+
+test("proposeFactsWithModel rejects a candidate whose quote cannot be found verbatim in the source — a fabrication, not a fact", async () => {
+  const text = "Community Plan 2030\n\nThe city aims to increase the affordable housing stock by 40% by 2030.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Made up fact", value: "99%", kind: "goal", quote: "The city will eliminate all traffic congestion by 2030 through teleportation." },
+  ]));
+  const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
+  assert.equal(result.proposed.length, 0);
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reason, /not found verbatim/);
+});
+
+test("proposeFactsWithModel handles a model response that isn't valid JSON without throwing", async () => {
+  const callModel = stubModel("I don't see any additional facts in this document.");
+  const result = await proposeFactsWithModel("some text", { callModel, heuristicFacts: [] });
+  assert.equal(result.proposed.length, 0);
+  assert.equal(result.rejected.length, 1);
+});
+
+test("proposeFactsWithModel accepts the model's own kind claim as-is (no keyword-based cross-check) but always marks it kindConfident=false, needing human review", async () => {
+  const text = "Report.\n\nAs of 2024, the current graduation rate stands at 74%, well below where it should be.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Graduation rate", value: "74%", kind: "current_state", quote: "As of 2024, the current graduation rate stands at 74%, well below where it should be." },
+  ]));
+  const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
+  assert.equal(result.proposed.length, 1);
+  assert.equal(result.proposed[0].kind, "current_state");
+  // Never trusted as a structural fact, however plausible — same tier as
+  // the model's rawKey claim, and the same discipline extractCandidateFacts
+  // applies: a semantic judgment about content is not a document structure.
+  assert.equal(result.proposed[0].kindConfident, false);
+});
+
+test("proposeFactsWithModel rejects a candidate whose kind is missing or not one of the four valid kinds", async () => {
+  const text = "The city aims to increase transit ridership by 2030.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Transit ridership", value: "20%", kind: "aspiration", quote: "The city aims to increase transit ridership by 2030." },
+  ]));
+  const result = await proposeFactsWithModel(text, { callModel, heuristicFacts: [] });
+  assert.equal(result.proposed.length, 0);
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reason, /no valid kind/);
+});
+
+test("ingestDocument with useModel merges verified model facts through the same matchKey pipeline as heuristic facts, and reports the two tiers separately", async () => {
+  const store = freshStore();
+  const text = "GOALS\nAffordable housing units: 500 by 2030\n\nThe city also aims to cut its carbon footprint by 25% by 2030 through a new transit initiative.";
+  const callModel = stubModel(JSON.stringify([
+    { rawKey: "Carbon footprint reduction", value: "25%", kind: "goal", quote: "The city also aims to cut its carbon footprint by 25% by 2030 through a new transit initiative." },
+  ]));
+  const result = await store.ingestDocument("p1", { text, useModel: true, callModel });
+  assert.equal(result.heuristic.added, 1);
+  assert.equal(result.model.ran, true);
+  assert.equal(result.model.proposed, 1);
+  assert.equal(result.added, 2);
+  const modelObs = result.observations.find((o) => o.extractionMethod === "model");
+  assert.ok(modelObs);
+  assert.equal(modelObs.keyStatus, "unclear"); // no registry key exists yet for either — same pipeline, not model-assigned
+});
+
+test("ingestDocument reports model.ran=false (not a crash, not silence) when useModel is requested with no callModel configured", async () => {
+  const store = freshStore();
+  const result = await store.ingestDocument("p1", { text: "Affordable housing units: 500\n", useModel: true });
+  assert.equal(result.added, 1); // heuristic pass still ran
+  assert.equal(result.model.ran, false);
+  assert.ok(result.model.error);
 });
 
 // ── InsightStore: ingestion, key merging, unclear flagging ──────────────
@@ -246,6 +486,91 @@ test("conflicts() does not fire when two observations for the same key/kind/asOf
   await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "current_state", value: "210", asOf: "2026", sourceId: "a" });
   await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "current_state", value: "210", asOf: "2026", sourceId: "b" });
   assert.deepEqual(await store.conflicts("p1"), []);
+});
+
+// ── defineTerm() — a metric is useless without knowing what it measures ────
+
+test("defineTerm() finds a definition by exact raw-key text, with source, asOf, and jurisdiction carried through", async () => {
+  const store = freshStore();
+  await store.addObservation("p1", {
+    rawKey: "Affordable housing", kind: "definition",
+    value: "Housing costing no more than 30% of household income.",
+    asOf: "2024", sourceId: "source:a", sourceName: "Doc A",
+    quote: "Affordable housing is defined as housing costing no more than 30% of household income.",
+    jurisdiction: "HUD",
+  });
+  const result = await store.defineTerm("p1", "Affordable housing");
+  assert.equal(result.definitions.length, 1);
+  assert.equal(result.definitions[0].jurisdiction, "HUD");
+  assert.equal(result.definitions[0].sourceName, "Doc A");
+  assert.equal(result.definitions[0].asOf, "2024");
+  assert.equal(result.conflicting, false);
+});
+
+test("defineTerm() flags conflicting when two sources disagree on what a term means, rather than picking one", async () => {
+  const store = freshStore();
+  await store.addObservation("p1", {
+    rawKey: "Affordable housing", kind: "definition",
+    value: "Housing costing no more than 30% of household income.",
+    sourceId: "source:a", sourceName: "Doc A", jurisdiction: "HUD",
+  });
+  await store.addObservation("p1", {
+    rawKey: "Affordable housing", kind: "definition",
+    value: "Housing costing no more than 50% of area median income.",
+    sourceId: "source:b", sourceName: "Doc B", jurisdiction: "City of Example",
+  });
+  const result = await store.defineTerm("p1", "Affordable housing");
+  assert.equal(result.definitions.length, 2);
+  assert.equal(result.conflicting, true);
+  const jurisdictions = result.definitions.map((d) => d.jurisdiction).sort();
+  assert.deepEqual(jurisdictions, ["City of Example", "HUD"]);
+});
+
+test("defineTerm() does not conflict when two sources restate the same definition", async () => {
+  const store = freshStore();
+  await store.addObservation("p1", { rawKey: "Chronically Homeless", kind: "definition", value: "Homeless for 12+ months or 4+ episodes in 3 years with a disabling condition.", sourceId: "a" });
+  await store.addObservation("p1", { rawKey: "Chronically Homeless", kind: "definition", value: "Homeless for 12+ months or 4+ episodes in 3 years with a disabling condition.", sourceId: "b" });
+  const result = await store.defineTerm("p1", "Chronically Homeless");
+  assert.equal(result.definitions.length, 2);
+  assert.equal(result.conflicting, false);
+});
+
+test("defineTerm() returns an honest empty result for a term with no definition on file, not an error", async () => {
+  const store = freshStore();
+  const result = await store.defineTerm("p1", "Nonexistent term");
+  assert.deepEqual(result.definitions, []);
+  assert.equal(result.conflicting, false);
+});
+
+test("defineTerm() also finds a definition once its raw key has been resolved onto a canonical key", async () => {
+  const store = freshStore();
+  await store.createKey("p1", { key: "affordable_housing", label: "Affordable housing" });
+  await store.addObservation("p1", { key: "affordable_housing", rawKey: "Aff. housing", kind: "definition", value: "Housing costing no more than 30% of household income.", sourceId: "a" });
+  // A differently-spelled raw key that resolves to the SAME canonical key
+  // should be found too, not just an exact string match on the term typed.
+  const result = await store.defineTerm("p1", "affordable_housing");
+  assert.equal(result.definitions.length, 1);
+});
+
+test("state() flags definitionsConflict per key so a metric's number is never shown as if its definition were settled when it isn't", async () => {
+  const store = freshStore();
+  await store.createKey("p1", { key: "affordable_housing_units", label: "Affordable housing units" });
+  await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "goal", value: "500", asOf: "2030" });
+  await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "definition", value: "Units at or below 30% AMI.", sourceId: "a", jurisdiction: "HUD" });
+  await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "definition", value: "Units at or below 50% AMI.", sourceId: "b", jurisdiction: "City" });
+  const [row] = await store.state("p1");
+  assert.equal(row.definitionsConflict, true);
+  assert.equal(row.definitions.length, 2);
+  assert.equal(row.definitions[0].jurisdiction, "HUD");
+});
+
+test("state() reports definitionsConflict false when a key has one settled definition or none at all", async () => {
+  const store = freshStore();
+  await store.createKey("p1", { key: "affordable_housing_units", label: "Affordable housing units" });
+  await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "goal", value: "500", asOf: "2030" });
+  const [row] = await store.state("p1");
+  assert.equal(row.definitionsConflict, false);
+  assert.deepEqual(row.definitions, []);
 });
 
 // ── state() / deltaReport() ──────────────────────────────────────────────

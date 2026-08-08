@@ -160,7 +160,7 @@ const ATTACH_WINDOW = 120;
 // quoting "The best season the orchard yielded…" for a source that reads
 // "...in the best season the orchard yielded...", flagged unverified before
 // this fix though every byte after the first was identical).
-function quoteOccursIn(haystackNorm, quoteNorm) {
+export function quoteOccursIn(haystackNorm, quoteNorm) {
   if (haystackNorm.includes(quoteNorm)) return true;
   if (!quoteNorm) return false;
   // The mechanical citator's proof clauses are the source's own bytes,
