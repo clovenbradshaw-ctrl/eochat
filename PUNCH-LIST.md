@@ -153,6 +153,31 @@ right history rather than just that *a* reply rendered).
   question rather than fixing outright, since removing/rewriting history on edit is a
   larger behavior change than the other fixes in this pass.
 
+## Follow-up pass — more chat back-and-forth bugs (this session, cont'd)
+
+- **Renaming a chat silently reverted itself in the no-proxy path.** `renameConversation`
+  optimistically applied the new title, then PATCHed the proxy-only
+  `/api/conversations/:id`; on failure (no proxy to hit) it rolled the name back —
+  so the reader would watch their new title flash for a moment and silently revert,
+  with the only explanation logged to the Glass box, never the visible UI. (Compare
+  `renameProject`, which never rolls back — it's fire-and-forget.) Fixed by skipping the
+  network call entirely in `noProxyMode()` and treating the local rename as final, same
+  as every other local-first write path. Verified: rename now sticks.
+- **The "Web" search toggle is inert for Ollama-direct and Anthropic-direct chat, but
+  says nothing to indicate this.** The semantic gate that decides whether a turn needs
+  live web research (`_webGate`) only ever asks the in-browser WebLLM model to vote —
+  never the Ollama or Anthropic model actually answering the turn — so for anyone using
+  either of those providers the gate always returns "no verdict," and the old fallback
+  message ("no discourse weight required it") made that read as a deliberate judgment
+  call instead of "the vote never happened." (Separately, actual web search execution is
+  proxy-only — `/api/web-ground` — so even a working gate can't make search function
+  without a proxy; `runWebSearch`, used elsewhere for manually adding a web source, has
+  a real no-proxy fallback via DuckDuckGo's instant-answer API that this path doesn't
+  reuse.) Fixed the misleading message so a null verdict reads honestly as "no engine
+  was available to judge whether this needs web research" rather than implying a
+  considered "no." Wiring the gate itself (and ideally the actual search) through
+  whichever engine/method is actually active is a larger follow-up, not done here.
+
 ## Not yet tested — recommended follow-up
 
 - Recycle bin restore/purge (`d.restore` / `d.purge`, "Empty recycle bin").

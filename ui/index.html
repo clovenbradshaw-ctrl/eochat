@@ -6220,6 +6220,14 @@ class Component extends DCLogic {
     if (!trimmed || !current || current.name === trimmed) return;
     // Optimistic — setSpaces also re-saves the localStorage mirror.
     this.setSpaces(spaces => spaces.map(sp => sp.id === id ? { ...sp, name: trimmed } : sp));
+    // No proxy means no server record to PATCH — every no-proxy rename used
+    // to fire this fetch anyway, have it fail (connection refused), and roll
+    // the name straight back a moment later: the reader would see their new
+    // title flash for an instant and then silently revert, with the only
+    // explanation logged to the Glass box, never the visible chat. Treat the
+    // local-storage-backed rename above as final instead of provisional —
+    // same as renameProject's fire-and-forget PATCH, which never rolls back.
+    if (this.noProxyMode()) return;
     fetch(this.proxyUrl() + '/api/conversations/' + encodeURIComponent(id), {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: trimmed }),
     }).then(res => {
@@ -7237,14 +7245,22 @@ class Component extends DCLogic {
       webReason = 'the local model judged this needs live research';
     } else if (gate.needsWeb === false) {
       webReason = 'the local model judged this needs no web call';
+    } else {
+      // needsWeb is null, not false — the gate never actually rendered a
+      // verdict (today: only the in-browser WebLLM model can cast this
+      // vote, so Ollama-direct/Anthropic-direct turns land here every
+      // time), which is a different fact than "the model looked and said
+      // no." The old fallback text ("no discourse weight required it")
+      // implied a deliberate judgment call that never happened.
+      webReason = 'no engine was available to judge whether this needs web research';
     }
     this.setState({ thinkingPhase: useWeb ? 'searching the web...' : 'surfing...' });
     this.logAdd(useWeb ? '→' : '◱', useWeb
       ? `Web gate: on — ${webReason}.`
-      : `Web gate: off — ${webReason || 'no discourse weight required it'}.`, 'chat');
+      : `Web gate: off — ${webReason}.`, 'chat');
     this._thinkingLog(useWeb ? '→' : '◱', useWeb
       ? `Searching the web for "${gate.query}" — ${webReason}.`
-      : `No web search — ${webReason || 'no discourse weight required it'}.`);
+      : `No web search — ${webReason}.`);
 
     let groundData;
     let groundFailed = null;
