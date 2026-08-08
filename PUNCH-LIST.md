@@ -192,6 +192,32 @@ right history rather than just that *a* reply rendered).
   Verified both ways: dismissing the confirm leaves the chat/project untouched,
   accepting it deletes as before.
 
+## Follow-up pass — attaching a file in the no-proxy path (this session, cont'd)
+
+- **Attaching a file to a chat message and asking about it was completely non-functional
+  with no proxy, and the only feedback was a raw fetch error buried in the Glass box.**
+  `uploadFiles()` always calls `_ingestTextContent()`, which POSTs to the proxy-only
+  `/api/ingest` — no `noProxyMode()` fallback at all. Every no-proxy attachment failed
+  that call, the source row showed a bare `⊘` glyph, and the Glass box's only explanation
+  was `Upload failed for "x.txt" — Failed to fetch` (the exact class of raw-error problem
+  P1 #5 already names). Worse than misleading feedback: the file's content was then never
+  available to the model in any form — `localAskConversation()`'s `groundFailed` fallback
+  ("answer from general knowledge") had no path back to the attachment's own text, so a
+  file the reader could see sitting in the composer was invisible to every answer.
+  Verified end-to-end against a stub server that echoes back its actual received payload:
+  before this fix, asking about an attached file containing "The secret code is BANANA42"
+  produced zero mention of it anywhere in the system prompt. Fixed two things: (1)
+  `_uploadParsedFile` now caches the extracted text in `readerContent` *before* attempting
+  ingest (extraction had already succeeded; only the indexing call was the proxy-only
+  step), and its catch block distinguishes "no engine to index this" (now: `◐`, "stored in
+  this tab — no engine to index it, so it will be included directly") from a real ingest
+  failure; (2) a new `_attachmentContextText()` helper folds each attached file's cached
+  text directly into the turn's system prompt (capped at 24k chars total, truncated with a
+  note beyond that) whenever grounding is unavailable. No chunking, search, or citations —
+  just enough for the model to actually see what was attached, the same bar a ChatGPT/
+  Claude-style paste-a-file-and-ask-about-it turn needs to clear. Verified: the stub
+  server's received system message now contains the attached file's exact text.
+
 ## Not yet tested — recommended follow-up
 
 - Recycle bin restore/purge (`d.restore` / `d.purge`, "Empty recycle bin").

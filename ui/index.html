@@ -6659,6 +6659,30 @@ class Component extends DCLogic {
     return (attachments || []).map(a => ({ id: a.id, name: a.name, title: a.title }));
   }
 
+  // Raw fallback for when there's no engine to index/search an attachment
+  // (see localAskConversation's groundFailed branch): fold each attached
+  // file's already-extracted text (uploadFiles/EOFormats already did the
+  // parsing — this only reads what's cached in readerContent, never fetches
+  // or re-parses) straight into the prompt, capped so one large attachment
+  // can't blow the whole context window. No chunking, no search, no
+  // citations — just enough for the model to see what was actually attached.
+  _attachmentContextText(names) {
+    const CAP = 24000;
+    const parts = [];
+    let used = 0;
+    for (const name of names || []) {
+      const text = this.state.readerContent[name];
+      if (!text || !text.trim()) continue;
+      const room = CAP - used;
+      if (room <= 0) { parts.push(`[ATTACHED FILE: ${name}] — omitted, over the per-turn size cap for uncited attachments.`); continue; }
+      const slice = text.length > room ? text.slice(0, room) + '\n[...truncated...]' : text;
+      used += slice.length;
+      parts.push(`[ATTACHED FILE: ${name}]\n${slice}`);
+    }
+    if (!parts.length) return '';
+    return 'ATTACHED FILES — the reader attached these to this question. There is no engine to search or cite them, so they are included here in full (or truncated where noted); read them directly.\n\n' + parts.join('\n\n');
+  }
+
   async send() {
     if (this.state.streamingLoading) return;
     const q = this.state.draft.trim();
@@ -7222,6 +7246,12 @@ class Component extends DCLogic {
     const allTurns = this.activeSpace().turns || [];
     const regenIndex = regenerateTurnId ? allTurns.findIndex(t => t.id === regenerateTurnId) : -1;
     const priorTurns = regenIndex >= 0 ? allTurns.slice(0, regenIndex) : allTurns;
+    // Names of files attached to THIS turn, however it got here — a fresh
+    // send() carries live File objects (attachments), a regenerate has only
+    // the already-normalized {id,name,title} the turn was created with.
+    const attachmentNames = regenIndex >= 0
+      ? (allTurns[regenIndex].attachments || []).map(a => a.name)
+      : (attachments || []).map(a => a.name);
     this._localAbort = new AbortController();
     if (regenerateTurnId) {
       this.updateActiveSpace(sp => ({
@@ -7357,11 +7387,24 @@ class Component extends DCLogic {
       // invented citations — rather than refusing a reply this deployment was
       // built to produce. On the static build this is the normal shape: there
       // is no engine to reach.
-      this.logAdd('◱', `Local ${useWeb ? 'web search' : 'ground'} unavailable (${groundFailed.message}) — answering from project instructions and general knowledge only`, 'chat');
+      //
+      // Files attached to THIS turn are the one exception worth carrying
+      // through by hand: uploadFiles() already extracted their text
+      // client-side before the (proxy-only) /api/ingest call failed, and
+      // that text is cached in readerContent regardless of whether ingest
+      // succeeded (see _uploadParsedFile's catch). Without this, an attached
+      // file the reader can see sitting in the composer/Documents rail was
+      // invisible to the model — the turn answered "from general knowledge"
+      // as if nothing had been attached at all.
+      const attachmentContext = this._attachmentContextText(attachmentNames);
+      this.logAdd('◱', `Local ${useWeb ? 'web search' : 'ground'} unavailable (${groundFailed.message}) — answering from ${attachmentContext ? 'the attached file(s) and ' : ''}project instructions and general knowledge only`, 'chat');
       groundData = {
         grounded: false, warming: false, citations: [], gaps: [],
         total: 0, folded: 0, tokens: 0, budget: 0, dropped: 0, deliberate: false,
-        systemPrompt: 'No sources were reachable from this tab, so there are no documents or web results to cite. Answer from the project instructions and general knowledge only. Never fabricate source citations: if you would otherwise reference a source, say so plainly instead of inventing a bracket number.',
+        systemPrompt: (attachmentContext ? attachmentContext + '\n\n' : '')
+          + 'No sources were reachable from this tab, so there are no indexed documents or web results to cite.'
+          + (attachmentContext ? ' Answer using the attached file content above, the project instructions, and general knowledge.' : ' Answer from the project instructions and general knowledge only.')
+          + ' Never fabricate source citations: if you would otherwise reference a source, say so plainly instead of inventing a bracket number.',
       };
     }
 
@@ -7921,6 +7964,15 @@ class Component extends DCLogic {
         this.logAdd('◱', `Stored "${name}" for reading — ${r.gap || 'nothing indexable was found in it'}`, 'sources');
         return;
       }
+      // Cache the extracted text before attempting to index it — extraction
+      // already succeeded at this point, and this is the only copy of it the
+      // reader gets in noProxyMode() if the ingest call below fails (see the
+      // catch: /api/ingest is proxy-only, so it always fails there). Setting
+      // this early means a no-proxy attachment still has its raw text
+      // available for localAskConversation() to fold directly into the
+      // prompt, instead of the file existing only as a failed-upload chip
+      // the model never sees any part of.
+      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
 
       const result = await this._ingestTextContent(name, text, projectId);
       this.markSource(name, {
@@ -7930,17 +7982,26 @@ class Component extends DCLogic {
         ingested: true, chunks: result.chunks || 0,
         truncated: !!result.truncated, droppedChars: result.droppedChars || 0,
       });
-      // Cache locally so the reader can render it (the spreadsheet grid, the
-      // extracted document) without a round trip back through the proxy's
-      // attachment store.
-      this.setState(s => ({ readerContent: { ...s.readerContent, [name]: text } }));
       if (r.kind !== 'spreadsheet') this.fetchWindowOutline(name, text);
       const how = r.method ? ` via ${r.method}` : '';
       this.logAdd(result.truncated ? '◐' : '⋈', `Uploaded "${name}"${how} (${result.chunks || 0} chunks)${this._truncationNote(result)}`, 'sources');
       if (r.note) this.logAdd('◱', `"${name}" — ${r.note}`, 'sources');
     } catch (err) {
-      this.markSource(name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
-      this.logAdd('⊘', `Upload failed for "${name}" — ${err.message}`, 'sources');
+      // No engine to index against (noProxyMode(): local WebLLM/Ollama-
+      // direct/Anthropic-direct) is not the same failure as a real ingest
+      // error — the text is already cached above and localAskConversation()
+      // folds it straight into the prompt when grounding is unavailable, so
+      // the reader's question still gets answered from the file, just
+      // without chunked search/citations. Say that plainly instead of the
+      // raw "Failed to fetch". A real ingest error (engine reachable, but it
+      // rejected the content) still reports as a failure.
+      if (this.noProxyMode()) {
+        this.markSource(name, { processing: false, glyph: '◐', color: '#8C877C', ingested: false, indexed: false, chunks: 0 });
+        this.logAdd('◐', `"${name}" stored in this tab — no engine to index it, so it will be included directly (not searched/cited) when you ask about it`, 'sources');
+      } else {
+        this.markSource(name, { processing: false, glyph: '⊘', color: '#A3592B', ingestError: err.message });
+        this.logAdd('⊘', `Upload failed for "${name}" — ${err.message}`, 'sources');
+      }
     }
   }
 
