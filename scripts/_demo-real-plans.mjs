@@ -37,6 +37,10 @@ async function main() {
     sourceTextByName.set(f, text);
     const result = await store.ingestDocument(PROJECT, {
       text, sourceId: `source:${f}`, sourceName: f,
+      // Declared, not inferred — every document in this batch really is
+      // English; a real caller (the upload form) would know this per file,
+      // not assume it for whatever gets ingested.
+      language: "en",
     });
     perDoc.push({ file: f, chars: text.length, ...result });
     console.log(

@@ -1,0 +1,13 @@
+{
+  "schema": "InsightKindVocabPrior@1",
+  "language": "fr",
+  "provenance": {
+    "source": "hand-compiled from a real, currently-published French intercommunal housing plan: Plaine Commune's 'Programme Local de l'Habitat (PLH) 2022-2027' synthesis (plainecommune.fr). 'DIAGNOSTIC' and 'ORIENTATIONS' are the document's own real, bare section headings ('LE PLH 2022-2027 AFFIRME 6 GRANDES ORIENTATIONS', each a target like 'Construire une ville attractive et équilibrée' — functioning exactly as this schema's goal/target category, in the document's own vocabulary, not a translation of the English word). 'objectif(s)'/'action(s)'/'mesure(s)' appear repeatedly in this same document's running prose ('Ces objectifs nous obligent...', 'FOCUS SUR 3 ACTIONS') but are not directly confirmed as bare section headers in the one document sampled — added as standard PLH-domain vocabulary (a PLH's legally-required structure names an 'état des lieux'/diagnostic and a 'programme d'actions') rather than invented from English. No real evidence sampled yet for a French definition/glossary header — left empty rather than guessed."
+  },
+  "vocab": {
+    "goal": ["orientation", "orientations", "objectif", "objectifs"],
+    "current_state": ["diagnostic", "état des lieux", "etat des lieux", "situation actuelle"],
+    "intervention_metric": ["action", "actions", "mesure", "mesures", "programme d'actions", "programme d actions"],
+    "definition": []
+  }
+}

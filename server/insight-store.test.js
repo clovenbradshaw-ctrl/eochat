@@ -136,7 +136,7 @@ test("sameValue compares numeric values by number+unit and refuses to equate dif
 
 // ── extractCandidateFacts ────────────────────────────────────────────────
 
-test("extractCandidateFacts pulls key:value lines and tags kind from section headers", () => {
+test("extractCandidateFacts pulls key:value lines and tags kind from section headers, given a declared language", () => {
   const text = [
     "GOALS",
     "Affordable housing units: 500 by 2030",
@@ -144,7 +144,7 @@ test("extractCandidateFacts pulls key:value lines and tags kind from section hea
     "CURRENT STATE",
     "Affordable housing units: 210",
   ].join("\n");
-  const facts = extractCandidateFacts(text);
+  const facts = extractCandidateFacts(text, { language: "en" });
   assert.equal(facts.length, 2);
   assert.equal(facts[0].kind, "goal");
   assert.equal(facts[0].rawKey, "Affordable housing units");
@@ -154,12 +154,62 @@ test("extractCandidateFacts pulls key:value lines and tags kind from section hea
   assert.equal(facts[1].rawValue, "210");
 });
 
-test("extractCandidateFacts honors a leading 'By <year>' / '(<year>)' prefix as asOfYear", () => {
+// "goals may never ever be called goals": the literal English word is never
+// baked into this module as a universal signal. Undeclared language, the
+// exact same document above gets NO kind signal from its headers at all —
+// an honest gap, not a silent assumption that untagged text is English.
+test("extractCandidateFacts gives no kind signal from section headers when no language is declared", () => {
+  const text = ["GOALS", "Affordable housing units: 500"].join("\n");
+  const facts = extractCandidateFacts(text);
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, null);
+});
+
+test("extractCandidateFacts reads a real Spanish municipal-plan header ('OBJETIVOS') via the es kind-vocabulary prior", () => {
+  // "OBJETIVOS" is a real section heading in Málaga's published Plan
+  // Municipal de Vivienda y Suelo ("2. OBJETIVOS Y METODOLOGÍA", "2.1.
+  // OBJETIVOS", "Objetivos Generales:") — not a translation guessed from the
+  // English word list.
+  const facts = extractCandidateFacts(
+    ["OBJETIVOS", "Viviendas asequibles: 500"].join("\n"),
+    { language: "es" },
+  );
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "goal");
+});
+
+test("extractCandidateFacts reads a real French PLH header ('DIAGNOSTIC') via the fr kind-vocabulary prior", () => {
+  // "DIAGNOSTIC" is a real section heading in Plaine Commune's published
+  // Programme Local de l'Habitat 2022-2027 synthesis — the document's own
+  // word for its current-state/needs-assessment section.
+  const facts = extractCandidateFacts(
+    ["DIAGNOSTIC", "Logements sociaux: 4200"].join("\n"),
+    { language: "fr" },
+  );
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, "current_state");
+});
+
+test("extractCandidateFacts degrades honestly (no crash, no kind) for a language with no prior file yet", () => {
+  const facts = extractCandidateFacts(
+    ["ZIELE", "Bezahlbare Wohnungen: 500"].join("\n"),
+    { language: "de" },
+  );
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, null);
+});
+
+test("extractCandidateFacts honors a leading 'By <year>' / '(<year>)' prefix as asOfYear, without defaulting an unsignaled kind to 'goal'", () => {
   const facts = extractCandidateFacts("By 2030: Affordable housing units = 500");
   assert.equal(facts.length, 1);
   assert.equal(facts[0].asOfYear, 2030);
   assert.equal(facts[0].rawKey, "Affordable housing units");
   assert.equal(facts[0].rawValue, "500");
+  // A dated line is not, by itself, evidence of being a GOAL — a dated
+  // current-state line ("By 2024, current population reached 45,000") is
+  // exactly as plausible and an earlier version of this code silently
+  // guessed "goal" for both.
+  assert.equal(facts[0].kind, null);
 });
 
 test("extractCandidateFacts strips a TRAILING 'by <year>' clause from the value — the far more natural phrasing real plan documents actually use", () => {
@@ -181,13 +231,13 @@ test("extractCandidateFacts does not strip a trailing year from a value that alr
   assert.equal(facts[0].asOfYear, 2028);
 });
 
-test("extractCandidateFacts reads a markdown table using header names to pick key/value columns", () => {
+test("extractCandidateFacts reads a markdown table using header names to pick key/value columns, given a declared language", () => {
   const text = [
     "| Indicator | Baseline | Target |",
     "| --- | --- | --- |",
     "| Graduation rate | 74% | 90% |",
   ].join("\n");
-  const facts = extractCandidateFacts(text);
+  const facts = extractCandidateFacts(text, { language: "en" });
   // Both baseline and target columns are not both extracted by one row scan —
   // this module picks one value column per row (target-like wins over
   // current/baseline-like when both are present) and the other one is not
@@ -196,6 +246,17 @@ test("extractCandidateFacts reads a markdown table using header names to pick ke
   assert.equal(facts[0].rawKey, "Graduation rate");
   assert.equal(facts[0].rawValue, "90%");
   assert.equal(facts[0].kind, "goal");
+});
+
+test("extractCandidateFacts picks no target/current column split at all without a declared language, rather than guessing from English column names", () => {
+  const text = [
+    "| Indicator | Baseline | Target |",
+    "| --- | --- | --- |",
+    "| Graduation rate | 74% | 90% |",
+  ].join("\n");
+  const facts = extractCandidateFacts(text);
+  assert.equal(facts.length, 1);
+  assert.equal(facts[0].kind, null);
 });
 
 test("extractCandidateFacts reads tab-separated rows (DOCX table extraction shape)", () => {
@@ -221,7 +282,7 @@ test("extractCandidateFacts leaves kind null (an honest gap) for a line with no 
 });
 
 test("extractCandidateFacts takes kind directly from a section header's own declared title, not from scoring the header's words", () => {
-  const facts = extractCandidateFacts("GOALS\nStormwater capacity: 12M gallons\n");
+  const facts = extractCandidateFacts("GOALS\nStormwater capacity: 12M gallons\n", { language: "en" });
   assert.equal(facts.length, 1);
   assert.equal(facts[0].kind, "goal");
 });
@@ -425,6 +486,91 @@ test("conflicts() does not fire when two observations for the same key/kind/asOf
   await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "current_state", value: "210", asOf: "2026", sourceId: "a" });
   await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "current_state", value: "210", asOf: "2026", sourceId: "b" });
   assert.deepEqual(await store.conflicts("p1"), []);
+});
+
+// ── defineTerm() — a metric is useless without knowing what it measures ────
+
+test("defineTerm() finds a definition by exact raw-key text, with source, asOf, and jurisdiction carried through", async () => {
+  const store = freshStore();
+  await store.addObservation("p1", {
+    rawKey: "Affordable housing", kind: "definition",
+    value: "Housing costing no more than 30% of household income.",
+    asOf: "2024", sourceId: "source:a", sourceName: "Doc A",
+    quote: "Affordable housing is defined as housing costing no more than 30% of household income.",
+    jurisdiction: "HUD",
+  });
+  const result = await store.defineTerm("p1", "Affordable housing");
+  assert.equal(result.definitions.length, 1);
+  assert.equal(result.definitions[0].jurisdiction, "HUD");
+  assert.equal(result.definitions[0].sourceName, "Doc A");
+  assert.equal(result.definitions[0].asOf, "2024");
+  assert.equal(result.conflicting, false);
+});
+
+test("defineTerm() flags conflicting when two sources disagree on what a term means, rather than picking one", async () => {
+  const store = freshStore();
+  await store.addObservation("p1", {
+    rawKey: "Affordable housing", kind: "definition",
+    value: "Housing costing no more than 30% of household income.",
+    sourceId: "source:a", sourceName: "Doc A", jurisdiction: "HUD",
+  });
+  await store.addObservation("p1", {
+    rawKey: "Affordable housing", kind: "definition",
+    value: "Housing costing no more than 50% of area median income.",
+    sourceId: "source:b", sourceName: "Doc B", jurisdiction: "City of Example",
+  });
+  const result = await store.defineTerm("p1", "Affordable housing");
+  assert.equal(result.definitions.length, 2);
+  assert.equal(result.conflicting, true);
+  const jurisdictions = result.definitions.map((d) => d.jurisdiction).sort();
+  assert.deepEqual(jurisdictions, ["City of Example", "HUD"]);
+});
+
+test("defineTerm() does not conflict when two sources restate the same definition", async () => {
+  const store = freshStore();
+  await store.addObservation("p1", { rawKey: "Chronically Homeless", kind: "definition", value: "Homeless for 12+ months or 4+ episodes in 3 years with a disabling condition.", sourceId: "a" });
+  await store.addObservation("p1", { rawKey: "Chronically Homeless", kind: "definition", value: "Homeless for 12+ months or 4+ episodes in 3 years with a disabling condition.", sourceId: "b" });
+  const result = await store.defineTerm("p1", "Chronically Homeless");
+  assert.equal(result.definitions.length, 2);
+  assert.equal(result.conflicting, false);
+});
+
+test("defineTerm() returns an honest empty result for a term with no definition on file, not an error", async () => {
+  const store = freshStore();
+  const result = await store.defineTerm("p1", "Nonexistent term");
+  assert.deepEqual(result.definitions, []);
+  assert.equal(result.conflicting, false);
+});
+
+test("defineTerm() also finds a definition once its raw key has been resolved onto a canonical key", async () => {
+  const store = freshStore();
+  await store.createKey("p1", { key: "affordable_housing", label: "Affordable housing" });
+  await store.addObservation("p1", { key: "affordable_housing", rawKey: "Aff. housing", kind: "definition", value: "Housing costing no more than 30% of household income.", sourceId: "a" });
+  // A differently-spelled raw key that resolves to the SAME canonical key
+  // should be found too, not just an exact string match on the term typed.
+  const result = await store.defineTerm("p1", "affordable_housing");
+  assert.equal(result.definitions.length, 1);
+});
+
+test("state() flags definitionsConflict per key so a metric's number is never shown as if its definition were settled when it isn't", async () => {
+  const store = freshStore();
+  await store.createKey("p1", { key: "affordable_housing_units", label: "Affordable housing units" });
+  await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "goal", value: "500", asOf: "2030" });
+  await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "definition", value: "Units at or below 30% AMI.", sourceId: "a", jurisdiction: "HUD" });
+  await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "definition", value: "Units at or below 50% AMI.", sourceId: "b", jurisdiction: "City" });
+  const [row] = await store.state("p1");
+  assert.equal(row.definitionsConflict, true);
+  assert.equal(row.definitions.length, 2);
+  assert.equal(row.definitions[0].jurisdiction, "HUD");
+});
+
+test("state() reports definitionsConflict false when a key has one settled definition or none at all", async () => {
+  const store = freshStore();
+  await store.createKey("p1", { key: "affordable_housing_units", label: "Affordable housing units" });
+  await store.addObservation("p1", { key: "affordable_housing_units", rawKey: "x", kind: "goal", value: "500", asOf: "2030" });
+  const [row] = await store.state("p1");
+  assert.equal(row.definitionsConflict, false);
+  assert.deepEqual(row.definitions, []);
 });
 
 // ── state() / deltaReport() ──────────────────────────────────────────────

@@ -756,6 +756,122 @@ catch block no longer labels every failure `"Proxy unavailable"`.
 
 ---
 
+## L11 — Perception is mechanical and auditable before it is inferred
+
+**A module reads structure with the engine's own organs, checked against real
+target data before being adopted. What a word MEANS is a named, sourced
+prior, never a literal string baked into code as if it were universal. A
+model is reached for only when no mechanical signal applies, and its claim
+is never trusted merely because it parsed as JSON.**
+
+This is three failures that kept recurring in the same feature
+(server/insight-store.js's community-insights extraction) until each was
+caught and fixed in turn, recorded together because they are one discipline,
+not three unrelated bugs.
+
+**The vocabulary failure.** An early version hard-coded one English word
+list — `goal: /\b(goals?|targets?|objectives?)\b/i` — directly into the
+module, exactly the un-disclosed language-scoping A2 already forbids for a
+different organ, except worse: it did not even fail loudly. Real, currently-
+published plan documents in other languages declare the identical semantic
+category in their own words — Málaga's Plan Municipal de Vivienda y Suelo
+says `OBJETIVOS`, not "goals"; Plaine Commune's Programme Local de l'Habitat
+says `DIAGNOSTIC` and `ORIENTATIONS` for exactly the current-state and
+goal categories this schema names — and none of them matched an
+English-only regex. "Goals" is never a safe universal signal for a semantic
+category, in any one language, including English.
+
+**The unchecked-transfer failure.** Before swapping the module's own crude
+header-shape regex for eoreader6's real, more principled structural-outline
+organ (`@eoreader/engine/perceiver/text/segments.js::outlineOfIndex`), it was
+run against the actual target data first rather than assumed to transfer
+because it is the "real" organ. It does not transfer: against 10 real
+government plan PDFs extracted via `pdftotext -layout`, it surfaced 0 of the
+needed section headers and instead surfaced council-member name lines, TOC
+numbering, and column-mangled fragments — a real, different noise problem on
+this document class, not an improvement. `outlineOfIndex`'s own header
+already discloses its assumption (a heading is followed by a blank line, a
+convention this document class does not reliably preserve after lossy PDF
+extraction); the fix here was checking that disclosed assumption against
+real data before adopting it, not deciding by inspection that "the more
+principled organ" must be better.
+
+**The ungrounded-default failure.** Independent of vocabulary or organ
+choice, a dated line with no other kind signal defaulted to `"goal"` — a
+hardcoded semantic assumption with no reading behind it at all ("anything
+with a target year must be a goal"), wrong on its face for a dated
+current-state line. Removed rather than softened, for the same reason a
+keyword classifier was removed rather than softened in the correction this
+law generalizes (see L8's sibling discipline and insight-store.js's own
+header on `CUBE.md`'s word-shuffle falsification).
+
+### Clauses
+
+- **L11a — Semantic vocabulary is a named, sourced, per-language prior, never
+  a literal baked into a module.** Same discipline as an abbreviation prior
+  (`@eoreader/host/corpus.js::loadAbbreviationPrior`): `language` is RECEIVED
+  from the caller, never inferred from the text; a prior file names its own
+  giver (real documents it was checked against, or the standard-vocabulary
+  source it was compiled from); no language declared, or no prior exists yet
+  for the one declared, yields an honest gap — never a silent fall-through to
+  whatever language the code happened to be written in.
+- **L11b — An engine organ earns adoption against the caller's real target
+  data, not against where it was already validated.** A more principled or
+  more "official" organ is not exempt from this — its own disclosed scope
+  and assumptions are checked against real, representative data for the NEW
+  use before it replaces a cruder mechanism, and a negative result is
+  recorded as a finding, not quietly discarded.
+- **L11c — Mechanical, auditable signals are exhausted before a model is
+  asked to judge anything.** A form-based structural test, a value's parsed
+  type, a named prior — all checkable by a human reading the same code path
+  — are reached for first. A model is invoked only when no such signal
+  applies, matching this session's own explicit correction: "as much as
+  possible done mechanically with auditable priors, only in extreme cases
+  use the LLM."
+- **L11d — A model's claim is gated behind an independent, measurable check
+  before being trusted, or disclosed as unconfirmed.** Generalizes L8c past
+  quotations: `proposeFactsWithModel`'s claimed `kind` is accepted as a
+  claim (`kindConfident: false`) and never mechanically cross-checked
+  against a second keyword guess — a keyword scan is not a check, it is a
+  second guess no more grounded than the first — but it is never promoted to
+  a resolved fact on its own say-so either.
+
+### Measurement
+
+`node --test server/insight-store.test.js` — the language-prior tests read
+real headers from real, currently-published documents (`OBJETIVOS` from
+Málaga's plan, `DIAGNOSTIC` from Plaine Commune's PLH) through the `es`/`fr`
+priors and confirm no language declared yields no kind signal at all, even
+for the English word "GOALS" itself (L11a). `scripts/_demo-real-plans.mjs`
+against the 10 real PDFs is L11b's falsification record for
+`outlineOfIndex` — rerunning it is how a future attempt to adopt a
+different "official" organ should be checked, not skipped.
+
+### Fixed under this law
+
+- Removed the hard-coded English `HEADER_KIND_WORDS` regex; replaced with
+  `server/priors/insight-kind-vocab/{en,es,fr}.json`, each schema
+  `InsightKindVocabPrior@1` with a required `provenance.source` naming
+  exactly which real documents (or standard-vocabulary source) it was
+  compiled from, loaded only for a `language` the caller declares.
+- Removed the `year ? (sectionKind || "goal") : sectionKind` fallback in
+  `extractCandidateFacts` — a dated line with no other signal now stays
+  whatever `sectionKind` already was (usually null), never `"goal"` by
+  default.
+- Generalized the table-column target/current split (`targetIdx`/
+  `currentIdx`) to read the same per-language prior instead of a second,
+  independently-hardcoded English regex. `keyIdx` (which column names the
+  row's label, a structural role rather than a kind) is a known, disclosed
+  remaining English-only heuristic, not yet fixed — recorded rather than
+  silently left.
+- `outlineOfIndex` was NOT adopted for section-header detection after being
+  measured against the real 10-document corpus and found to surface 0 of
+  the needed headers — a negative result, recorded here rather than
+  discarded, so a future attempt does not re-spend the same effort without
+  knowing this was already tried and why it didn't transfer.
+
+---
+
 ## Candidate laws
 
 Observed as consistent practice but not yet enforced by a check. Promote by

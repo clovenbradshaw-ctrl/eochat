@@ -1288,6 +1288,41 @@
           </div>
           </sc-if>
 
+          <!-- ── Define a term — independent of the standardized-key table,
+               since a glossary term is often on file long before anyone
+               merges it into a canonical metric key. A metric's own number
+               means nothing without this. ── -->
+          <div style="display:flex; flex-direction:column; gap:6px; border:1px solid #E4DFD5; border-radius:8px; background:#FFFDFA; padding:10px 12px;">
+            <span style="font-size:12.5px; font-weight:600; color:#26241F;">What does this term mean?</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <input type="text" value="{{ insightDefineTerm }}" onChange="{{ onInsightDefineTermChange }}" placeholder="e.g. Affordable housing, Chronically Homeless" style="flex:1; max-width:320px; border:1px solid #E4DFD5; border-radius:6px; background:#FFFFFF; padding:5px 9px; font-family:inherit; font-size:11.5px; color:#26241F;"/>
+              <button type="button" onClick="{{ lookupInsightDefinition }}" disabled="{{ insightDefineDisabled }}" style="border:1px solid #E4DFD5; background:none; border-radius:6px; padding:4px 10px; font-family:inherit; font-size:11.5px; color:#4A463E; cursor:pointer;">{{ insightDefineLoading ? 'Looking up…' : 'Look up' }}</button>
+            </div>
+            <sc-if value="{{ hasInsightDefineResult }}">
+              <div style="display:flex; flex-direction:column; gap:4px; padding-top:2px;">
+                <sc-if value="{{ hasInsightDefineError }}">
+                  <span style="font-size:11.5px; color:#C0341A;">Could not look up "{{ insightDefineTermShown }}" — {{ insightDefineError }}</span>
+                </sc-if>
+                <sc-if value="{{ insightDefineConflict }}">
+                  <span style="font-size:10.5px; font-weight:600; color:#C0341A; background:#FBE3DC; padding:1px 6px; border-radius:8px; align-self:flex-start;">sources disagree on what this means</span>
+                </sc-if>
+                <sc-for list="{{ insightDefineRows }}" as="d">
+                  <span style="font-size:11.5px; color:#4A463E;">
+                    {{ d.value }}
+                    <span style="color:#A39D91;">— {{ d.sourceLabel }}<sc-if value="{{ d.asOf }}"> ({{ d.asOf }})</sc-if></span>
+                    <sc-if value="{{ d.hasJurisdiction }}"><span style="color:#A39D91;"> · {{ d.jurisdiction }}</span></sc-if>
+                  </span>
+                </sc-for>
+                <sc-if value="{{ insightDefineEmpty }}">
+                  <span style="font-size:11.5px; color:#A39D91;">No definition on file yet for "{{ insightDefineTermShown }}".</span>
+                  <sc-if value="{{ hasInsightDefineCandidates }}">
+                    <span style="font-size:11px; color:#8C877C;">Closest known keys: {{ insightDefineCandidates }}</span>
+                  </sc-if>
+                </sc-if>
+              </div>
+            </sc-if>
+          </div>
+
           <!-- ── Standardized keys / delta table ── -->
           <div style="display:flex; flex-direction:column; gap:8px;">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
@@ -1376,9 +1411,18 @@
 
                   <sc-if value="{{ row.hasDefinitions }}">
                     <div style="display:flex; flex-direction:column; gap:3px;">
-                      <span style="font-size:11px; font-weight:600; color:#6E6A60; text-transform:uppercase; letter-spacing:.05em;">Definitions</span>
+                      <div style="display:flex; align-items:center; gap:6px;">
+                        <span style="font-size:11px; font-weight:600; color:#6E6A60; text-transform:uppercase; letter-spacing:.05em;">Definitions</span>
+                        <sc-if value="{{ row.definitionsConflict }}">
+                          <span style="font-size:10.5px; font-weight:600; color:#C0341A; background:#FBE3DC; padding:1px 6px; border-radius:8px;">sources disagree on what this means</span>
+                        </sc-if>
+                      </div>
                       <sc-for list="{{ row.definitionRows }}" as="d">
-                        <span style="font-size:11.5px; color:#4A463E;">{{ d.value }} <span style="color:#A39D91;">— {{ d.sourceLabel }}</span></span>
+                        <span style="font-size:11.5px; color:#4A463E;">
+                          {{ d.value }}
+                          <span style="color:#A39D91;">— {{ d.sourceLabel }}</span>
+                          <sc-if value="{{ d.hasJurisdiction }}"><span style="color:#A39D91;"> · {{ d.jurisdiction }}</span></sc-if>
+                        </span>
                       </sc-for>
                     </div>
                   </sc-if>
@@ -2932,6 +2976,12 @@ class Component extends DCLogic {
     // label or category, since a real community-insights project can end up
     // with far more keys than fit on screen at once.
     _insightKeyFilter: '',
+    // "What does this term actually mean" lookup — independent of the
+    // standardized-key table above, since a glossary term is often extracted
+    // long before anyone bothers to merge it into a canonical metric key.
+    _insightDefineTerm: '',
+    _insightDefineResult: null,
+    _insightDefineLoading: false,
     // The other family of senses: Hugging Face models installed into THIS
     // browser and run here (senses-runtime.js / window.EOSenses), no endpoint
     // and no proxy. Mirrored from that module's snapshot rather than owned
@@ -4278,6 +4328,25 @@ class Component extends DCLogic {
         _insightConflicts: this._localInsightConflicts(projectId),
         _insightError: null, _insightOffline: true, _insightLoading: false,
       });
+    }
+  }
+
+  // "What does this term actually mean" — independent of the standardized-
+  // key table, since a glossary definition is often on file long before
+  // anyone merges its term into a canonical metric key.
+  async lookupInsightDefinition() {
+    const projectId = this.state.activeProjectId;
+    const term = this.state._insightDefineTerm.trim();
+    if (!projectId || !term) return;
+    this.setState({ _insightDefineLoading: true });
+    try {
+      const url = this.proxyUrl() + '/api/projects/' + encodeURIComponent(projectId)
+        + '/insights/define?term=' + encodeURIComponent(term);
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const result = res.ok ? await res.json() : { term, definitions: [], candidates: [], conflicting: false, error: `proxy returned ${res.status}` };
+      this.setState({ _insightDefineResult: result, _insightDefineLoading: false });
+    } catch (err) {
+      this.setState({ _insightDefineResult: { term, definitions: [], candidates: [], conflicting: false, error: err.message }, _insightDefineLoading: false });
     }
   }
 
@@ -10178,7 +10247,14 @@ class Component extends DCLogic {
         currentSourceLabel: row.current ? (row.current.sourceName || row.current.sourceId || 'unknown source') : '',
 
         hasDefinitions: row.definitions.length > 0,
-        definitionRows: row.definitions.map(d => ({ value: d.value, sourceLabel: d.sourceName || d.sourceId || 'unknown source' })),
+        definitionsConflict: !!row.definitionsConflict,
+        definitionRows: row.definitions.map(d => ({
+          value: d.value,
+          sourceLabel: d.sourceName || d.sourceId || 'unknown source',
+          asOf: d.asOf || '',
+          jurisdiction: d.jurisdiction || '',
+          hasJurisdiction: !!d.jurisdiction,
+        })),
         hasInterventions: row.interventions.length > 0,
         interventionRows: row.interventions.map(iv => ({
           text: `${iv.value}${iv.asOf ? ` — ${iv.asOf}` : ''}`, sourceLabel: iv.sourceName || iv.sourceId || 'unknown source',
@@ -11553,6 +11629,34 @@ class Component extends DCLogic {
       onInsightKeyFilterChange: (e) => this.setState({ _insightKeyFilter: e.target.value }),
       hasInsightKeyFilter: !!S._insightKeyFilter.trim(),
       clearInsightKeyFilter: () => this.setState({ _insightKeyFilter: '' }),
+
+      // "What does this term mean" lookup — see lookupInsightDefinition().
+      insightDefineTerm: S._insightDefineTerm,
+      onInsightDefineTermChange: (e) => this.setState({ _insightDefineTerm: e.target.value }),
+      lookupInsightDefinition: () => this.lookupInsightDefinition(),
+      insightDefineDisabled: !S._insightDefineTerm.trim() || S._insightDefineLoading,
+      insightDefineLoading: S._insightDefineLoading,
+      ...(() => {
+        const r = S._insightDefineResult;
+        if (!r) return { hasInsightDefineResult: false };
+        return {
+          hasInsightDefineResult: true,
+          insightDefineTermShown: r.term,
+          insightDefineError: r.error || '',
+          hasInsightDefineError: !!r.error,
+          insightDefineConflict: !!r.conflicting,
+          insightDefineEmpty: !r.error && (r.definitions || []).length === 0,
+          insightDefineCandidates: (r.candidates || []).map(c => c.label).join(', '),
+          hasInsightDefineCandidates: !r.error && (r.definitions || []).length === 0 && (r.candidates || []).length > 0,
+          insightDefineRows: (r.definitions || []).map(d => ({
+            value: d.value,
+            sourceLabel: d.sourceName || d.sourceId || 'unknown source',
+            asOf: d.asOf || '',
+            hasJurisdiction: !!d.jurisdiction,
+            jurisdiction: d.jurisdiction || '',
+          })),
+        };
+      })(),
       exportInsightDeltaCsv: () => this.exportInsightDeltaCsv(),
       insightExportDisabled: !insightStateRowsAll.length,
 

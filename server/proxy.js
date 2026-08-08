@@ -4984,6 +4984,11 @@ const server = http.createServer((req, res) => {
               sourceName: data.name || null,
               useModel,
               callModel,
+              // Received from the caller — never inferred. The uploader
+              // knows what language their own document is in; guessing it
+              // from the bytes is exactly the silent-English-default this
+              // module's kind-vocabulary priors were built to refuse.
+              language: data.language || null,
             });
             return sendJson(200, result);
           }
@@ -5008,7 +5013,7 @@ const server = http.createServer((req, res) => {
             const observation = await insightStore.addObservation(project.id, {
               key: data.key || null, rawKey: data.rawKey || data.key, kind: data.kind, value: data.value,
               asOf: data.asOf || null, sourceId: data.sourceId || null, sourceName: data.sourceName || null,
-              quote: data.quote || null,
+              quote: data.quote || null, jurisdiction: data.jurisdiction || null,
             });
             return sendJson(201, observation);
           }
@@ -5058,6 +5063,15 @@ const server = http.createServer((req, res) => {
           // the same resolved key/kind/point-in-time, each with its source.
           if (req.method === "GET" && segments.length === 5 && sub === "conflicts") {
             return sendJson(200, { conflicts: await insightStore.conflicts(project.id) });
+          }
+
+          // GET /api/projects/:id/insights/define?term= — what does this term
+          // actually mean, per which source, as of when, under whose
+          // jurisdiction — a metric's number means nothing without this.
+          if (req.method === "GET" && segments.length === 5 && sub === "define") {
+            const term = url.searchParams.get("term");
+            if (!term) return sendJson(400, { error: "'term' query param is required" });
+            return sendJson(200, await insightStore.defineTerm(project.id, term));
           }
 
           // GET /api/projects/:id/insights/history?key=&kind= — every resolved

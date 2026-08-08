@@ -38,6 +38,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { MEMORY_DIR } from "./paths.js";
 // Grounding verification for model-proposed facts (proposeFactsWithModel,
 // below) reuses this app's own citation-fidelity primitives — the exact
@@ -314,19 +315,77 @@ function asOfSortKey(asOf) {
 // text against a small set of section-title words is reading what the
 // author wrote, not inferring semantics from word frequency — kept for that
 // reason, while the sentence-level fallback is not.
+//
+// THE WORDS THEMSELVES ARE A LANGUAGE PRIOR, NOT ENGINE VOCABULARY. A first
+// version of this hard-coded one English word list (goal/target/objective,
+// current state/baseline/status, ...) directly into this module — the exact
+// failure A2/L7 already name for a different organ ("a module being
+// legitimately scoped to one language... while its own documentation stays
+// silent about that scope"), except this one did not even disclose the
+// scope: a real Spanish plan (Málaga's 'Plan Municipal de Vivienda y Suelo')
+// declares its goals section 'OBJETIVOS' and its strategic-action sections
+// 'ESTRATEGIA 1..5'; a real French PLH (Plaine Commune's 2022-2027 synthesis)
+// declares its own goals/targets 'ORIENTATIONS' and its current-state
+// section 'DIAGNOSTIC' — none of those survive an English-only regex, and
+// "goals may never ever be called goals": the literal string is never a
+// safe universal signal, in ANY one language, for a semantic category.
+//
+// Re-earned on corpus.js's own pattern (loadAbbreviationPrior): `language` is
+// RECEIVED, never inferred (SEED.md #1, Amendment V) — a caller that knows
+// the document's language passes it, and a NAMED, SOURCED prior
+// (bin/priors/insight-kind-vocab/<language>.json, provenance.source required,
+// same discipline as bin/priors/lang/*.json) supplies that language's own
+// words for each kind. No language declared, or no prior exists for the one
+// declared: kind stays an honest null, exactly like any other undeclared
+// structural signal — never a silent fall-through to English.
+const KIND_VOCAB_PRIORS_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "priors", "insight-kind-vocab");
+const kindVocabCache = new Map();
 
-const HEADER_KIND_WORDS = {
-  goal: /\b(goals?|targets?|objectives?)\b/i,
-  current_state: /\b(current\s+state|baseline|status)\b/i,
-  intervention_metric: /\b(interventions?|metrics?|indicators?)\b/i,
-  definition: /\b(definitions?|glossary)\b/i,
-};
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-function detectSectionKind(line) {
-  const isHeader = /^#{1,6}\s+/.test(line)
-    || (line === line.toUpperCase() && /[A-Z]/.test(line) && line.trim().length > 2 && line.trim().length < 80 && !/[.!?]$/.test(line.trim()));
-  if (!isHeader) return null;
-  for (const [kind, pattern] of Object.entries(HEADER_KIND_WORDS)) {
+function loadKindVocabPrior(language) {
+  if (!language) return null;
+  if (kindVocabCache.has(language)) return kindVocabCache.get(language);
+  const file = path.join(KIND_VOCAB_PRIORS_ROOT, `${language}.json`);
+  let result = null;
+  if (fs.existsSync(file)) {
+    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (raw.schema !== "InsightKindVocabPrior@1") {
+      throw new TypeError(`loadKindVocabPrior: expected InsightKindVocabPrior@1, got ${raw.schema}`);
+    }
+    if (!raw.provenance?.source) throw new TypeError("loadKindVocabPrior: a prior must name its giver");
+    const patterns = {};
+    for (const [kind, terms] of Object.entries(raw.vocab || {})) {
+      if (!terms.length) continue;
+      patterns[kind] = new RegExp(`\\b(${terms.map(escapeRegExp).join("|")})\\b`, "iu");
+    }
+    result = { language: raw.language, giver: raw.provenance.source, patterns };
+  }
+  kindVocabCache.set(language, result);
+  return result;
+}
+
+// A header's SHAPE (short, standalone, not sentence-punctuated) is language-
+// general — Unicode letter classes, no English-specific assumption. What the
+// shape-matched line is DECLARING is a separate question, answered only when
+// a language-specific vocab prior is available (see above); a header with no
+// matching prior is still recognized as a header (sectionKind stays at
+// whatever it already was), it just contributes no NEW kind signal.
+function isHeaderShaped(line) {
+  const trimmed = line.trim();
+  if (trimmed.length <= 2 || trimmed.length >= 80) return false;
+  if (/[.!?]$/.test(trimmed)) return false;
+  if (/^#{1,6}\s+/.test(line)) return true;
+  return trimmed === trimmed.toUpperCase() && /\p{Lu}/u.test(trimmed) && !/\p{Ll}/u.test(trimmed);
+}
+
+function detectSectionKind(line, language) {
+  if (!isHeaderShaped(line)) return null;
+  const prior = loadKindVocabPrior(language);
+  if (!prior) return null;
+  for (const [kind, pattern] of Object.entries(prior.patterns)) {
     if (pattern.test(line)) return kind;
   }
   return null;
@@ -394,8 +453,14 @@ function looksLikeHeaderRow(cells) {
  * `kind` is null when no section/sentence signal named one — callers should
  * fall back to a caller-supplied default kind (e.g. "this whole upload is a
  * goals document") rather than guessing further here.
+ *
+ * `language`: RECEIVED from the caller, never inferred (see detectSectionKind
+ * above) — the header words that mean "goal"/"current state"/etc. are a
+ * per-language prior, not a fact this module derives from the text itself.
+ * Omitted: header text still contributes no kind signal at all (an honest
+ * gap), never a silent assumption that the document is in English.
  */
-export function extractCandidateFacts(text, { defaultKind = null } = {}) {
+export function extractCandidateFacts(text, { defaultKind = null, language = null } = {}) {
   const lines = String(text || "").split(/\r?\n/);
   const facts = [];
   let sectionKind = defaultKind;
@@ -431,7 +496,7 @@ export function extractCandidateFacts(text, { defaultKind = null } = {}) {
     const trimmed = raw.replace(/\s+$/, "").trim();
     if (!trimmed) { tableHeader = null; return; }
 
-    const sk = detectSectionKind(trimmed);
+    const sk = detectSectionKind(trimmed, language);
     if (sk) { sectionKind = sk; tableHeader = null; return; }
 
     const cells = splitDelimitedRow(trimmed);
@@ -446,13 +511,31 @@ export function extractCandidateFacts(text, { defaultKind = null } = {}) {
         pushKV(cells[0], cells[cells.length - 1], sectionKind, trimmed, i + 1);
         return;
       }
+      const kindPrior = loadKindVocabPrior(language);
+      // The KIND a target/current column implies is read from the SAME
+      // per-language prior detectSectionKind uses, never a second,
+      // independently-hardcoded English word list — a document in a
+      // language with no prior loaded gets no target/current column split at
+      // all (targetIdx/currentIdx below both stay -1), rather than silently
+      // matching English words against non-English column headers.
+      //
+      // keyIdx (which column holds the ROW LABEL, not a kind) is still an
+      // English-only heuristic and a known, disclosed scope limit, not yet
+      // fixed here: it decides a structural role ("which column names the
+      // thing"), not a semantic kind, so it was out of scope for this pass,
+      // but it is the same class of bug and should move to a per-language
+      // prior too.
       const keyIdx = tableHeader.findIndex((h) => /key|indicator|metric|item|measure|name/i.test(h));
       // A goal/target-named column wins over a current/baseline-named one
       // when a row has both (e.g. "Indicator | Baseline | Target") — the
       // plan's target is the more informative single value to extract, and
       // the baseline is still visible via the quote for anyone who reads it.
-      const targetIdx = tableHeader.findIndex((h) => /target|goal/i.test(h));
-      const currentIdx = tableHeader.findIndex((h) => /current|baseline|status|result/i.test(h));
+      const targetIdx = kindPrior?.patterns.goal
+        ? tableHeader.findIndex((h) => kindPrior.patterns.goal.test(h))
+        : -1;
+      const currentIdx = kindPrior?.patterns.current_state
+        ? tableHeader.findIndex((h) => kindPrior.patterns.current_state.test(h))
+        : -1;
       const kI = keyIdx >= 0 ? keyIdx : 0;
       const vI = targetIdx >= 0 ? targetIdx : (currentIdx >= 0 ? currentIdx : (kI === 1 ? 0 : 1));
       let rowKind = sectionKind;
@@ -469,7 +552,14 @@ export function extractCandidateFacts(text, { defaultKind = null } = {}) {
     let m = bulletStripped.match(/^([A-Za-z][\w /()'".,-]{1,90}?)\s*[:=]\s*(\S.{0,180})$/);
     if (!m) m = bulletStripped.match(/^([A-Za-z][\w /()'".,-]{1,90}?)\s+[–—-]\s+(\S.{0,180})$/);
     if (m) {
-      pushKV(m[1], m[2], year ? (sectionKind || "goal") : sectionKind, trimmed, i + 1, year);
+      // A "By <year>" / "(<year>)" prefix names a POINT IN TIME, not a kind —
+      // an earlier version defaulted a dated-but-otherwise-unsignaled line to
+      // "goal" (the hardcoded English assumption "anything with a target year
+      // must be a goal"), which is exactly as unearned as matching the literal
+      // word "goal" would be, and wrong on its face for a dated current-state
+      // line ("By 2024, current population reached 45,000"). asOfYear is
+      // recorded either way; kind still comes only from sectionKind.
+      pushKV(m[1], m[2], sectionKind, trimmed, i + 1, year);
     }
   });
 
@@ -722,12 +812,25 @@ export class InsightStore {
    * missing, ingestion still completes with the heuristic results and
    * `model.ran === false` names why, rather than silently returning fewer
    * facts than a caller who asked for the model pass would expect.
+   *
+   * `language` (e.g. "en", "es", "fr"): the document's declared language,
+   * used only to pick which per-language kind-vocabulary prior
+   * (server/priors/insight-kind-vocab/<language>.json) reads header/column
+   * words like "goal"/"objetivos"/"orientations" — never inferred from the
+   * text. Omitted, or no prior exists yet for the language given: headers
+   * and table columns still contribute no kind signal, exactly the same
+   * honest gap as a document with no headers at all.
    */
-  async ingestDocument(projectId, { text, kind = null, asOf = null, sourceId = null, sourceName = null, useModel = false, callModel = null } = {}) {
+  async ingestDocument(projectId, { text, kind = null, asOf = null, sourceId = null, sourceName = null, useModel = false, callModel = null, language = null } = {}) {
     return this.#withLock(projectId, async () => {
       const registry = await this.#readRegistry(projectId);
       const obsStore = await this.#readObservations(projectId);
-      const heuristicFacts = extractCandidateFacts(text, { defaultKind: kind });
+      // `language` is RECEIVED from the caller (the upload form, an API
+      // client that already knows what it's uploading) — never inferred from
+      // the text here. Omitted, header/table-column kind words contribute no
+      // signal at all rather than assuming English; see detectSectionKind's
+      // header for why.
+      const heuristicFacts = extractCandidateFacts(text, { defaultKind: kind, language });
 
       let modelFacts = [];
       let modelSummary = null;
@@ -789,6 +892,13 @@ export class InsightStore {
           value: fact.rawValue,
           parsed,
           asOf: fact.asOfYear ? String(fact.asOfYear) : asOf,
+          // No mechanical signal in a document's text reliably answers
+          // "whose definition/authority is this" — jurisdiction is never
+          // guessed here, only ever declared (addObservation, or a future
+          // human review pass), same discipline as `language`/`kind`. An
+          // honest null, not an assumption of "whatever this project's
+          // other facts happen to be under."
+          jurisdiction: null,
           sourceId, sourceName,
           quote: fact.quote,
           line: fact.line,
@@ -818,7 +928,16 @@ export class InsightStore {
   }
 
   /** Manually record a single fact — the correction path for what automatic extraction gets wrong or never sees at all. */
-  async addObservation(projectId, { key = null, rawKey, kind, value, asOf = null, sourceId = null, sourceName = null, quote = null } = {}) {
+  /**
+   * `jurisdiction`: the body/authority a fact is defined or reported under
+   * (e.g. "HUD", "City of Houston", "24 CFR 91.5") — declared by the human
+   * entering this observation, never guessed. There is no mechanical way to
+   * derive "whose definition is this" from a sentence's own wording, the
+   * same reasoning `language` and `kind` already rest on elsewhere in this
+   * module: an honest null (see defineTerm()) beats a plausible-looking
+   * guess about authority.
+   */
+  async addObservation(projectId, { key = null, rawKey, kind, value, asOf = null, sourceId = null, sourceName = null, quote = null, jurisdiction = null } = {}) {
     return this.#withLock(projectId, async () => {
       const registry = await this.#readRegistry(projectId);
       const obsStore = await this.#readObservations(projectId);
@@ -842,7 +961,7 @@ export class InsightStore {
         // extracted text.
         kindStatus: "resolved", extractionMethod: "manual",
         rawKey: rawKey || (registry.keys.find((k) => k.key === obsKey)?.label) || obsKey,
-        key: obsKey, keyStatus, candidates, value, parsed, asOf,
+        key: obsKey, keyStatus, candidates, value, parsed, asOf, jurisdiction,
         sourceId, sourceName, quote: quote || null, line: null,
         manual: true, createdAt: now, updatedAt: now,
       };
@@ -996,7 +1115,7 @@ export class InsightStore {
     for (const o of obsStore.observations) {
       if (o.keyStatus !== "resolved" || !o.key) continue;
       const asOfBucket = o.asOf || "—";
-      const bucketKey = `${o.key} ${o.kind} ${asOfBucket}`;
+      const bucketKey = `${o.key} ${o.kind} ${asOfBucket}`;
       if (!buckets.has(bucketKey)) buckets.set(bucketKey, { key: o.key, kind: o.kind, asOf: o.asOf || null, observations: [] });
       buckets.get(bucketKey).observations.push(o);
     }
@@ -1016,6 +1135,58 @@ export class InsightStore {
       }
     }
     return out;
+  }
+
+  /**
+   * defineTerm: what does this term actually mean, per whom, as of when —
+   * for a term directly, not only for a metric that happens to reference it.
+   *
+   * A goal or current-state NUMBER is not evidence on its own — "affordable
+   * housing units: 500" means nothing without knowing what counts as
+   * "affordable," under whose definition, and whether that definition is
+   * still the one in force. This looks up every `definition`-kind
+   * observation for `term`, by the SAME two-tier discipline every other
+   * lookup in this module uses: an EXACT normalized match (the term itself,
+   * or a raw key already seen with identical normalized text) is returned
+   * directly; anything looser (structural/Jaccard) is offered as
+   * `candidates` — "did you mean" — never silently folded into the result,
+   * for the same reason matchKey() never auto-merges on a fuzzy score.
+   *
+   * `conflicting: true` means more than one DISTINCT definition text is on
+   * file for this term — surfaced, never resolved by picking one, mirroring
+   * conflicts() for metrics. A reader comparing a "goal" of 500 units across
+   * two documents needs to know if those two documents were even using the
+   * same definition of "unit."
+   */
+  async defineTerm(projectId, term) {
+    const registry = await this.#readRegistry(projectId);
+    const obsStore = await this.#readObservations(projectId);
+    const norm = normalizeKeyText(term);
+    const match = matchKey(term, registry.keys);
+
+    const defs = obsStore.observations.filter((o) => {
+      if (o.kind !== "definition") return false;
+      if (normalizeKeyText(o.rawKey) === norm) return true;
+      if (match.status === "exact" && o.keyStatus === "resolved" && o.key === match.key) return true;
+      return false;
+    }).sort((a, b) => asOfSortKey(a.asOf).localeCompare(asOfSortKey(b.asOf)));
+
+    const distinct = [];
+    for (const d of defs) {
+      if (!distinct.some((x) => normalizeKeyText(x.value) === normalizeKeyText(d.value))) distinct.push(d);
+    }
+
+    return {
+      term,
+      matchedKey: match.status === "exact" ? match.key : null,
+      candidates: match.status === "candidates" ? match.candidates : [],
+      definitions: defs.map((d) => ({
+        observationId: d.id, value: d.value, quote: d.quote,
+        sourceId: d.sourceId, sourceName: d.sourceName,
+        asOf: d.asOf, jurisdiction: d.jurisdiction ?? null,
+      })),
+      conflicting: distinct.length > 1,
+    };
   }
 
   // Picks the most-recent-by-asOf observation for a (key, kind); returns
@@ -1093,12 +1264,25 @@ export class InsightStore {
         sourceId: current.value.sourceId, sourceName: current.value.sourceName, quote: current.value.quote,
       } : null;
 
+      // A metric with no linked definition, or with disagreeing ones on
+      // file, is flagged rather than silently listed — the number above
+      // means nothing without knowing what it measures and whether every
+      // source measuring it meant the same thing (see defineTerm()'s header).
+      const distinctDefinitions = [];
+      for (const d of definitions) {
+        if (!distinctDefinitions.some((x) => normalizeKeyText(x.value) === normalizeKeyText(d.value))) distinctDefinitions.push(d);
+      }
+
       return {
         key: entry.key, label: entry.label, category: entry.category, unit: entry.unit, directionality: entry.directionality,
         goal: goalOut, goalConflict: goal.conflict,
         current: currentOut, currentConflict: current.conflict,
         delta, deltaStatus, progress,
-        definitions: definitions.map((d) => ({ id: d.id, value: d.value, sourceId: d.sourceId, sourceName: d.sourceName, quote: d.quote })),
+        definitions: definitions.map((d) => ({
+          id: d.id, value: d.value, sourceId: d.sourceId, sourceName: d.sourceName, quote: d.quote,
+          asOf: d.asOf, jurisdiction: d.jurisdiction ?? null,
+        })),
+        definitionsConflict: distinctDefinitions.length > 1,
         interventions: interventions.map((iv) => ({ id: iv.id, value: iv.value, asOf: iv.asOf, sourceId: iv.sourceId, sourceName: iv.sourceName, quote: iv.quote })),
         signalCount: all.filter((o) => o.key === entry.key).length,
       };
