@@ -27,11 +27,24 @@ export function createOllamaChatAdapter({ model, url = process.env.OLLAMA_URL ||
       });
       if (!resp.ok) throw new Error(`Ollama ${resp.status}: ${await resp.text()}`);
       const data = await resp.json();
+      // Ollama reports nanosecond durations split by phase — load_duration is
+      // a one-time model-load cost (not part of steady-state throughput once
+      // the model is warm), prompt_eval_duration is prefill, eval_duration is
+      // token generation. Surfacing all of them (not just wall time) is what
+      // lets a caller compute a real tokens/sec figure instead of guessing
+      // from wall-clock, which is dominated by whichever call happened to pay
+      // the (one-time) load cost.
       return {
         text: (data.message?.content || "").trim(),
         model,
         wallMs: Date.now() - t0,
         usage: { input_tokens: data.prompt_eval_count ?? null, output_tokens: data.eval_count ?? null },
+        timingNs: {
+          total: data.total_duration ?? null,
+          load: data.load_duration ?? null,
+          promptEval: data.prompt_eval_duration ?? null,
+          eval: data.eval_duration ?? null,
+        },
       };
     },
   };

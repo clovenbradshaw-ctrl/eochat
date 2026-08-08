@@ -21,7 +21,7 @@ import assert from "node:assert";
 
 import {
   applyTurn, buildMemoryMessage, checkRecallDenial, contentTerms,
-  emptyMemory, extractStatedFacts, isAcknowledgment, normalizeFactText,
+  emptyMemory, extractStatedFacts, isAcknowledgment, isDenialSentence, normalizeFactText,
   sameFact, updateHotTerms, updateStatedFacts,
   FACT_CHAR_BUDGET, FACTS_MAX,
 } from "../server/conversation-memory.js";
@@ -188,6 +188,23 @@ test("denying a recorded code is flagged", () => {
   assert.equal(result.verdict, "FLAGGED");
   assert.equal(result.flags[0].type, "false_denial");
   assert.ok(result.flags[0].fact.includes("X9-Falcon-42"));
+});
+
+test("a correct citation is not mistaken for a denial just because it also uses 'not' elsewhere", () => {
+  // Found empirically against two independent real model answers: a
+  // sentence that correctly cites a recorded fact using one of the
+  // DENIAL_SUBJECT words ("stated", "mentioned", "provided") is not a
+  // denial just because an unrelated negation appears later in the same
+  // sentence for a different reason ("...so it's not overdue").
+  assert.ok(!isDenialSentence(
+    "You stated that the last full cleaning and sanitizing cycle was Sunday night, so it's not overdue on that front.",
+  ));
+  assert.ok(!isDenialSentence(
+    "This is an important piece of information for troubleshooting, but it's not typically what you'd expect from a normal operating condition.",
+  ));
+  // A real denial keeps the negation and the record-word close together —
+  // must still be caught.
+  assert.ok(isDenialSentence("That information was never provided in this conversation."));
 });
 
 test("an unrelated denial is not flagged", () => {

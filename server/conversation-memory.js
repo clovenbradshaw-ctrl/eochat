@@ -138,12 +138,38 @@ export function updateHotTerms(hot = [], { userText = "", assistantText = "", tu
 // and with acknowledgment; an acknowledged fact is kept ahead of an unconfirmed
 // one under budget pressure, and the renderer labels it so the model can tell
 // "the reader told me this and I confirmed it" from "the reader told me this".
+
+// Real speech routinely states something and asks about it in the same
+// breath, with no terminal punctuation between the two — "I already replaced
+// the o-ring — does that matter?", "...it's Sunday night, right?". splitSentences
+// sees one sentence ending in "?", and a naive question-filter would discard
+// the whole thing, throwing away the stated half along with the asked half.
+// This recovers the declarative lead-in from that specific shape — a dash- or
+// tag-question-attached question — WITHOUT touching a sentence that is a
+// question from the start (no declarative lead-in exists to recover).
+const TAG_QUESTION = /^(.*?),\s*(?:right|correct|isn'?t (?:it|that)|wasn'?t (?:it|that)|didn'?t (?:i|it|you|we)|doesn'?t it|don'?t you think)\?\s*$/i;
+function declarativeLeadIn(sentence) {
+  const dashParts = sentence.split(/\s+[—–]\s+/);
+  if (dashParts.length > 1) {
+    const lead = dashParts[0].trim();
+    const rest = dashParts.slice(1).join(" — ").trim();
+    if (lead && !/\?\s*$/.test(lead) && /\?\s*$/.test(rest)) return lead;
+  }
+  const tag = sentence.match(TAG_QUESTION);
+  if (tag && tag[1] && !/\?\s*$/.test(tag[1].trim())) return tag[1].trim();
+  return null;
+}
+
 export function extractStatedFacts(text, { cap = 12 } = {}) {
   const out = [];
   for (const s of splitSentences(text)) {
-    const t = s.text.trim();
+    let t = s.text.trim();
+    if (/\?\s*$/.test(t)) {
+      const lead = declarativeLeadIn(t);
+      if (!lead) continue; // a genuine question states nothing
+      t = lead;
+    }
     if (t.length < FACT_MIN_CHARS || t.length > FACT_MAX_CHARS) continue;
-    if (/\?\s*$/.test(t)) continue; // a question states nothing
     // A denial is not a fact — it is a claim about the record that the
     // recall-denial review (below) handles instead of the desk.
     if (isDenialSentence(t)) continue;
@@ -284,11 +310,35 @@ export function buildMemoryMessage({ hot = [], facts = [] } = {}) {
 // provided, the conversation…) is checked against the desk. If the reader's
 // question shares ≥2 content terms with a recorded fact — or shares a
 // code-like token — the denial is a false denial of a recorded fact.
-const DENIAL_VERB = /\b(?:didn'?t|did not|wasn'?t|was not|weren'?t|were not|haven'?t|have not|hasn'?t|has not|hadn'?t|never|can'?t|cannot|can not|couldn'?t|could not|isn'?t|is not|aren'?t|are not|n'?t|not)\b/i;
-const DENIAL_SUBJECT = /\b(?:information|record|records|mention|mentions|knowledge|recall|remember|codes?|facts?|details?|data|conversation|material|discussed|discussion|stated|provided|given|received|shared|mentioned|recorded|sources?|passages?)\b/i;
+const DENIAL_VERB = /\b(?:didn'?t|did not|wasn'?t|was not|weren'?t|were not|haven'?t|have not|hasn'?t|has not|hadn'?t|never|can'?t|cannot|can not|couldn'?t|could not|isn'?t|is not|aren'?t|are not|n'?t|not)\b/gi;
+const DENIAL_SUBJECT = /\b(?:information|record|records|mention|mentions|knowledge|recall|remember|codes?|facts?|details?|data|conversation|material|discussed|discussion|stated|provided|given|received|shared|mentioned|recorded|sources?|passages?)\b/gi;
+
+// Several of the DENIAL_SUBJECT words ("stated", "mentioned", "provided",
+// "given") are exactly what a CORRECT recall answer uses affirmatively
+// ("You stated that X was Y", "as you mentioned"). A real denial keeps the
+// negation and the subject close together ("never provided", "no record",
+// "not discussed") — requiring them within a short distance, rather than
+// matching anywhere in the whole sentence, is what tells "You stated X, so
+// it's not overdue" (an affirmation with an unrelated negation later in the
+// sentence) apart from "that information was never provided" (a real
+// denial). Found empirically: two independent real model answers correctly
+// cited a recorded fact and were still flagged as denials under the old
+// whole-sentence check, purely because an unrelated "not" appeared later in
+// the same sentence.
+const DENIAL_PROXIMITY_CHARS = 30;
 
 export function isDenialSentence(sentence) {
-  return DENIAL_VERB.test(sentence) && DENIAL_SUBJECT.test(sentence);
+  const text = String(sentence || "");
+  const verbMatches = [...text.matchAll(DENIAL_VERB)];
+  if (!verbMatches.length) return false;
+  const subjectMatches = [...text.matchAll(DENIAL_SUBJECT)];
+  if (!subjectMatches.length) return false;
+  for (const v of verbMatches) {
+    for (const s of subjectMatches) {
+      if (Math.abs(v.index - s.index) <= DENIAL_PROXIMITY_CHARS) return true;
+    }
+  }
+  return false;
 }
 
 /**
