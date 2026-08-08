@@ -178,6 +178,20 @@ right history rather than just that *a* reply rendered).
   considered "no." Wiring the gate itself (and ideally the actual search) through
   whichever engine/method is actually active is a larger follow-up, not done here.
 
+## Follow-up pass — delete confirmations (this session, cont'd)
+
+- **Deleting an entire chat or an entire project happened instantly on a single click,
+  with zero confirmation and no recycle bin.** Every other destructive action in this
+  codebase confirms first — deleting a source (`confirm(...)`, and even then it only
+  moves to a recoverable recycle bin), permanently purging a source from the recycle
+  bin, purging the whole recycle bin, clearing downloaded local models — but
+  `deleteConversation`/`deleteProject` (the trash icons in the Chats list and the
+  Projects sidebar) had no guard at all: one click, gone, no undo, and for a project
+  that means every document and conversation scoped to it. Fixed by adding
+  `window.confirm(...)` to both, matching the wording/pattern already used elsewhere.
+  Verified both ways: dismissing the confirm leaves the chat/project untouched,
+  accepting it deletes as before.
+
 ## Not yet tested — recommended follow-up
 
 - Recycle bin restore/purge (`d.restore` / `d.purge`, "Empty recycle bin").
@@ -185,4 +199,5 @@ right history rather than just that *a* reply rendered).
 - Priors tab toggles (bucket/prior enable, subscribe, "activate on ingestion").
 - Senses install flow (downloading a vision model into the browser).
 - Mobile/narrow-viewport layout — several `eo-mobile-only` buttons exist in the DOM but were never exercised at a narrow viewport.
-- Delete-chat and delete-project confirmation flows.
+- ~~Delete-chat and delete-project confirmation flows.~~ **Tested and fixed** — see follow-up
+  pass below.

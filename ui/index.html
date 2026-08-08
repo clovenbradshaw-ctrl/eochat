@@ -4645,6 +4645,12 @@ class Component extends DCLogic {
   }
 
   async deleteProject(id) {
+    // Same gap as deleteConversation: every other destructive action in this
+    // app confirms first, but a project — its documents, instructions, and
+    // every conversation scoped to it — used to disappear on one click with
+    // no confirmation and no recycle bin.
+    const target = this.state.projects.find(p => p.id === id);
+    if (!window.confirm(`Delete "${target ? target.name : 'this project'}"? This deletes all its documents and conversations and cannot be undone.`)) return;
     this._saveLocalInstruction(id, '');
     const remaining = this.state.projects.filter(p => p.id !== id);
     const nextActive = this.state.activeProjectId === id ? (remaining[0] ? remaining[0].id : null) : this.state.activeProjectId;
@@ -6241,6 +6247,13 @@ class Component extends DCLogic {
   }
 
   async deleteConversation(id) {
+    // Every other destructive action in this app confirms first — deleting a
+    // source (which even then only moves it to a recoverable recycle bin),
+    // purging the recycle bin, clearing downloaded local models. A whole
+    // conversation was the one exception: one click on the trash icon, no
+    // confirmation, no recycle bin, gone for good. Match the rest of the app.
+    const target = this.state.spaces.find(sp => sp.id === id);
+    if (!window.confirm(`Delete "${target ? target.name : 'this conversation'}"? This cannot be undone.`)) return;
     const remaining = this.state.spaces.filter(s => s.id !== id);
     this.setState(s => {
       const nextActive = s.activeSpaceId === id ? (remaining[0] ? remaining[0].id : null) : s.activeSpaceId;
