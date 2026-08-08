@@ -1,8 +1,9 @@
-// Two ways of assembling the context for one chat turn, built from the SAME
-// real production functions turn-controller.js itself calls — never a
-// reimplementation of either. The only difference between them is which real
-// functions get called, which is exactly the variable this eval exists to
-// isolate:
+// Three ways of assembling the context for one chat turn. `baseline` and
+// `holonic` are built from the SAME real production functions
+// turn-controller.js itself calls — never a reimplementation of either.
+// `growingContext` is the adversary: a deliberately naive pipeline that does
+// NOT call the production windowing function at all, because that omission
+// IS the thing under test.
 //
 //   baseline — buildHistoryMessages() only (server/turn-controller.js). This
 //     is "normal chatting": a fixed sliding window of the last HISTORY_TURNS
@@ -18,9 +19,15 @@
 //     what it evicts (see conversation-memory.js's own FACTS_MAX/
 //     FACT_CHAR_BUDGET headers).
 //
-// Both conditions replay the identical scripted conversation through the
-// identical real functions — the comparison is the point, not either
-// pipeline in isolation.
+//   growingContext — the adversary this eval was built to test against:
+//     every turn ever exchanged, verbatim, resent in full on every request,
+//     with no windowing and no fold at all. This is "just run a Claude model
+//     with a growing context window instead of surf and fold" — the prompt
+//     this pipeline sends grows without bound as the conversation lengthens,
+//     which is exactly the property `baseline`/`holonic` refuse by design.
+//
+// All three conditions replay the identical scripted conversation — the
+// comparison is the point, not any one pipeline in isolation.
 
 import { buildHistoryMessages } from "../../server/turn-controller.js";
 import { applyTurn, buildMemoryMessage, emptyMemory, isAcknowledgment } from "../../server/conversation-memory.js";
@@ -83,6 +90,25 @@ export function holonicContext(conv, memory) {
   const messages = buildHistoryMessages(conv, null);
   const memoryMsg = buildMemoryMessage(memory);
   return memoryMsg ? [{ role: "system", content: memoryMsg }, ...messages] : messages;
+}
+
+/**
+ * The adversary pipeline: the ENTIRE raw conversation, every turn, unbounded,
+ * with no windowing and no desk. Deliberately does not call
+ * buildHistoryMessages() — bypassing the production windowing function is
+ * the whole point, since this pipeline models what a harness gets by simply
+ * growing the context window every turn instead of surfing/folding it.
+ */
+export function growingContext(conv) {
+  const out = [];
+  for (const t of conv.turns || []) {
+    out.push({ role: "user", content: t.question });
+    const active = (t.answers || []).find((a) => a.id === t.activeAnswerId);
+    if (active && active.status === "completed" && active.text) {
+      out.push({ role: "assistant", content: active.text });
+    }
+  }
+  return out;
 }
 
 export function contextText(messages) {

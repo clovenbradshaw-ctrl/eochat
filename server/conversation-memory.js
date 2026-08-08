@@ -186,10 +186,10 @@ const CONFIRMED_WEIGHT = 10;
 export function updateStatedFacts(facts = [], { userText = "", assistantText = "", turn = 0, confirmed = false } = {}) {
   const next = facts.map((f) => ({ ...f }));
 
-  const upsert = (text, weight, restated) => {
+  const upsertUser = (text, weight) => {
     for (const raw of extractStatedFacts(text)) {
       const existing = next.find((f) => sameFact(f.text, raw));
-      const ack = restated || confirmed;
+      const ack = confirmed;
       if (existing) {
         existing.seen += 1;
         existing.lastTurn = Math.max(existing.lastTurn, turn);
@@ -208,10 +208,33 @@ export function updateStatedFacts(facts = [], { userText = "", assistantText = "
     }
   };
 
-  upsert(userText, 1, false);
   // The assistant restating a fact is the strongest acknowledgment there is —
-  // it answered FROM the fact.
-  upsert(assistantText, 1, true);
+  // it answered FROM the fact. But "restating" means the assistant's reply
+  // actually contains something the READER stated (matched via sameFact
+  // against the desk's own existing entries) — not that every declarative
+  // sentence the assistant writes is itself a stated fact. A substantive
+  // answer to a real question ("HPCO means the compressor overheated...") is
+  // the assistant's OWN informative content, not something the reader said;
+  // treating it as a confirmed fact at CONFIRMED_WEIGHT floods the desk with
+  // the assistant's own prose and evicts facts the reader actually stated —
+  // exactly backwards for a desk whose whole job is remembering the reader.
+  // Only existing entries get upgraded here; unmatched assistant sentences
+  // are never inserted as new facts.
+  const acknowledgeFromAssistant = (text) => {
+    if (!next.length) return;
+    const assistantSentences = extractStatedFacts(text, { cap: 40 });
+    if (!assistantSentences.length) return;
+    for (const existing of next) {
+      const isRestated = assistantSentences.some((s) => sameFact(existing.text, s));
+      if (!isRestated) continue;
+      existing.weight = Math.max(existing.weight, CONFIRMED_WEIGHT);
+      existing.confirmed = true;
+      existing.lastTurn = Math.max(existing.lastTurn, turn);
+    }
+  };
+
+  upsertUser(userText, 1);
+  acknowledgeFromAssistant(assistantText);
 
   // Eviction is honest: sort by weight (acknowledged first), then recency, and
   // keep as much as the budget allows. What is dropped is dropped because it

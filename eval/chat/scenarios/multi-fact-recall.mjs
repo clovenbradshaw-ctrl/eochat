@@ -16,8 +16,8 @@ const FACT_B = "the callsign is Meridian-7";
 const SCRIPT = [
   // Both facts stated back-to-back, early, so enough filler turns can push
   // BOTH out of the real HISTORY_TURNS(=6) window — not just the first one.
-  { question: "Quick note before we start.", answer: `Understood — ${FACT_A}.` },
-  { question: "Also, one more thing.", answer: `Got it — ${FACT_B}.` },
+  { question: `Quick note before we start — ${FACT_A}.`, answer: `Understood — ${FACT_A}.` },
+  { question: `Also, one more thing — ${FACT_B}.`, answer: `Got it — ${FACT_B}.` },
   { question: "What's the boiling point of nitrogen?", answer: "Nitrogen boils at about -196C at standard pressure." },
   { question: "What's the tallest mountain in Africa?", answer: "Mount Kilimanjaro, at about 5,895 meters." },
   { question: "Name a famous bridge in San Francisco.", answer: "The Golden Gate Bridge." },

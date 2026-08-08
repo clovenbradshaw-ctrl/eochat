@@ -13,7 +13,7 @@ export const title = "A fact stated once survives past the raw history window";
 const FACT = "X9-Falcon-42";
 
 const SCRIPT = [
-  { question: "Please remember this for later.", answer: `Noted — the vault access code is ${FACT}.` },
+  { question: `Please remember this for later — the vault access code is ${FACT}.`, answer: `Noted — the vault access code is ${FACT}.` },
   { question: "What's the weather like on Mars?", answer: "Mars has a thin CO2 atmosphere and averages around -60C." },
   { question: "Who wrote Moby-Dick?", answer: "Herman Melville wrote Moby-Dick, published in 1851." },
   { question: "What's 17 times 23?", answer: "17 times 23 is 391." },
