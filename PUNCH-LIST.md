@@ -8,7 +8,7 @@ could be exercised end-to-end rather than just error paths.
 ## P0 — Correctness / data integrity
 
 1. **Chat messages can silently fail to register / conversation state bleeds across projects and sessions.** Reproduced repeatedly: switching to a brand-new project with 0 sources still showed an unrelated prior conversation's messages; a freshly typed message never appeared in the transcript at all — the view kept showing a stale conversation instead. Needs root-cause in whichever code path resolves `activeConversationId` relative to `activeProjectId` (`ui/index.html`, `switchProject`/conversation-load path) and on the server in `conversation-store.js` / `/api/conversations/:id`.
-2. **Duplicate project names allowed with no disambiguation.** Creating multiple projects with the same name is silently permitted; the sidebar shows indistinguishable rows with no id/date/description to tell them apart.
+2. ~~**Duplicate project names allowed with no disambiguation.**~~ **Fixed** (see follow-up pass below): `createProject` now auto-suffixes `(2)`, `(3)`, … the same way Finder/Notion do, so rows stay distinguishable without blocking creation.
 3. **Document ingestion status shows "pending" with no visible progress, retry, or timeout.** An uploaded file sat at `pending` in the Explorer legend indefinitely with no spinner, ETA, or way to check what it's waiting on.
 
 ## P1 — Misleading / missing user feedback
@@ -16,7 +16,7 @@ could be exercised end-to-end rather than just error paths.
 4. **`proxy · live` status pill conflates "proxy process is up" with "model backend is reachable."** It reads "live" even when Ollama itself is completely unreachable; the user only discovers the real state when a send fails with a raw `(Proxy unavailable — fetch failed)`.
 5. **Raw/internal error strings surfaced verbatim to users** — `fetch failed`, `(Proxy unavailable — fetch failed)`, `Plan parsing failed. Model returned: ...` — these are Node/fetch/JSON-parse errors, not user-facing copy.
 6. **"Stop generating" button appears to be unconditionally rendered**, not state-gated to "a response is currently streaming." Clicked it at rest (no active generation) and it was present/clickable with no error.
-7. **One of Fork / Surf / Regenerate produced a `404 Not Found`** from the proxy in a sequence where the preceding send had already silently failed (see #1) — likely assumes a real prior turn existed when it didn't.
+7. ~~**One of Fork / Surf / Regenerate produced a `404 Not Found`**~~ **Regenerate and Fork fixed** (see follow-up pass below) for the no-proxy path; Surf not yet checked.
 
 ## P2 — Feature fragility
 
@@ -40,6 +40,184 @@ could be exercised end-to-end rather than just error paths.
 - Instructions editor: modal opens, saves via `PUT /api/projects/:id/instructions`, and is confirmed to reach the model as a folded `EO INSTRUCTION GATE` system-prompt block on the next turn — works end-to-end.
 - Fork (creates a distinct forked conversation) and Export-to-Markdown (real file download with a sensible name) both work correctly.
 
+## Follow-up pass — browser + WebLLM/no-proxy path (this session)
+
+This environment could not run the real engine/proxy stack at all (server/model-router.js
+and server/engine-ground.js statically import `@eoreader/engine`/`@eoreader/host` from a
+sibling `../eoreader6` checkout that doesn't exist here, plus the `vendor/eoreader5` and
+`vendor/live_priors` git submodules are uninitialized) — so this pass instead exercised
+the client-side no-proxy path (`ui/index.html` served standalone, `noProxyMode()` true),
+which is also exactly what the GitHub Pages / offline-WebLLM deployment runs. Confirmed
+fixed, in the real code, not just retested:
+
+- **#6 (Stop button unconditionally rendered) — already fixed.** It's properly gated by
+  `sc-if value="{{ streamingLoading }}"`; verified with Playwright that Send shows at
+  rest, Stop shows mid-turn, and Stop disappears once the turn ends.
+- **#12 (WebGPU warning leaking into the main composer) — already fixed / not reproduced.**
+  The standby-mode WebGPU explanation now stays correctly scoped to Settings → Local
+  model; it does not appear in the main chat composer.
+
+New, confirmed bugs found and fixed this pass (all in `ui/index.html` unless noted):
+
+- **`marked` (markdown renderer) loaded from a URL that 404s on every load, for every
+  user, regardless of network conditions** — `unpkg.com/marked@15.0.7/lib/marked.umd.min.js`
+  is not a file that package version ships (confirmed against unpkg's own file listing).
+  The existing `typeof marked === 'undefined'` guard meant this degraded silently to
+  literal, unrendered markdown (no bold, no lists, no code blocks) instead of crashing —
+  which is presumably why it went unnoticed. Fixed by pointing at
+  `unpkg.com/marked@15.0.7/marked.min.js`, which exists and is the same UMD build under a
+  different path. Verified before/after: bold, bullets, inline code, and fenced code
+  blocks all render correctly now.
+- **Every answer from the reader's own connected Ollama instance was mislabeled as coming
+  from the in-browser WebLLM model.** `localAskConversation()`'s per-turn `model:`
+  attribution and trace only branched on `anthropic` vs. everything else, so an
+  Ollama-direct turn showed "via local: Llama-3.2-3B-Instruct-q4f16_1-MLC (WebLLM,
+  browser-only)" even though the actual generation came from the reader's own Ollama
+  server. Fixed to branch on `ollamaDirect` too and report `ollama: <model>
+  (browser-direct, your own Ollama)`.
+- **Connecting Ollama never actually pointed the outgoing `/api/chat` request at an
+  Ollama model — it silently kept sending the WebLLM model id, which a real Ollama
+  server rejects as unknown.** `fetchModels()` fills `state.model` with the WebLLM
+  default id as soon as the tab loads (so the Local provider has something to show
+  before the reader touches anything). `_doFetchOllamaModels()`'s "fill in a default
+  model" step was guarded on `!this.state.model`, which is never true by the time a
+  reader connects Ollama, so it never overwrote the stale WebLLM id — every Ollama turn
+  went out requesting a model Ollama doesn't have. Fixed the guard to check whether the
+  current model is actually one Ollama just reported, defaulting to the first real one
+  if not. Verified end-to-end against a stub Ollama server logging the requested model
+  name: before the fix it requested `Llama-3.2-3B-Instruct-q4f16_1-MLC`; after, it
+  correctly requests the connected instance's own model name.
+- **Picking Ollama or Anthropic from the static/no-proxy model picker (Settings → Model)
+  never turned the `localModel` flag off**, only `provider`. Since the header pill,
+  composer badge, and per-answer attribution all check `localModel` before `provider`
+  (by design — see the `modelPickerLabel` comment in the code, which already documents
+  fixing this exact confusion for the *toggle* button), the UI kept reading "local model
+  · standby" everywhere even after a reader explicitly switched to and successfully
+  connected their own Ollama/Anthropic. Actual message routing was unaffected (it checks
+  `ollamaDirect`/`anthropic` before `localModel`), but the display was actively
+  misleading about which engine was answering. Fixed `staticSelectLocal` /
+  `staticSelectAnthropic` / `staticSelectOllama` to set `localModel` accordingly and mark
+  `_localModelUserTouched` so the periodic health-check auto-default doesn't flip it back.
+
+- **#2 (duplicate project names) — fixed.** `createProject` now checks the current
+  project list (case-insensitive, trimmed) and auto-suffixes ` (2)`, ` (3)`, … on a
+  collision instead of creating an indistinguishable duplicate row. Verified in browser:
+  creating "Research" three times in a row produced "Research", "Research (2)",
+  "Research (3)".
+
+## Follow-up pass — chat back-and-forth (this session)
+
+Drove multi-turn conversation specifically, against a context-echoing stub Ollama server
+(one that reports back exactly what it received, so the test verifies the UI sent the
+right history rather than just that *a* reply rendered).
+
+- **Multi-turn history threading works correctly.** 3 turns in a row: turn 2's request
+  correctly included turn 1's Q+A, turn 3's included both prior turns. No dropped or
+  duplicated history within the `LOCAL_HISTORY_TURNS` (6-turn) window.
+- **#7 (Regenerate) — fixed, no-proxy path.** `regenerateAnswer()` unconditionally hit
+  the proxy-only `/api/conversations/:id/turns/:id/regenerate` endpoint with no
+  `noProxyMode()` check, so on local/Ollama-direct/Anthropic-direct turns the fetch
+  always failed — caught and logged only to the Glass box's internal activity feed,
+  never shown in the transcript. Clicking "regenerate" looked like it did nothing.
+  Fixed by giving `localAskConversation()` an `opts.regenerateTurnId` that reuses the
+  existing turn in place (same id/position, `a`/`citations` reset, history correctly
+  excludes the turn being redone and anything after it) instead of appending a new one,
+  and routing `regenerateAnswer()` through it when there's no proxy. Verified against
+  the stub server: 2 real `/api/chat` calls, turn count stayed at 1 (in-place replace,
+  not a duplicate), answer content updated.
+- **#7 (Fork) — fixed, and the root cause was deeper than the proxy call.** Same
+  proxy-only-fetch problem as regenerate (`forkSpace()` always POSTed to
+  `/api/conversations` with no no-proxy fallback) — but even after adding one, forking
+  still looked like a complete no-op: the new space was created and `activeSpaceId` was
+  pointed at it, yet the header/transcript kept showing the *pre-fork* conversation.
+  Root cause: `activeSpace()` resolves the current space by filtering
+  `state.spaces` on `sp.spaceId === activeProjectId` first — every other space-creation
+  path (`newConversation`, `updateActiveSpace`'s own fallback) sets `spaceId`, but
+  `forkSpace()` never did, on either the proxy or no-proxy path. An orphaned space with
+  no `spaceId` can never be found by that filter, so `activeSpace()` silently fell back
+  to `scoped[0]` — the original conversation — as if nothing had happened. This means
+  **fork has likely never worked as advertised even against the real engine**, not just
+  in the no-proxy path (PUNCH-LIST's earlier "confirmed working well" note on fork was
+  apparently a case where this didn't surface, or wasn't checked against the sidebar/
+  header). Fixed by carrying `spaceId` (and `pool`) forward from the space being forked.
+  Verified: after fixing both issues, forking now correctly bumps the sidebar's "Chats"
+  count and switches the header/transcript to show the new "<name> (fork)" conversation.
+- **Surf not yet tested** (needs a grounded/citation-bearing turn to be meaningful).
+- **"Edit & ask again" is a simple compose-box repopulate, not a ChatGPT-style branching
+  edit** — it puts the old question text back in the composer for the reader to change
+  and re-send; it does not remove the old turn or truncate history after it. Sending the
+  edited version appends a *new* turn rather than replacing the old one in place, so a
+  correction leaves the original (wrong) Q&A pair visible above it. This may be
+  deliberate (simpler, non-destructive), but it reads differently from the "general
+  Claude/ChatGPT" edit behavior the task asked about — flagging as a product-direction
+  question rather than fixing outright, since removing/rewriting history on edit is a
+  larger behavior change than the other fixes in this pass.
+
+## Follow-up pass — more chat back-and-forth bugs (this session, cont'd)
+
+- **Renaming a chat silently reverted itself in the no-proxy path.** `renameConversation`
+  optimistically applied the new title, then PATCHed the proxy-only
+  `/api/conversations/:id`; on failure (no proxy to hit) it rolled the name back —
+  so the reader would watch their new title flash for a moment and silently revert,
+  with the only explanation logged to the Glass box, never the visible UI. (Compare
+  `renameProject`, which never rolls back — it's fire-and-forget.) Fixed by skipping the
+  network call entirely in `noProxyMode()` and treating the local rename as final, same
+  as every other local-first write path. Verified: rename now sticks.
+- **The "Web" search toggle is inert for Ollama-direct and Anthropic-direct chat, but
+  says nothing to indicate this.** The semantic gate that decides whether a turn needs
+  live web research (`_webGate`) only ever asks the in-browser WebLLM model to vote —
+  never the Ollama or Anthropic model actually answering the turn — so for anyone using
+  either of those providers the gate always returns "no verdict," and the old fallback
+  message ("no discourse weight required it") made that read as a deliberate judgment
+  call instead of "the vote never happened." (Separately, actual web search execution is
+  proxy-only — `/api/web-ground` — so even a working gate can't make search function
+  without a proxy; `runWebSearch`, used elsewhere for manually adding a web source, has
+  a real no-proxy fallback via DuckDuckGo's instant-answer API that this path doesn't
+  reuse.) Fixed the misleading message so a null verdict reads honestly as "no engine
+  was available to judge whether this needs web research" rather than implying a
+  considered "no." Wiring the gate itself (and ideally the actual search) through
+  whichever engine/method is actually active is a larger follow-up, not done here.
+
+## Follow-up pass — delete confirmations (this session, cont'd)
+
+- **Deleting an entire chat or an entire project happened instantly on a single click,
+  with zero confirmation and no recycle bin.** Every other destructive action in this
+  codebase confirms first — deleting a source (`confirm(...)`, and even then it only
+  moves to a recoverable recycle bin), permanently purging a source from the recycle
+  bin, purging the whole recycle bin, clearing downloaded local models — but
+  `deleteConversation`/`deleteProject` (the trash icons in the Chats list and the
+  Projects sidebar) had no guard at all: one click, gone, no undo, and for a project
+  that means every document and conversation scoped to it. Fixed by adding
+  `window.confirm(...)` to both, matching the wording/pattern already used elsewhere.
+  Verified both ways: dismissing the confirm leaves the chat/project untouched,
+  accepting it deletes as before.
+
+## Follow-up pass — attaching a file in the no-proxy path (this session, cont'd)
+
+- **Attaching a file to a chat message and asking about it was completely non-functional
+  with no proxy, and the only feedback was a raw fetch error buried in the Glass box.**
+  `uploadFiles()` always calls `_ingestTextContent()`, which POSTs to the proxy-only
+  `/api/ingest` — no `noProxyMode()` fallback at all. Every no-proxy attachment failed
+  that call, the source row showed a bare `⊘` glyph, and the Glass box's only explanation
+  was `Upload failed for "x.txt" — Failed to fetch` (the exact class of raw-error problem
+  P1 #5 already names). Worse than misleading feedback: the file's content was then never
+  available to the model in any form — `localAskConversation()`'s `groundFailed` fallback
+  ("answer from general knowledge") had no path back to the attachment's own text, so a
+  file the reader could see sitting in the composer was invisible to every answer.
+  Verified end-to-end against a stub server that echoes back its actual received payload:
+  before this fix, asking about an attached file containing "The secret code is BANANA42"
+  produced zero mention of it anywhere in the system prompt. Fixed two things: (1)
+  `_uploadParsedFile` now caches the extracted text in `readerContent` *before* attempting
+  ingest (extraction had already succeeded; only the indexing call was the proxy-only
+  step), and its catch block distinguishes "no engine to index this" (now: `◐`, "stored in
+  this tab — no engine to index it, so it will be included directly") from a real ingest
+  failure; (2) a new `_attachmentContextText()` helper folds each attached file's cached
+  text directly into the turn's system prompt (capped at 24k chars total, truncated with a
+  note beyond that) whenever grounding is unavailable. No chunking, search, or citations —
+  just enough for the model to actually see what was attached, the same bar a ChatGPT/
+  Claude-style paste-a-file-and-ask-about-it turn needs to clear. Verified: the stub
+  server's received system message now contains the attached file's exact text.
+
 ## Not yet tested — recommended follow-up
 
 - Recycle bin restore/purge (`d.restore` / `d.purge`, "Empty recycle bin").
@@ -47,7 +225,8 @@ could be exercised end-to-end rather than just error paths.
 - Priors tab toggles (bucket/prior enable, subscribe, "activate on ingestion").
 - Senses install flow (downloading a vision model into the browser).
 - Mobile/narrow-viewport layout — several `eo-mobile-only` buttons exist in the DOM but were never exercised at a narrow viewport.
-- Delete-chat and delete-project confirmation flows.
+- ~~Delete-chat and delete-project confirmation flows.~~ **Tested and fixed** — see follow-up
+  pass below.
 
 ## Server-side pass, live Ollama backend (2026-08-07) — fixed this session
 
