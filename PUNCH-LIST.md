@@ -40,6 +40,65 @@ could be exercised end-to-end rather than just error paths.
 - Instructions editor: modal opens, saves via `PUT /api/projects/:id/instructions`, and is confirmed to reach the model as a folded `EO INSTRUCTION GATE` system-prompt block on the next turn — works end-to-end.
 - Fork (creates a distinct forked conversation) and Export-to-Markdown (real file download with a sensible name) both work correctly.
 
+## Follow-up pass — browser + WebLLM/no-proxy path (this session)
+
+This environment could not run the real engine/proxy stack at all (server/model-router.js
+and server/engine-ground.js statically import `@eoreader/engine`/`@eoreader/host` from a
+sibling `../eoreader6` checkout that doesn't exist here, plus the `vendor/eoreader5` and
+`vendor/live_priors` git submodules are uninitialized) — so this pass instead exercised
+the client-side no-proxy path (`ui/index.html` served standalone, `noProxyMode()` true),
+which is also exactly what the GitHub Pages / offline-WebLLM deployment runs. Confirmed
+fixed, in the real code, not just retested:
+
+- **#6 (Stop button unconditionally rendered) — already fixed.** It's properly gated by
+  `sc-if value="{{ streamingLoading }}"`; verified with Playwright that Send shows at
+  rest, Stop shows mid-turn, and Stop disappears once the turn ends.
+- **#12 (WebGPU warning leaking into the main composer) — already fixed / not reproduced.**
+  The standby-mode WebGPU explanation now stays correctly scoped to Settings → Local
+  model; it does not appear in the main chat composer.
+
+New, confirmed bugs found and fixed this pass (all in `ui/index.html` unless noted):
+
+- **`marked` (markdown renderer) loaded from a URL that 404s on every load, for every
+  user, regardless of network conditions** — `unpkg.com/marked@15.0.7/lib/marked.umd.min.js`
+  is not a file that package version ships (confirmed against unpkg's own file listing).
+  The existing `typeof marked === 'undefined'` guard meant this degraded silently to
+  literal, unrendered markdown (no bold, no lists, no code blocks) instead of crashing —
+  which is presumably why it went unnoticed. Fixed by pointing at
+  `unpkg.com/marked@15.0.7/marked.min.js`, which exists and is the same UMD build under a
+  different path. Verified before/after: bold, bullets, inline code, and fenced code
+  blocks all render correctly now.
+- **Every answer from the reader's own connected Ollama instance was mislabeled as coming
+  from the in-browser WebLLM model.** `localAskConversation()`'s per-turn `model:`
+  attribution and trace only branched on `anthropic` vs. everything else, so an
+  Ollama-direct turn showed "via local: Llama-3.2-3B-Instruct-q4f16_1-MLC (WebLLM,
+  browser-only)" even though the actual generation came from the reader's own Ollama
+  server. Fixed to branch on `ollamaDirect` too and report `ollama: <model>
+  (browser-direct, your own Ollama)`.
+- **Connecting Ollama never actually pointed the outgoing `/api/chat` request at an
+  Ollama model — it silently kept sending the WebLLM model id, which a real Ollama
+  server rejects as unknown.** `fetchModels()` fills `state.model` with the WebLLM
+  default id as soon as the tab loads (so the Local provider has something to show
+  before the reader touches anything). `_doFetchOllamaModels()`'s "fill in a default
+  model" step was guarded on `!this.state.model`, which is never true by the time a
+  reader connects Ollama, so it never overwrote the stale WebLLM id — every Ollama turn
+  went out requesting a model Ollama doesn't have. Fixed the guard to check whether the
+  current model is actually one Ollama just reported, defaulting to the first real one
+  if not. Verified end-to-end against a stub Ollama server logging the requested model
+  name: before the fix it requested `Llama-3.2-3B-Instruct-q4f16_1-MLC`; after, it
+  correctly requests the connected instance's own model name.
+- **Picking Ollama or Anthropic from the static/no-proxy model picker (Settings → Model)
+  never turned the `localModel` flag off**, only `provider`. Since the header pill,
+  composer badge, and per-answer attribution all check `localModel` before `provider`
+  (by design — see the `modelPickerLabel` comment in the code, which already documents
+  fixing this exact confusion for the *toggle* button), the UI kept reading "local model
+  · standby" everywhere even after a reader explicitly switched to and successfully
+  connected their own Ollama/Anthropic. Actual message routing was unaffected (it checks
+  `ollamaDirect`/`anthropic` before `localModel`), but the display was actively
+  misleading about which engine was answering. Fixed `staticSelectLocal` /
+  `staticSelectAnthropic` / `staticSelectOllama` to set `localModel` accordingly and mark
+  `_localModelUserTouched` so the periodic health-check auto-default doesn't flip it back.
+
 ## Not yet tested — recommended follow-up
 
 - Recycle bin restore/purge (`d.restore` / `d.purge`, "Empty recycle bin").

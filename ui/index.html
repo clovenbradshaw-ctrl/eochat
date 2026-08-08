@@ -75,7 +75,7 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.3/dist/tesseract.min.js"></script>
 <!-- Renders markdown in AI answers. Falls through to plain text if the CDN is
       unreachable — same offline-degrade pattern as the other optional libs. -->
-<script src="https://unpkg.com/marked@15.0.7/lib/marked.umd.min.js"></script>
+<script src="https://unpkg.com/marked@15.0.7/marked.min.js"></script>
 <!-- Renders LaTeX math ($...$ / $$...$$) in AI answers via KaTeX.
      renderMarkdown() checks `typeof katex` and falls through to the literal
      $…$ text if this fails to load (offline, CDN blocked), the same offline-
@@ -3489,7 +3489,15 @@ class Component extends DCLogic {
         models = data.models || [];
       }
       this.setState({ _ollamaModels: models, _ollamaFetching: false, _ollamaError: null });
-      if (models.length && !this.state.model) {
+      // `!this.state.model` used to gate this, on the assumption a fresh
+      // reader has no model chosen yet — but fetchModels() fills state.model
+      // with the WebLLM default id as soon as the tab loads (so the "Local"
+      // provider has something to show), which means state.model is already
+      // truthy by the time a reader connects Ollama and this never ran: every
+      // Ollama turn went out with the WebLLM model id in the request body,
+      // which a real Ollama server rejects as an unknown model. Default
+      // whenever the current model isn't actually one Ollama just reported.
+      if (models.length && !models.some(m => m.name === this.state.model)) {
         this.setState({ model: models[0].name });
       }
     } catch (err) {
@@ -7439,11 +7447,19 @@ class Component extends DCLogic {
         };
       });
 
+      const modelAttribution = anthropic
+        ? `anthropic: ${this.state.model || 'claude'} (API, browser-direct)`
+        : ollamaDirect
+          ? `ollama: ${this.state.model || 'unknown model'} (browser-direct, your own Ollama)`
+          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`;
+      const modelTraceDetail = anthropic
+        ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
+        : ollamaDirect
+          ? `ollama: ${this.state.model || 'unknown model'} — browser-direct call to your own Ollama instance`
+          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`;
       patchTurn({
         a: answer, citations: citations.length ? citations : null, streaming: false,
-        model: anthropic
-          ? `anthropic: ${this.state.model || 'claude'} (API, browser-direct)`
-          : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)`,
+        model: modelAttribution,
         trace: [
           { kind: 'ground', name: useWeb ? 'Web search' : 'Retrieval', detail: groundFailed
             ? `Unavailable — ${groundFailed.message}. Answered offline from the project's own rules and general knowledge, without retrieval.`
@@ -7454,9 +7470,7 @@ class Component extends DCLogic {
               : `${grounding.sourceCount} found, ${grounding.foldedCount} folded, ${grounding.tokens} tokens (budget ${grounding.budget})${grounding.dropped ? `, ${grounding.dropped} dropped` : ''}` },
           ...(webReason ? [{ kind: 'ground', name: 'Web gate', detail: webReason }] : []),
           ...(webSupplemented ? [{ kind: 'call', name: 'Discourse override', detail: 'The corpus carried no evidence for an essay-shaped request — web research supplied it despite the model verdict.' }] : []),
-          { kind: 'model', name: 'Model', detail: anthropic
-            ? `anthropic: ${this.state.model || 'claude-sonnet-4-20250514'} — browser-direct API call with a key stored in this browser`
-            : `local: ${window.EOWebLLM.modelId} (WebLLM, browser-only)` },
+          { kind: 'model', name: 'Model', detail: modelTraceDetail },
           { kind: 'gap', name: 'Citation check', detail: useWeb
             ? 'Bracket numbers were only checked against retrieved web results, not independently fact-checked — the mechanical fidelity check runs only on the server-generated path.'
             : 'Bracket numbers were only checked against retrieved passages, not verified against the source text — the mechanical fidelity check runs only on the server-generated path.' },
@@ -10121,16 +10135,36 @@ class Component extends DCLogic {
       // off, and this picker had no way to turn Local off once it lost its
       // toggle button below).
       staticProviderIsOllama: S.provider === 'ollama',
+      // Each of these three flips `localModel` too, not just `provider` — the
+      // header pill, composer badge, and per-answer "via …" attribution all
+      // key off `localModel` first (see modelPickerLabel/localAskConversation)
+      // and only fall through to `provider` once it's off. Leaving it true
+      // after picking Anthropic or Ollama here left every one of those
+      // reading "local model · standby" while the turn was actually answered
+      // by the reader's own Ollama/Anthropic call — the exact bug the
+      // modelPickerLabel comment above describes, just from this picker
+      // instead of the toggle button. _localModelUserTouched is set for the
+      // same reason toggleLocalModel sets it: so the health poll's
+      // _defaultToLocalModelIfNoEngine doesn't flip localModel back on.
       staticSelectLocal: () => {
         const row = S._availableModels.find(m => m.id === 'local');
-        this.setState({ provider: 'local', model: row ? row.defaultModel : S.model });
+        this._localModelUserTouched = true;
+        writeStoredLocalIntent(true);
+        this.setState({ provider: 'local', model: row ? row.defaultModel : S.model, localModel: true });
+        if (window.EOWebLLM && window.EOWebLLM.status !== 'ready' && window.EOWebLLM.status !== 'loading') {
+          window.EOWebLLM.init();
+        }
       },
       staticSelectAnthropic: () => {
         const row = S._availableModels.find(m => m.id === 'anthropic');
-        this.setState({ provider: 'anthropic', model: row ? row.defaultModel : S.model });
+        this._localModelUserTouched = true;
+        writeStoredLocalIntent(false);
+        this.setState({ provider: 'anthropic', model: row ? row.defaultModel : S.model, localModel: false });
       },
       staticSelectOllama: () => {
-        this.setState({ provider: 'ollama' });
+        this._localModelUserTouched = true;
+        writeStoredLocalIntent(false);
+        this.setState({ provider: 'ollama', localModel: false });
         if (!S._ollamaAuthorized) this.requestOllamaConnect();
       },
       staticLocalBorder: S.provider === 'local' ? '#1F5A4C' : '#E0DACE',
