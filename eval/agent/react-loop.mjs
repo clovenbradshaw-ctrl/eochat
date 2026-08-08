@@ -157,8 +157,18 @@ function formatObservation(toolName, result) {
  * @param {string} [opts.groundingBlock]
  * @param {{tools: object, toolCalls: array}} opts.toolset
  * @param {number} [opts.foldK] see buildPromptView above. Default 6.
+ * @param {(session: object) => {ok: boolean, reason?: string}} [opts.validateFinish]
+ *   Optional gate checked before "finish" is honored. Not for general use —
+ *   this loop stays free of any particular notion of "actually done," same
+ *   discipline task-log.js's produce() keeps around "coheres"/"bears on."
+ *   A caller with real domain policy (e.g. eoCode requiring check_coherence
+ *   after fetch_repo_files — a real, measured need: a live run finished
+ *   having copied in code it never verified was wired together) supplies
+ *   this instead of hoping the model remembers a rule stated in its prompt.
+ *   Returning {ok:false, reason} refuses the finish as an observation, the
+ *   same shape a failed tool call gets, rather than a special-cased error.
  */
-export function createSession({ taskPrompt, groundingBlock = null, toolset, foldK = DEFAULT_FOLD_K }) {
+export function createSession({ taskPrompt, groundingBlock = null, toolset, foldK = DEFAULT_FOLD_K, validateFinish = null }) {
   const { tools, toolCalls } = toolset;
   const toolNames = Object.keys(tools);
   const system = { role: "system", content: PROTOCOL(toolNames.map((n) => tools[n].description), toolNames) };
@@ -169,7 +179,7 @@ export function createSession({ taskPrompt, groundingBlock = null, toolset, fold
   const intro = { role: "user", content: userIntro };
 
   return {
-    tools, toolNames, toolCalls, system, intro, foldK,
+    tools, toolNames, toolCalls, system, intro, foldK, validateFinish,
     // The full, honest, append-only record of everything said — never
     // truncated. What's actually SENT to the model each turn is the
     // separate, bounded `foldedTurns` view (see promptViewFor below).
@@ -244,6 +254,39 @@ export function applyResponse(session, raw) {
   }
 
   if (parsed.tool === "finish") {
+    const verdict = session.validateFinish ? session.validateFinish(session) : { ok: true };
+    if (!verdict.ok) {
+      // Refused exactly like a failed tool call, including feeding the SAME
+      // cycle detector — a model that ignores the refusal and just calls
+      // finish again unchanged is the same stuck-loop shape as any other
+      // repeated failing call, not a new failure mode needing new handling.
+      const callKey = `finish:refused:${verdict.reason}`;
+      session.callHistory.push(callKey);
+      if (session.callHistory.length > STUCK_LOOP_HISTORY_LEN) session.callHistory.shift();
+      const cycle = detectCycle(session.callHistory);
+
+      const entry = { step, tool: "finish", args: parsed.args, result: { error: verdict.reason }, repeatCallStreak: cycle && cycle.repeats > 1 ? cycle.repeats : undefined };
+      session.transcript.push(entry);
+      events.push({ ...entry, phase: "tool_result" });
+
+      let observation = `OBSERVATION (finish): refused — ${verdict.reason}`;
+      if (cycle && cycle.repeats >= STUCK_LOOP_NUDGE_AT) {
+        observation += `\n\nSTUCK LOOP: you have tried to finish for the same unmet reason ${cycle.repeats} times in a row. Do the thing the reason names, then finish.`;
+      }
+      const observationMsg = { role: "user", content: observation };
+      session.messages.push(observationMsg);
+      session.foldedTurns.push({ entry, msgs: [assistantMsg, observationMsg] });
+
+      if (cycle && cycle.repeats >= STUCK_LOOP_ABORT_AT) {
+        session.stuckLoopAbort = true;
+        const abortEntry = { step, note: `aborted after ${cycle.repeats} refused finish attempts for the same unmet reason (stuck loop, not a step-budget exhaustion)` };
+        session.transcript.push(abortEntry);
+        events.push({ ...abortEntry, phase: "aborted" });
+        session.done = true;
+      }
+      return { events, done: session.done };
+    }
+
     session.finished = true;
     session.summary = typeof parsed.args.summary === "string" ? parsed.args.summary : "(no summary given)";
     const entry = { step, tool: "finish", args: parsed.args };
@@ -317,16 +360,19 @@ export function applyResponse(session, raw) {
  *   Purely observational: it cannot alter the loop's own decisions, and a
  *   throwing onStep is never allowed to break a real eval run, so it is
  *   called inside a try/catch that only logs.
+ * @param {Function} [opts.validateFinish] see createSession's own doc —
+ *   optional domain-specific gate on "finish", refused like a failed tool
+ *   call rather than trusting the model to remember a prompt rule.
  */
 export async function runReactLoop({
   taskPrompt, groundingBlock = null, toolset, adapter, maxSteps = 8, maxTokensPerStep = 200, seed = 0,
-  foldK = DEFAULT_FOLD_K, onStep = null,
+  foldK = DEFAULT_FOLD_K, onStep = null, validateFinish = null,
 }) {
   const emit = onStep
     ? (entry) => { try { onStep(entry); } catch (err) { console.error(`[react-loop] onStep handler threw: ${err.message}`); } }
     : () => {};
 
-  const session = createSession({ taskPrompt, groundingBlock, toolset, foldK });
+  const session = createSession({ taskPrompt, groundingBlock, toolset, foldK, validateFinish });
 
   let step = 0;
   for (; step < maxSteps; step++) {

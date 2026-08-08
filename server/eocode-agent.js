@@ -20,6 +20,34 @@ import { createOllamaAdapter } from "../eval/adapters/ollama-adapter.mjs";
 import { addPriorArtSearchTool, addArchetypeSearchTool } from "../eval/agent/crispr-search.mjs";
 import { addCoherenceCheckTool } from "../eval/agent/coherence-check.mjs";
 import { addFetchRepoFilesTool } from "../eval/agent/repo-fetch.mjs";
+import { addReplaceInFileTool } from "../eval/agent/splice-tools.mjs";
+
+/**
+ * eoCode's own finish policy, not a general react-loop rule: if this
+ * session ever copied code in with fetch_repo_files, it must show a LATER
+ * check_coherence call reporting coherent: true before finish is honored.
+ * Real, measured need — a live run copied in real cloned code, edited it,
+ * and called finish without ever running check_coherence, silently
+ * declaring a half-verified splice complete. Mechanical, not a prompt
+ * rule the model has to remember: refused exactly like a failed tool call
+ * (react-loop.mjs's validateFinish hook), including feeding the same
+ * stuck-loop detector if the model just keeps calling finish unchanged.
+ */
+function coherenceGatedValidateFinish(session) {
+  const usedFetch = session.transcript.some(
+    (e) => e.tool === "fetch_repo_files" && e.result && Array.isArray(e.result.copied) && e.result.copied.length > 0,
+  );
+  if (!usedFetch) return { ok: true };
+
+  const lastCoherenceCheck = [...session.transcript].reverse().find((e) => e.tool === "check_coherence");
+  if (lastCoherenceCheck && lastCoherenceCheck.result && lastCoherenceCheck.result.coherent === true) {
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    reason: "you copied in code with fetch_repo_files but have not shown check_coherence reporting coherent: true afterward — call check_coherence before finish",
+  };
+}
 
 /** Every eoCode workspace lives under here — never anywhere else on disk. */
 export const WORKSPACE_ROOT = resolve(REPO_ROOT, "eocode-workspace");
@@ -97,6 +125,7 @@ export async function runEoCodeTask({
   addArchetypeSearchTool(toolset);
   addCoherenceCheckTool(toolset, dir);
   addFetchRepoFilesTool(toolset, dir);
+  addReplaceInFileTool(toolset, dir);
   const adapter = createOllamaAdapter({ model });
 
   emit("start", { workspace: relative(WORKSPACE_ROOT, dir) || "default", dir, model, prompt, maxSteps });
@@ -109,6 +138,7 @@ export async function runEoCodeTask({
     maxTokensPerStep,
     seed,
     onStep: (entry) => emit("step", entry),
+    validateFinish: coherenceGatedValidateFinish,
   });
 
   emit("end", {
@@ -168,7 +198,8 @@ export function startEoCodeSession({ workspace, prompt, foldK, maxSteps = 20 }) 
   addArchetypeSearchTool(toolset);
   addCoherenceCheckTool(toolset, dir);
   addFetchRepoFilesTool(toolset, dir);
-  const session = createSession({ taskPrompt: prompt, toolset, foldK });
+  addReplaceInFileTool(toolset, dir);
+  const session = createSession({ taskPrompt: prompt, toolset, foldK, validateFinish: coherenceGatedValidateFinish });
   const sessionId = randomBytes(16).toString("hex");
   const now = Date.now();
   SESSIONS.set(sessionId, { session, dir, workspace: wsName, maxSteps, createdAt: now, lastActiveAt: now });
